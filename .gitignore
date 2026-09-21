@@ -1,0 +1,7 @@
+# Godot 4 generated files
+.godot/
+*.translation
+
+# Export artifacts and local captures
+/build/
+/out/
