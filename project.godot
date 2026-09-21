@@ -8,7 +8,7 @@ config_version=5
 config/name="SQLDEMO"
 config/description="A tiny in-memory query demo, rendered by Godot and runnable headless."
 run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.5", "GL Compatibility")
+config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]
 

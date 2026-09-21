@@ -9,7 +9,7 @@ in CI or over SSH.
 
 ## Running it
 
-Godot 4.4 or newer. Point `GODOT` at the binary if it is not on your `PATH`:
+Godot 4.4 or newer (developed against 4.7.2-stable). Point `GODOT` at the binary if it is not on your `PATH`:
 
 ```sh
 tools/run.sh                # prints the result, then exits (headless)
@@ -17,7 +17,7 @@ tools/run.sh --screenshot   # renders off-screen, saves out/sqldemo.png
 ```
 
 ```
-SQLDEMO — Godot 4.5-stable (official) (headless)
+SQLDEMO — Godot 4.7.2-stable (official) (headless)
 
 SELECT name, team, salary FROM employees
   WHERE salary > 135000 ORDER BY salary DESC LIMIT 4;
