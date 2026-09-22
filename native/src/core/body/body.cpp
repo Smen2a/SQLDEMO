@@ -113,6 +113,21 @@ float ToolProfile::extent() const {
 	}
 }
 
+float ToolProfile::half_width() const {
+	switch (kind) {
+		case gl::SDF_TOOL_V:
+			return params.y * std::tan(params.x);
+		case gl::SDF_TOOL_GOUGE:
+			return std::min(params.y * 0.5f, params.x);
+		default:
+			return params.x * 0.5f;
+	}
+}
+
+float ToolProfile::height() const {
+	return kind == gl::SDF_TOOL_GOUGE ? params.z : params.y;
+}
+
 Primitive Primitive::sphere(vec3 centre, float radius) {
 	Primitive p;
 	p.type = Prim::Sphere;
@@ -219,6 +234,27 @@ Aabb Primitive::bounds() const {
 	return b;
 }
 
+float Primitive::feature_size() const {
+	switch (type) {
+		case Prim::Sphere:
+			return 2.0f * p[0].w;
+		case Prim::Box:
+			return 2.0f * std::min(p[2].x, std::min(p[2].y, p[2].z));
+		case Prim::Cylinder:
+			return 2.0f * std::min(p[2].x, p[2].y);
+		case Prim::Capsule:
+			return 2.0f * p[0].w;
+		case Prim::Plane:
+			return gl::SDF_BIG;
+		case Prim::SweepSegment:
+		case Prim::SweepBezier: {
+			const ToolProfile tool = tool_of(*this);
+			return std::min(2.0f * tool.half_width(), tool.height());
+		}
+	}
+	return gl::SDF_BIG;
+}
+
 float Primitive::lipschitz() const {
 	if (type != Prim::SweepBezier) {
 		return 1.0f;
@@ -231,9 +267,23 @@ float Primitive::lipschitz() const {
 		return 1.0f;
 	}
 	const float t = gl::clamp(-gl::dot(a, b) / bb, 0.0f, 1.0f);
-	const float speed = gl::length(a + b * t);
+	const vec3 velocity = a + b * t;
+	const float speed = gl::length(velocity);
 	const float curvature = gl::length(gl::cross(a, b)) / (2.0f * speed * speed * speed);
-	const float stretch = curvature * tool_of(*this).extent();
+	// Only the profile's offset along the curvature normal distorts the field (points on the
+	// inside of the bend are pulled together by 1 / (1 - curvature * offset)). For a path
+	// bending within the surface that is the half-width, not the tool's full height.
+	const vec3 tangent = velocity / speed;
+	const vec3 bend = b - tangent * gl::dot(b, tangent);
+	const vec3 normal = gl::length(bend) > 1e-12f ? gl::normalize(bend) : vec3(0.0f);
+	const vec3 up = gl::sdf_xyz(p[3]);
+	const vec3 u = gl::normalize(up - tangent * gl::dot(up, tangent));
+	const vec3 s = gl::cross(tangent, u);
+	const ToolProfile tool = tool_of(*this);
+	const float offset = std::fabs(gl::dot(normal, s)) * tool.half_width() + std::fabs(gl::dot(normal, u)) * tool.height();
+	const float stretch = curvature * offset;
+	// A stroke bending tighter than its tool can follow is not a valid cut; the input
+	// system rejects those, and the bound here just stays safe.
 	return stretch < 0.9f ? 1.0f / (1.0f - stretch) : 10.0f;
 }
 
@@ -254,11 +304,38 @@ float Edit::influence() const {
 	return 0.0f;
 }
 
+float Edit::value_reach() const {
+	switch (op) {
+		case Op::Union:
+		case Op::Subtract:
+		case Op::Intersect:
+			return blend_support(blend, r, r2);
+		case Op::Engrave:
+			return r;
+		case Op::Groove:
+		case Op::Tongue:
+			return std::max(r, r2);
+		case Op::Paint:
+			return 0.0f;
+	}
+	return 0.0f;
+}
+
 Aabb Edit::bounds() const {
 	if (op == Op::Intersect) {
 		return Aabb::infinite();
 	}
 	return prim.bounds().expanded(influence());
+}
+
+float Edit::feature_size() const {
+	float size = prim.feature_size();
+	if (blend != Blend::Hard && (op == Op::Union || op == Op::Subtract || op == Op::Intersect)) {
+		size = std::min(size, 2.0f * std::min(r, r2 > 0.0f ? r2 : r));
+	} else if (op == Op::Engrave || op == Op::Groove || op == Op::Tongue) {
+		size = std::min(size, 2.0f * std::max(r, 1e-3f));
+	}
+	return std::max(size, 1e-3f);
 }
 
 float Edit::lipschitz() const {
@@ -278,9 +355,13 @@ float Edit::lipschitz() const {
 	return op_l * prim.lipschitz();
 }
 
-void Body::add(const Edit &e) {
+bool Body::add(const Edit &e) {
+	if (!accepts(e)) {
+		return false;
+	}
 	edits_.push_back(e);
 	culls_.push_back({e.op == Op::Intersect ? Aabb::infinite() : e.prim.bounds(), e.influence()});
+	return true;
 }
 
 void Body::replace(std::size_t i, const Edit &e) {
@@ -355,6 +436,22 @@ float Body::lipschitz() const {
 		l = std::max(l, e.lipschitz());
 	}
 	return l;
+}
+
+bool blend_inactive(const Edit &e, float a_lo, float a_hi, float b_lo, float b_hi) {
+	switch (e.blend) {
+		case Blend::Hard:
+			return true;
+		case Blend::Smooth:
+		case Blend::SmoothC2:
+			// The polynomial term vanishes once the operands are r apart.
+			return b_lo - a_hi >= e.r || a_lo - b_hi >= e.r;
+		default: {
+			// Rigid modes equal min(a, b) once either operand reaches the support radius.
+			const float k = blend_support(e.blend, e.r, e.r2);
+			return a_lo >= k || b_lo >= k;
+		}
+	}
 }
 
 vec4 quat_axis_angle(vec3 axis, float angle) {

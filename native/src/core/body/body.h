@@ -70,6 +70,9 @@ struct ToolProfile {
 	static ToolProfile gouge(float sweep_radius, float width, float height);
 	// Radius of a circle (in the cross-section plane) containing the whole profile.
 	float extent() const;
+	// Largest lateral offset and the height of the cross-section.
+	float half_width() const;
+	float height() const;
 };
 
 struct Primitive {
@@ -89,6 +92,8 @@ struct Primitive {
 		return gl::sdf_primitive(q, int(type), p[0], p[1], p[2], p[3], p[4]);
 	}
 	Aabb bounds() const;
+	// Size of the smallest detail this primitive produces (thinnest dimension, tool width).
+	float feature_size() const;
 	// Upper bound on |grad| of eval(). 1 for everything except curved sweeps, whose
 	// rotating frame stretches distances by 1 / (1 - curvature * profile extent).
 	float lipschitz() const;
@@ -105,8 +110,14 @@ struct Edit {
 
 	// Distance beyond the primitive's bounds within which this edit can change the field.
 	float influence() const;
+	// How far from the body's current surface this edit's result depends on the body's
+	// actual distance values rather than just their signs (blend support, groove depth...).
+	// Zero for hard unions, cuts and intersections.
+	float value_reach() const;
 	Aabb bounds() const;
 	float lipschitz() const;
+	// Smallest detail the edit produces: its primitive's, or a narrower blend.
+	float feature_size() const;
 };
 
 // Result of evaluating a body: distance plus the two dominant materials and their mix.
@@ -126,10 +137,21 @@ public:
 	vec3 grain_origin{0, 0, 0};
 	vec3 grain_axis{1, 0, 0};
 
-	void add(const Edit &e);
+	// Upper bound on an acceptable edit's Lipschitz constant. A curved stroke that bends
+	// tighter than about twice its tool's half-width is not a cut a real tool can make, and
+	// its distance bound degrades fast enough to cripple pruning and tracing around it.
+	static constexpr float kMaxEditLipschitz = 2.0f;
+	static bool accepts(const Edit &e) { return e.prim.lipschitz() <= kMaxEditLipschitz; }
+
+	// Appends the edit, or returns false and leaves the body unchanged if accepts() fails.
+	bool add(const Edit &e);
 	void replace(std::size_t i, const Edit &e);
 	void pop();
 	const std::vector<Edit> &edits() const { return edits_; }
+	// Bounds of edit i's primitive (infinite for Intersect) and how far beyond them the
+	// edit can reach.
+	const Aabb &edit_box(std::size_t i) const { return culls_[i].box; }
+	float edit_influence(std::size_t i) const { return culls_[i].influence; }
 
 	// Skips edits that provably cannot matter at p: those whose primitive's bounding box is
 	// at least |d| + influence away. For every operator that leaves the value unchanged
@@ -151,6 +173,10 @@ private:
 	std::vector<Edit> edits_;
 	std::vector<Cull> culls_;
 };
+
+// True when, over the given operand intervals, the edit's blend provably reduces to the
+// hard min (in union form: a = body so far, b = primitive).
+bool blend_inactive(const Edit &e, float a_lo, float a_hi, float b_lo, float b_hi);
 
 // Unit quaternion rotating by `angle` radians about unit `axis`.
 vec4 quat_axis_angle(vec3 axis, float angle);

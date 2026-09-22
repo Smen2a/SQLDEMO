@@ -205,3 +205,19 @@ TEST(shared_shader_copies_in_sync) {
 		}
 	}
 }
+
+// A curve tighter than the tool can follow is not a cut a real tool makes; its distance
+// bound degrades badly enough to hurt everything around it, so the body refuses it.
+TEST(body_rejects_strokes_tighter_than_the_tool) {
+	Body b = panel();
+	Edit gentle;
+	gentle.prim = Primitive::sweep({-30, 0, 8}, {0, 6, 8}, {30, 0, 8}, {0, 0, 1}, ToolProfile::gouge(3, 5, 4));
+	CHECK(b.add(gentle));
+	Edit tight = gentle;
+	tight.prim = Primitive::sweep({-3, 0, 8}, {0, 6, 8}, {3, 0, 8}, {0, 0, 1}, ToolProfile::gouge(3, 5, 4));
+	CHECK(!b.add(tight));
+	CHECK(b.edits().size() == 1);
+	// The same tight curve is fine for a narrow veiner.
+	tight.prim = Primitive::sweep({-3, 0, 8}, {0, 6, 8}, {3, 0, 8}, {0, 0, 1}, ToolProfile::gouge(0.4f, 0.6f, 1.0f));
+	CHECK(b.add(tight));
+}

@@ -57,7 +57,7 @@ void add_leaf(Body &b, vec3 base, vec3 tip, float bulge, float top, float depth 
 	const vec3 mid = (base + tip) * 0.5f;
 	const vec3 along = gl::normalize(tip - base);
 	const vec3 side = gl::normalize(gl::cross(vec3(0, 0, 1), along));
-	const ToolProfile vee = ToolProfile::v_tool(60, 20);
+	const ToolProfile vee = ToolProfile::v_tool(60, depth + 2.0f);
 	const vec3 lift(0, 0, top - depth);
 	for (float s : {-1.0f, 1.0f}) {
 		b.add(cut(Primitive::sweep(base + lift, mid + side * (s * bulge) + lift, tip + lift, {0, 0, 1}, vee)));
@@ -112,7 +112,7 @@ std::vector<Tile> blend_tiles() {
 		boss.r2 = m.r2;
 		boss.shape = m.shape;
 		b.add(boss);
-		Edit channel = cut(Primitive::sweep({9, -20, 1}, {9, 20, 1}, {0, 0, 1}, ToolProfile::flat(9, 30)), m.blend, m.r, m.r2);
+		Edit channel = cut(Primitive::sweep({9, -20, 1}, {9, 20, 1}, {0, 0, 1}, ToolProfile::flat(9, 10)), m.blend, m.r, m.r2);
 		channel.shape = m.shape;
 		b.add(channel);
 		tiles.push_back({m.label, b, tile_camera()});
@@ -122,14 +122,14 @@ std::vector<Tile> blend_tiles() {
 
 std::vector<Tile> material_tiles() {
 	std::vector<Tile> tiles;
-	const ToolProfile vee = ToolProfile::v_tool(60, 20);
+	const ToolProfile vee = ToolProfile::v_tool(60, 4);
 
 	{ // Flat-sawn ash: cuts reveal the arches of the growth rings.
 		Body b = block(mat::Ash, {22, 16, 5});
 		b.grain_origin = {0, 0, -30};
 		b.grain_axis = gl::normalize(vec3(1, 0, 0.18f));
 		add_leaf(b, {-17, -2, 0}, {17, 2, 0}, 8, 5, 2.6f);
-		b.add(cut(Primitive::sweep({-12, 0, 3.8f}, {0, 2, 3.8f}, {12, 1, 3.8f}, {0, 0, 1}, ToolProfile::gouge(3, 5, 20))));
+		b.add(cut(Primitive::sweep({-12, 0, 3.8f}, {0, 2, 3.8f}, {12, 1, 3.8f}, {0, 0, 1}, ToolProfile::gouge(3, 5, 4))));
 		tiles.push_back({"ASH FLAT SAWN", b, tile_camera()});
 	}
 	{ // Quarter-sawn oak: pith off to the side, so rings surface as straight stripes.
@@ -144,7 +144,7 @@ std::vector<Tile> material_tiles() {
 	}
 	{ // Putty filling a gouged crack: smooth unions mix materials across the seam.
 		Body b = block(mat::Walnut, {22, 16, 5});
-		b.add(cut(Primitive::sweep({-20, -8, 2.5f}, {0, 6, 2.5f}, {20, -4, 2.5f}, {0, 0, 1}, ToolProfile::gouge(4, 7, 20))));
+		b.add(cut(Primitive::sweep({-20, -8, 2.5f}, {0, 6, 2.5f}, {20, -4, 2.5f}, {0, 0, 1}, ToolProfile::gouge(4, 7, 6))));
 		b.add(add(Primitive::capsule({-19, -8, 4.2f}, {-2, 2, 4.8f}, 3.2f), mat::Putty, Blend::Smooth, 4));
 		b.add(add(Primitive::capsule({-2, 2, 4.8f}, {19, -4, 4.4f}, 3.2f), mat::Putty, Blend::Smooth, 4));
 		tiles.push_back({"WALNUT + PUTTY", b, tile_camera()});
@@ -170,16 +170,16 @@ std::vector<Tile> material_tiles() {
 		for (int i = 0; i < 6; ++i) {
 			const float y = -12 + 4.6f * float(i);
 			b.add(cut(Primitive::sweep({-24, y, 5.3f - 0.15f * float(i)}, {24, y + 1.2f, 5.0f}, {0, 0, 1},
-					ToolProfile::flat(4.2f, 20)), Blend::Round, 0.5f));
+					ToolProfile::flat(4.2f, 4)), Blend::Round, 0.5f));
 		}
-		b.add(cut(Primitive::sweep({-8, -20, 1.5f}, {-4, 0, 1.0f}, {-9, 20, 1.5f}, {0, 0, 1}, ToolProfile::gouge(5, 8, 20)),
+		b.add(cut(Primitive::sweep({-8, -20, 1.5f}, {-4, 0, 1.0f}, {-9, 20, 1.5f}, {0, 0, 1}, ToolProfile::gouge(5, 8, 8)),
 				Blend::Round, 0.8f));
 		tiles.push_back({"GRANITE", b, tile_camera()});
 	}
 	{ // Steel: a forged-style block with a chamfered eye, a filleted slot and a drilled hole.
 		Body b = block(mat::Steel, {20, 12, 6}, 1.0f);
 		b.add(cut(Primitive::box({-5, 0, 0}, {6, 4, 10}), Blend::Chamfer, 1.4f));
-		b.add(cut(Primitive::sweep({7, -6, 3}, {7, 6, 3}, {0, 0, 1}, ToolProfile::flat(4, 20)), Blend::Round, 1.2f));
+		b.add(cut(Primitive::sweep({7, -6, 3}, {7, 6, 3}, {0, 0, 1}, ToolProfile::flat(4, 6)), Blend::Round, 1.2f));
 		b.add(cut(Primitive::cylinder({14, 0, 0}, 1.8f, 10, 0, quat_axis_angle({1, 0, 0}, kPi / 2)), Blend::Chamfer, 0.6f));
 		tiles.push_back({"STEEL", b, tile_camera()});
 	}
@@ -191,7 +191,9 @@ Body carved_panel_body() {
 	b.grain_origin = {0, 8, -45};
 	b.grain_axis = gl::normalize(vec3(1, 0.06f, 0.10f));
 	const float top = 7.0f;
-	const ToolProfile vee = ToolProfile::v_tool(60, 20);
+	// Cross-sections reach from the cutting edge to a little above the surface: the tool's
+	// shank beyond that meets no wood, and a taller profile only inflates bounds.
+	const ToolProfile vee = ToolProfile::v_tool(60, 4);
 
 	// Border groove.
 	const float bx = 53, by = 33, bz = top - 1.6f;
@@ -208,14 +210,14 @@ Body carved_panel_body() {
 		const vec3 side = polar(7, a + kPi / 2, 0);
 		b.add(cut(Primitive::sweep(inner, mid + side, outer, {0, 0, 1}, vee)));
 		b.add(cut(Primitive::sweep(inner, mid - side, outer, {0, 0, 1}, vee)));
-		b.add(cut(Primitive::sweep(polar(9, a, top - 1.0f), polar(21, a, top - 1.0f), {0, 0, 1}, ToolProfile::gouge(3, 5, 20)),
+		b.add(cut(Primitive::sweep(polar(9, a, top - 1.0f), polar(21, a, top - 1.0f), {0, 0, 1}, ToolProfile::gouge(3, 5, 3.5f)),
 				Blend::Smooth, 0.8f));
 	}
 	// Centre boss: a ring of short radial gouge cuts.
 	for (int i = 0; i < 12; ++i) {
 		const float a = kPi / 6 * float(i);
 		b.add(cut(Primitive::sweep(polar(1.5f, a, top - 0.6f), polar(5.2f, a, top - 1.3f), {0, 0, 1},
-				ToolProfile::gouge(1.2f, 2, 20))));
+				ToolProfile::gouge(1.2f, 2, 3.5f))));
 	}
 	// Corner leaves.
 	for (int i = 0; i < 4; ++i) {

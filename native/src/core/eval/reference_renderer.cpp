@@ -41,8 +41,8 @@ bool clip_to_box(const Ray &ray, const Aabb &box, float &t0, float &t1) {
 
 class Tracer {
 public:
-	Tracer(const Body &body, const MaterialTable &materials, const RenderSettings &s)
-		: body_(body), materials_(materials), s_(s), lipschitz_(body.lipschitz()),
+	Tracer(const Body &body, const MaterialTable &materials, const RenderSettings &s, const Octree *octree)
+		: body_(body), materials_(materials), s_(s), octree_(octree), lipschitz_(body.lipschitz()),
 		  bounds_(body.bounds().expanded(1.0f)) {}
 
 	// Linear RGB for one ray. pixel_angle is the angular size of a pixel, for the
@@ -51,12 +51,25 @@ public:
 		float t0, t1;
 		if (clip_to_box(ray, bounds_, t0, t1)) {
 			float t = t0;
-			for (int i = 0; i < s_.max_steps && t <= t1; ++i) {
+			const int max_steps = octree_ ? s_.max_steps * 2 : s_.max_steps;
+			for (int i = 0; i < max_steps && t <= t1; ++i) {
 				const vec3 p = ray.o + ray.d * t;
-				const float d = body_.distance(p);
 				const float eps = std::max(t * pixel_angle * 0.5f, 1e-4f);
+				if (octree_) {
+					const Octree::Step st = octree_->step(body_, p, ray.d);
+					if (st.state == Octree::State::Empty) {
+						t += st.exit + 1e-4f; // no surface anywhere in this cell
+						continue;
+					}
+					if (st.d < eps) {
+						return surface(refine(ray, t, st.d), ray.d, eps);
+					}
+					t += std::min(std::max(st.d / st.lipschitz, eps * 0.5f), st.exit + 1e-4f);
+					continue;
+				}
+				const float d = distance(p);
 				if (d < eps) {
-					return surface(p, ray.d, eps);
+					return surface(refine(ray, t, d), ray.d, eps);
 				}
 				t += std::max(d / lipschitz_, eps * 0.5f);
 			}
@@ -70,9 +83,33 @@ private:
 		return gl::mix(vec3(0.20f, 0.21f, 0.23f), vec3(0.34f, 0.36f, 0.40f), k);
 	}
 
+	// Sphere tracing stops anywhere within the hit epsilon, and where it stops depends on
+	// the step sequence. A few signed steps settle onto the surface itself, so shading does
+	// not depend on how the ray got there (and the octree and exhaustive paths agree).
+	vec3 refine(const Ray &ray, float t, float d) const {
+		for (int i = 0; i < 4 && std::fabs(d) > 1e-5f; ++i) {
+			t += d;
+			d = distance(ray.o + ray.d * t);
+		}
+		return ray.o + ray.d * t;
+	}
+
+	// Without an octree this is the formula field itself (every edit, in order): the ground
+	// truth. Body::sample's per-point culling is sign-exact but only a bound in value near
+	// bound-type primitives, which shading effects that read values (AO) would pick up.
+	float distance(vec3 p) const {
+		return octree_ ? octree_->distance(body_, p) : body_.sample_exhaustive(p).d;
+	}
+
+	vec3 normal(vec3 p, float h) const {
+		const vec3 k0(1, -1, -1), k1(-1, -1, 1), k2(-1, 1, -1), k3(1, 1, 1);
+		return gl::normalize(k0 * distance(p + k0 * h) + k1 * distance(p + k1 * h) + k2 * distance(p + k2 * h) +
+				k3 * distance(p + k3 * h));
+	}
+
 	vec3 surface(vec3 p, vec3 view, float eps) const {
-		const vec3 n = body_.normal(p, std::max(eps, 2e-3f));
-		const Sample s = body_.sample(p);
+		const vec3 n = normal(p, std::max(eps, 2e-3f));
+		const Sample s = octree_ ? octree_->sample(body_, p) : body_.sample_exhaustive(p);
 		vec3 albedo = materials_.albedo(s.m0, p, body_.grain_origin, body_.grain_axis);
 		const Material &m0 = materials_[std::uint16_t(s.m0)];
 		float specular = m0.specular, shininess = m0.shininess;
@@ -102,18 +139,26 @@ private:
 	// Penumbra estimate from the closest approach along the shadow ray (Quilez).
 	float soft_shadow(vec3 ro, vec3 rd) const {
 		float res = 1.0f, t = 0.02f;
-		for (int i = 0; i < 96 && t < 400.0f; ++i) {
+		for (int i = 0; i < 160 && t < 400.0f; ++i) {
 			const vec3 p = ro + rd * t;
 			if (p.x < bounds_.lo.x || p.y < bounds_.lo.y || p.z < bounds_.lo.z || p.x > bounds_.hi.x ||
 					p.y > bounds_.hi.y || p.z > bounds_.hi.z) {
 				break;
 			}
-			const float h = body_.distance(p);
+			float h, lip = lipschitz_, limit = 4.0f;
+			if (octree_) {
+				const Octree::Step st = octree_->step(body_, p, rd, true);
+				h = st.d;
+				lip = st.lipschitz;
+				limit = std::max(st.exit + 1e-3f, 0.02f);
+			} else {
+				h = distance(p);
+			}
 			if (h < 1e-4f) {
 				return 0.0f;
 			}
 			res = std::min(res, 10.0f * h / t);
-			t += gl::clamp(h / lipschitz_, 0.02f, 4.0f);
+			t += gl::clamp(h / lip, 0.02f, std::min(limit, 4.0f));
 		}
 		return gl::smoothstep(0.0f, 1.0f, res);
 	}
@@ -122,7 +167,7 @@ private:
 		float occ = 0.0f, weight = 1.0f;
 		const float dist[5] = {0.3f, 0.9f, 1.8f, 3.0f, 4.5f};
 		for (float h : dist) {
-			occ += (h - body_.distance(p + n * h)) * weight;
+			occ += (h - distance(p + n * h)) * weight;
 			weight *= 0.8f;
 		}
 		return gl::clamp(1.0f - 0.25f * occ, 0.0f, 1.0f);
@@ -131,6 +176,7 @@ private:
 	const Body &body_;
 	const MaterialTable &materials_;
 	const RenderSettings &s_;
+	const Octree *octree_;
 	float lipschitz_;
 	Aabb bounds_;
 };
@@ -142,9 +188,10 @@ std::uint8_t encode(float linear) {
 
 } // namespace
 
-Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &s) {
+Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &s,
+		const Octree *octree) {
 	Image img(s.width, s.height);
-	const Tracer tracer(body, materials, s);
+	const Tracer tracer(body, materials, s, octree);
 
 	const vec3 forward = gl::normalize(camera.target - camera.eye);
 	const vec3 right = gl::normalize(gl::cross(forward, camera.up));

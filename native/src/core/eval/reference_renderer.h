@@ -2,6 +2,7 @@
 
 #include "body/body.h"
 #include "body/materials.h"
+#include "compile/octree.h"
 #include "eval/image.h"
 
 namespace sdf {
@@ -30,7 +31,11 @@ struct RenderSettings {
 // Ground-truth renderer: sphere-traces the body's field on the CPU with Lipschitz-scaled
 // steps and a pixel-footprint hit epsilon, shades with the shared material functions,
 // SDF soft shadows and SDF ambient occlusion. Slow, simple, and the reference the GPU
-// path is compared against.
-Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &settings);
+// path is compared against. With an octree, it traces the pruned per-cell tapes instead,
+// skipping empty cells and clamping every step at the cell's exit. Those tapes are exact
+// only within the octree's value_margin of the surface, so ambient occlusion — which
+// samples further out — is approximate on that path (still from valid distance bounds).
+Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &settings,
+		const Octree *octree = nullptr);
 
 } // namespace sdf

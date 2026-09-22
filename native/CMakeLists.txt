@@ -17,6 +17,7 @@ endif()
 add_library(sdf_core STATIC
 	src/core/body/body.cpp
 	src/core/body/materials.cpp
+	src/core/compile/octree.cpp
 	src/core/eval/image.cpp
 	src/core/eval/reference_renderer.cpp
 )
@@ -37,12 +38,16 @@ target_link_libraries(sdf_demo PUBLIC sdf_core)
 add_executable(sdf_gallery tools/sdf_gallery.cpp)
 target_link_libraries(sdf_gallery PRIVATE sdf_demo sdf_io)
 
+add_executable(sdf_bench tools/sdf_bench.cpp)
+target_link_libraries(sdf_bench PRIVATE sdf_core)
+
 add_executable(sdf_tests
 	tests/test_main.cpp
 	tests/test_primitives.cpp
 	tests/test_blend.cpp
 	tests/test_body.cpp
 	tests/test_golden.cpp
+	tests/test_octree.cpp
 )
 target_link_libraries(sdf_tests PRIVATE sdf_core sdf_demo sdf_io)
 target_compile_definitions(sdf_tests PRIVATE SDF_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
