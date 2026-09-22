@@ -1,62 +1,51 @@
-# SQLDEMO
+# Object Builder — SDF engine
 
-A small [Godot 4](https://godotengine.org) project that runs a SQL-flavoured query
-over an in-memory table, prints the result like a SQL shell would, and draws the
-same rows on screen. It runs without an editor and without a display, so it works
-in CI or over SSH.
-
-![The demo scene: the query and its four result rows](docs/screenshot.png)
-
-## Running it
-
-Godot 4.4 or newer (developed against 4.7.2-stable). Point `GODOT` at the binary if it is not on your `PATH`:
-
-```sh
-tools/run.sh                # prints the result, then exits (headless)
-tools/run.sh --screenshot   # renders off-screen, saves out/sqldemo.png
-```
-
-```
-SQLDEMO — Godot 4.7.2-stable (official) (headless)
-
-SELECT name, team, salary FROM employees
-  WHERE salary > 135000 ORDER BY salary DESC LIMIT 4;
-
-+----------------+----------+-----------+
-| name           | team     | salary    |
-+----------------+----------+-----------+
-| Barbara Liskov | Compiler | 161000.00 |
-| Grace Hopper   | Compiler | 155000.00 |
-| Radia Perlman  | Network  | 149250.00 |
-| Ada Lovelace   | Engine   | 142000.00 |
-+----------------+----------+-----------+
-4 rows in set
-```
-
-The screenshot mode needs `xvfb-run` and a software OpenGL driver (Mesa's
-llvmpipe is enough). Godot's `--headless` mode uses a dummy renderer that never
-produces a frame, so capturing one means rendering into a virtual X display
-instead — that is the only difference between the two modes.
+The engine for a crafting game where players make working objects — a pickaxe is a
+steel head, an ash handle and a wedge — from parts shaped by real processes and then
+joined. Every part is a **signed distance field**: an analytic base shape plus an ordered
+list of edits (tool strokes, fillets, inlays, paint), each combined with a chosen blend
+mode. The full design is in the approved plan; this README covers what exists today.
 
 ## Layout
 
-| Path | What it does |
+| Path | What it is |
 | --- | --- |
-| `scenes/main.tscn` | The scene Godot boots into. |
-| `scripts/main.gd` | Runs the query, prints it, builds the UI, saves the screenshot. |
-| `scripts/query.gd` | `Query`: a chainable `where` / `order_by` / `limit` / `select` over an array of rows. |
-| `tools/run.sh` | Headless and screenshot entry points. |
+| `native/src/core/shared/*.glsl` | The SDF formulas — primitives, tool cross-sections, swept strokes, blend modes, materials. Written in a subset that compiles **both as C++ and as Godot shader code**, so the CPU evaluator and the GPU raymarcher run the same maths. Edit these only. |
+| `native/src/core/glsl_compat.h` | Just enough GLSL (`vec3`, `mix`, `clamp`, …) in C++ to compile the shared files. |
+| `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds. |
+| `native/tests/` | Property tests for the core. No Godot needed. |
+| `game/` | The Godot 4.7 project. `game/shaders/sdf/` holds byte-identical copies of the shared files. |
+| `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner), `test_godot.sh`. |
 
-Command-line flags are passed after a bare `--`:
+## Blend modes
+
+The primitive decides the surface; the blend mode decides the edge where two surfaces meet.
+Every mode has compact support — beyond its radius it is exactly the hard result — so an
+edit only reshapes the field near its own primitive.
+
+| Mode | Edge | Lipschitz |
+| --- | --- | --- |
+| `Hard` | crisp arris | 1 |
+| `Chamfer` | flat bevel, optionally asymmetric (`r` onto one surface, `r2` onto the other) | √2 |
+| `Round` | circular fillet, unchanged outside it | √2 |
+| `Smooth`, `SmoothC2` | organic polynomial blend (C1 / C2); mixes materials | 1 |
+| `Profile` | router-style edge profiles: arc concave, arc convex, ogee | √2 |
+
+Operators: union, subtract, intersect, plus engrave / groove / tongue along a guide
+surface, and paint (material only). Tool strokes sweep a flat, V or gouge cross-section
+along a segment or a quadratic Bezier.
+
+## Building and testing
 
 ```sh
-godot --headless --path . -- --quit
-godot --path . --rendering-driver opengl3 -- --screenshot=out/sqldemo.png
+cmake -S native -B native/build -G Ninja
+cmake --build native/build
+native/build/sdf_tests            # 23 property tests: exactness, compact support,
+                                  # Lipschitz bounds, material weights, carving
+
+GODOT=/path/to/godot tools/test_godot.sh   # compiles the shared files through Godot's
+                                           # shader pipeline (needs xvfb-run + Mesa)
 ```
 
-## Notes
-
-`scripts/query.gd` declares `class_name Query`, and Godot only registers
-`class_name` scripts once the project has been imported. A fresh checkout
-therefore needs one `godot --headless --path . --import` pass before the project
-will run; `tools/run.sh` does this for you.
+After editing anything in `native/src/core/shared/`, run `tools/sync_shaders.sh`; the
+test suite fails if the Godot copies drift.

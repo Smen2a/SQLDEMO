@@ -5,18 +5,16 @@ config_version=5
 
 [application]
 
-config/name="SQLDEMO"
-config/description="A tiny in-memory query demo, rendered by Godot and runnable headless."
-run/main_scene="res://scenes/main.tscn"
+config/name="Object Builder"
+config/description="SDF engine test bed: carvable, joinable parts rendered from signed distance fields."
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]
 
-window/size/viewport_width=960
-window/size/viewport_height=540
+window/size/viewport_width=1280
+window/size/viewport_height=720
 
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.08, 0.09, 0.12, 1)
