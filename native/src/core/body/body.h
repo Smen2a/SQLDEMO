@@ -121,14 +121,35 @@ class Body {
 public:
 	Primitive base;
 	std::uint16_t base_material = 0;
-	std::vector<Edit> edits;
+	// Where this part sat in the log or block it was cut from: procedural grain, rings and
+	// strata are evaluated relative to this line (a pith point and the grain axis).
+	vec3 grain_origin{0, 0, 0};
+	vec3 grain_axis{1, 0, 0};
 
+	void add(const Edit &e);
+	void replace(std::size_t i, const Edit &e);
+	void pop();
+	const std::vector<Edit> &edits() const { return edits_; }
+
+	// Skips edits that provably cannot matter at p: those whose primitive's bounding box is
+	// at least |d| + influence away. For every operator that leaves the value unchanged
+	// when the primitive's distance is exact, and never changes the sign.
 	Sample sample(vec3 p) const;
+	// Evaluates every edit; the reference sample() is tested against.
+	Sample sample_exhaustive(vec3 p) const;
 	float distance(vec3 p) const { return sample(p).d; }
 	// Tetrahedral finite-difference normal with step h.
 	vec3 normal(vec3 p, float h) const;
 	Aabb bounds() const;
 	float lipschitz() const;
+
+private:
+	struct Cull {
+		Aabb box;        // primitive bounds, not expanded
+		float influence; // blend / operator reach beyond them
+	};
+	std::vector<Edit> edits_;
+	std::vector<Cull> culls_;
 };
 
 // Unit quaternion rotating by `angle` radians about unit `axis`.

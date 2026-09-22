@@ -278,12 +278,54 @@ float Edit::lipschitz() const {
 	return op_l * prim.lipschitz();
 }
 
+void Body::add(const Edit &e) {
+	edits_.push_back(e);
+	culls_.push_back({e.op == Op::Intersect ? Aabb::infinite() : e.prim.bounds(), e.influence()});
+}
+
+void Body::replace(std::size_t i, const Edit &e) {
+	edits_[i] = e;
+	culls_[i] = {e.op == Op::Intersect ? Aabb::infinite() : e.prim.bounds(), e.influence()};
+}
+
+void Body::pop() {
+	edits_.pop_back();
+	culls_.pop_back();
+}
+
+namespace {
+
+float box_distance(const Aabb &b, vec3 p) {
+	const vec3 outside = gl::max(gl::max(b.lo - p, p - b.hi), 0.0f);
+	return gl::length(outside);
+}
+
+vec4 apply(const Edit &e, float d, vec3 mat, vec3 p) {
+	return gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape),
+			float(e.material));
+}
+
+} // namespace
+
 Sample Body::sample(vec3 p) const {
 	float d = base.eval(p);
 	vec3 mat(float(base_material), float(base_material), 0.0f);
-	for (const Edit &e : edits) {
-		const vec4 r = gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2,
-				int(e.shape), float(e.material));
+	for (std::size_t i = 0; i < edits_.size(); ++i) {
+		if (box_distance(culls_[i].box, p) >= std::fabs(d) + culls_[i].influence) {
+			continue;
+		}
+		const vec4 r = apply(edits_[i], d, mat, p);
+		d = r.x;
+		mat = vec3(r.y, r.z, r.w);
+	}
+	return {d, mat.x, mat.y, mat.z};
+}
+
+Sample Body::sample_exhaustive(vec3 p) const {
+	float d = base.eval(p);
+	vec3 mat(float(base_material), float(base_material), 0.0f);
+	for (const Edit &e : edits_) {
+		const vec4 r = apply(e, d, mat, p);
 		d = r.x;
 		mat = vec3(r.y, r.z, r.w);
 	}
@@ -299,7 +341,7 @@ vec3 Body::normal(vec3 p, float h) const {
 
 Aabb Body::bounds() const {
 	Aabb b = base.bounds();
-	for (const Edit &e : edits) {
+	for (const Edit &e : edits_) {
 		if (e.op == Op::Union || e.op == Op::Tongue) {
 			b.include(e.bounds());
 		}
@@ -309,7 +351,7 @@ Aabb Body::bounds() const {
 
 float Body::lipschitz() const {
 	float l = base.lipschitz();
-	for (const Edit &e : edits) {
+	for (const Edit &e : edits_) {
 		l = std::max(l, e.lipschitz());
 	}
 	return l;

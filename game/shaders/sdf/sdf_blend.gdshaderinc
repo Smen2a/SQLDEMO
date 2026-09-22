@@ -33,19 +33,24 @@ const int SDF_OP_PAINT = 6;    // material only: inside the guide, over a transi
 
 const float SDF_MIN_RADIUS = 1.0e-6;
 
-// Fill region of an edge profile, as a distance in the unit corner square (u, v in [0, 1]).
+// Fill region of an edge profile, as a distance in unit corner coordinates (u, v); the
+// profile curve runs from (1, 0) to (0, 1). The region deliberately extends to [-1, 1]^2,
+// overlapping the operands' own solids: regions that merely touch along a face leave a
+// zero-valued phantom sheet on that face under min(), which renders as a surface that is
+// not there (the old face, floating in a cut).
 SDF_FN float sdf_profile_fill(vec2 uv, int shape) {
-	float square = sdf_box2(uv - vec2(0.5, 0.5), vec2(0.5, 0.5));
+	float box = sdf_box2(uv, vec2(1.0, 1.0));
 	if (shape == SDF_PROFILE_ARC_CONVEX) {
-		return max(square, length(uv) - 1.0);
+		return max(box, length(uv) - 1.0);
 	}
 	if (shape == SDF_PROFILE_OGEE) {
 		// Region under v = 1 - smoothstep(u); |slope| <= 1.5 so dividing by
 		// sqrt(1 + 1.5^2) keeps the implicit form a distance bound.
-		float curve = uv.y - (1.0 - uv.x * uv.x * (3.0 - 2.0 * uv.x));
-		return max(square, curve * 0.5547002);
+		float u = clamp(uv.x, 0.0, 1.0);
+		float curve = uv.y - (1.0 - u * u * (3.0 - 2.0 * u));
+		return max(box, curve * 0.5547002);
 	}
-	return max(square, 1.0 - length(uv - vec2(1.0, 1.0)));
+	return max(box, 1.0 - length(uv - vec2(1.0, 1.0)));
 }
 
 SDF_FN vec2 sdf_union(float a, float b, int mode, float r, float r2, int shape) {
@@ -83,10 +88,11 @@ SDF_FN vec2 sdf_union(float a, float b, int mode, float r, float r2, int shape) 
 		}
 		// Scaling the unit profile by (r, r2) keeps its zero set exact but makes it an
 		// underestimate that would reach arbitrarily far along some directions; the true
-		// distance to the profile's rectangle caps that, which bounds the support.
+		// distance to the profile's [-r, r] x [-r2, r2] box caps that, which bounds the
+		// support.
 		float fill = min(r, r2) * sdf_profile_fill(vec2(a / r, b / r2), shape);
-		float rect = sdf_box2(vec2(a - 0.5 * r, b - 0.5 * r2), vec2(0.5 * r, 0.5 * r2));
-		return vec2(min(min(a, b), max(fill, rect)), b / r2 < a / r ? 1.0 : 0.0);
+		float rect = sdf_box2(vec2(a, b), vec2(r, r2));
+		return vec2(min(min(a, b), max(fill, rect)), hard_w);
 	}
 	return vec2(min(a, b), hard_w);
 }

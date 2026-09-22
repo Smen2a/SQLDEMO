@@ -104,9 +104,60 @@ TEST(blend_lipschitz_bounds_hold) {
 				e.r = rng.uniform(0.2f, 1.2f);
 				e.r2 = uses_r2(m.mode) ? rng.uniform(0.2f, 1.2f) : e.r;
 				e.shape = m.shape;
-				body.edits.push_back(e);
+				body.add(e);
 				const float l = t::sampled_lipschitz([&](vec3 p) { return body.distance(p); }, {0, 0, 0}, 4, 1500, rng);
 				CHECK_LE(l, body.lipschitz() * 1.001);
+			}
+		}
+	}
+}
+
+// A true surface separates inside from outside. A "phantom sheet" — where the field
+// touches zero but stays positive (or negative) on both sides — renders as a surface that
+// is not there. Min-combining regions that merely touch along a face produces exactly
+// that, so check every zero crossing near a blend actually changes sign.
+TEST(blend_zero_sets_have_no_phantom_sheets) {
+	t::Rng rng(14);
+	const Op ops[] = {Op::Union, Op::Subtract, Op::Intersect};
+	for (const ModeCase &m : kModes) {
+		for (Op op : ops) {
+			// Two perpendicular half-spaces meeting along the y axis: the blend region is the
+			// corner around it, where phantom sheets would sit on the faces' extensions.
+			Body body;
+			body.base = Primitive::plane({0, 0, 1}, 0);
+			Edit e;
+			e.prim = Primitive::plane({-1, 0, 0}, 0);
+			e.op = op;
+			e.blend = m.mode;
+			e.shape = m.shape;
+			e.r = 2.0f;
+			e.r2 = uses_r2(m.mode) ? 3.0f : 2.0f;
+			body.add(e);
+			int phantom = 0;
+			for (int i = 0; i < 4000; ++i) {
+				// Walk a random ray through the corner region; at every bracketed sign change
+				// or touching zero, look at both sides.
+				const vec3 o(rng.uniform(-6, 6), rng.uniform(-1, 1), rng.uniform(-6, 6));
+				const vec3 dir = rng.unit();
+				float prev = body.distance(o);
+				for (float t = 0.01f; t < 12; t += 0.01f) {
+					const float d = body.distance(o + dir * t);
+					if (std::fabs(d) < 2e-3f && std::fabs(d) <= std::fabs(prev)) {
+						const float ahead = body.distance(o + dir * (t + 0.05f));
+						const float behind = body.distance(o + dir * (t - 0.05f));
+						if ((ahead > 0) == (behind > 0) && std::fabs(ahead) > 0.02f && std::fabs(behind) > 0.02f) {
+							++phantom;
+						}
+					}
+					prev = d;
+				}
+			}
+			// A ray passing within a hair of a sharp convex edge genuinely touches zero without
+			// crossing; that is a measure-zero set of rays (a handful here). A phantom sheet
+			// is a whole face, hit by hundreds.
+			if (phantom > 8) {
+				t::fail(__FILE__, __LINE__, std::string(m.name) + " op " + std::to_string(int(op)) + ": " +
+						std::to_string(phantom) + " touching zeros");
 			}
 		}
 	}

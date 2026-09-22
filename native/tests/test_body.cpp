@@ -33,7 +33,7 @@ std::string slurp(const std::string &path) {
 
 TEST(v_cut_removes_a_groove) {
 	Body b = panel();
-	b.edits.push_back(v_cut({-80, 0, 0}, {80, 0, 0}, 3));
+	b.add(v_cut({-80, 0, 0}, {80, 0, 0}, 3));
 	CHECK(b.distance({0, 0, 8}) > 0);     // inside the groove: removed
 	CHECK(b.distance({0, 0, 6.5f}) < 0);  // below the groove bottom (z = 7)
 	CHECK(b.distance({0, 3, 9}) < 0);     // beside the groove: half-width at z = 9 is 1.15
@@ -49,10 +49,10 @@ TEST(round_subtract_eases_the_arris) {
 	Edit e;
 	e.prim = Primitive::sweep({-80, 0, 6}, {80, 0, 6}, {0, 0, 1}, ToolProfile::flat(6, 20));
 	e.op = Op::Subtract;
-	hard.edits.push_back(e);
+	hard.add(e);
 	e.blend = Blend::Round;
 	e.r = e.r2 = 1.0f;
-	eased.edits.push_back(e);
+	eased.add(e);
 	// Just inside the sharp corner at (y = 3, z = 10), the hard cut keeps material and the
 	// rounded one has removed it.
 	const vec3 corner(0, 3.15f, 9.85f);
@@ -71,7 +71,7 @@ TEST(smooth_union_mixes_materials_and_hard_selects) {
 	putty.blend = Blend::Smooth;
 	putty.r = 4;
 	putty.material = 2;
-	b.edits.push_back(putty);
+	b.add(putty);
 
 	// Deep in the putty: all putty. Far away on the panel: all wood.
 	const Sample top = b.sample({0, 0, 16});
@@ -89,7 +89,8 @@ TEST(smooth_union_mixes_materials_and_hard_selects) {
 	CHECK(mixed);
 
 	// The same union with a hard blend never mixes.
-	b.edits.back().blend = Blend::Hard;
+	putty.blend = Blend::Hard;
+	b.replace(0, putty);
 	for (float y = 4; y < 12; y += 0.1f) {
 		const Sample s = b.sample({0, y, 10.5f});
 		CHECK(s.t == 0 || s.t == 1);
@@ -102,7 +103,7 @@ TEST(paint_changes_material_not_shape) {
 	paint.prim = Primitive::sphere({20, 0, 10}, 5);
 	paint.op = Op::Paint;
 	paint.material = 7;
-	b.edits.push_back(paint);
+	b.add(paint);
 	const vec3 inside(20, 0, 9.5f), outside(40, 0, 9.5f);
 	CHECK_NEAR(b.distance(inside), -0.5, 1e-5);
 	const Sample s = b.sample(inside);
@@ -110,7 +111,8 @@ TEST(paint_changes_material_not_shape) {
 	CHECK(b.sample(outside).m0 == 0);
 
 	// A soft transition gives intermediate weights across its width.
-	b.edits.back().r = 2;
+	paint.r = 2;
+	b.replace(0, paint);
 	const Sample edge = b.sample({25, 0, 9.5f}); // guide distance ~0 here
 	CHECK(edge.t > 0.2f && edge.t < 0.8f);
 }
@@ -134,11 +136,60 @@ TEST(carved_body_lipschitz_bound_holds) {
 			e.op = Op::Subtract;
 			e.blend = blends[i % 4];
 			e.r = e.r2 = rng.uniform(0.2f, 1.0f);
-			b.edits.push_back(e);
+			b.add(e);
 		}
 		const float bound = b.lipschitz();
 		const float l = t::sampled_lipschitz([&](vec3 p) { return b.distance(p); }, {0, 0, 8}, 50, 20000, rng, 0.05f);
 		CHECK_LE(l, bound * 1.001);
+	}
+}
+
+// The per-point culling in Body::sample must never change the sign of the field, and must
+// reproduce the exhaustive value exactly wherever the skipped primitives are exact SDFs.
+TEST(culled_sampling_matches_exhaustive) {
+	t::Rng rng(21);
+	const Op ops[] = {Op::Union, Op::Subtract, Op::Engrave, Op::Groove, Op::Tongue, Op::Paint};
+	const Blend blends[] = {Blend::Hard, Blend::Chamfer, Blend::Round, Blend::Smooth, Blend::SmoothC2, Blend::Profile};
+	for (int trial = 0; trial < 8; ++trial) {
+		// Exact primitives only (spheres, boxes, capsules, flat sweeps), so values must match.
+		Body exact = panel();
+		// Everything, including bound-type sweeps (V, gouge, curves), so only signs must match.
+		Body any = panel();
+		for (int i = 0; i < 40; ++i) {
+			Edit e;
+			e.op = ops[i % 6];
+			e.blend = blends[(i / 6) % 6];
+			e.r = rng.uniform(0.2f, 2.5f);
+			e.r2 = rng.uniform(0.2f, 2.5f);
+			e.shape = EdgeProfile(i % 3);
+			e.material = std::uint16_t(1 + i % 4);
+			const vec3 c(rng.uniform(-70, 70), rng.uniform(-45, 45), rng.uniform(4, 14));
+			switch (i % 4) {
+				case 0: e.prim = Primitive::sphere(c, rng.uniform(2, 8)); break;
+				case 1: e.prim = Primitive::box(c, rng.vec(1, 6), rng.uniform(0, 0.5f), rng.rotation()); break;
+				case 2: e.prim = Primitive::capsule(c, c + rng.vec(-10, 10), rng.uniform(1, 3)); break;
+				default:
+					e.prim = Primitive::sweep(c, c + rng.vec(-20, 20), {0, 0, 1}, ToolProfile::flat(rng.uniform(2, 6), 20));
+			}
+			exact.add(e);
+			if (i % 3 == 0) {
+				e.prim = Primitive::sweep(c, c + rng.vec(-8, 8), c + rng.vec(-20, 20), {0, 0, 1},
+						i % 2 ? ToolProfile::v_tool(60, 20) : ToolProfile::gouge(3, 5, 20));
+			}
+			any.add(e);
+		}
+		for (int k = 0; k < 20000; ++k) {
+			const vec3 p(rng.uniform(-85, 85), rng.uniform(-60, 60), rng.uniform(-15, 25));
+			const Sample a = exact.sample(p), b = exact.sample_exhaustive(p);
+			CHECK_NEAR(a.d, b.d, 1e-4);
+			const float wa = (a.m0 == 1 ? 1 - a.t : 0) + (a.m1 == 1 ? a.t : 0);
+			const float wb = (b.m0 == 1 ? 1 - b.t : 0) + (b.m1 == 1 ? b.t : 0);
+			CHECK_NEAR(wa, wb, 1e-4);
+			const float c1 = any.distance(p), c2 = any.sample_exhaustive(p).d;
+			if (std::fabs(c2) > 1e-4f) {
+				CHECK((c1 < 0) == (c2 < 0));
+			}
+		}
 	}
 }
 
