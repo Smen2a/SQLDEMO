@@ -15,6 +15,12 @@ struct Camera {
 };
 
 struct RenderSettings {
+	enum class Output {
+		Shaded,
+		Normals, // body-space normal as n * 0.5 + 0.5, stored without gamma; misses are black
+		Albedo,  // unlit material colour, stored without gamma; misses are black
+	};
+	Output output = Output::Shaded;
 	int width = 640;
 	int height = 400;
 	int samples_per_axis = 1; // supersampling: n x n jittered samples per pixel

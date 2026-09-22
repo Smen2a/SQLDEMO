@@ -15,10 +15,12 @@ mode. The full design is in the approved plan; this README covers what exists to
 | `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds; the material table. |
 | `native/src/core/compile/` | The octree: per-cell pruned edit lists ("tapes") that keep per-query cost independent of edit count. |
 | `native/src/core/eval/` | The CPU reference renderer: ground truth for every later GPU path. |
-| `native/src/demo/`, `native/tools/` | Demo scenes, `sdf_gallery` (renders them) and `sdf_bench` (octree scaling). |
+| `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
+| `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live. |
 | `native/tests/` | Property tests for the core and golden-image tests. No Godot needed. |
-| `game/` | The Godot 4.7 project. `game/shaders/sdf/` holds byte-identical copies of the shared files. |
-| `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner), `test_godot.sh`. |
+| `game/` | The Godot 4.7 project. `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
+| `extern/godot-cpp/` | godot-cpp 10.0.0 (submodule), built against the Godot 4.7 API. |
+| `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner), `test_godot.sh`, `parity.sh`. |
 
 ![Every blend mode applied to the same union (a boss rising from a block) and subtract (a chiselled channel)](docs/images/blend_gallery.png)
 
@@ -52,7 +54,7 @@ hard ones keep a crisp boundary on one continuous surface.
 
 These are rendered by the CPU reference renderer (`native/src/core/eval`): sphere tracing
 with Lipschitz-scaled steps and a pixel-footprint hit epsilon, SDF soft shadows and SDF
-ambient occlusion. It is slow on purpose — it is the ground truth the GPU path will be
+ambient occlusion. It is slow on purpose — it is the ground truth the GPU path is
 diffed against. `Body::sample` already skips, per point, every edit whose bounding box
 is at least `|d| + influence` away, which provably never changes the result's sign.
 
@@ -99,20 +101,69 @@ The 100k case is heavy mostly because a 0.4 m² worked face at millimetre detail
 that many cells; consolidating old chips into a sampled base field (planned alongside
 forging) is what will bound it for very long jobs.
 
-## Building and testing
+## In Godot: the Live path
 
-The core has no dependencies; the tests and the gallery tool need zlib (for PNGs).
+`SdfBody` (a `MeshInstance3D`) compiles its body into the octree and flattens it into four
+float data textures: cells, tapes, edit parameters and materials. A proxy box around the
+body then runs `sdf_live.gdshader`, which sphere-traces each pixel in the body's own
+millimetres, interpreting the tape of whichever cell the ray is in with the same shared
+functions the C++ evaluator uses. It writes the true hit's depth, normal and position
+(`DEPTH`, `NORMAL`, `LIGHT_VERTEX`), so Godot lights and composites it like any mesh. Adding
+a stroke updates the touched cells and re-uploads the textures; nothing is meshed.
+
+![A fluted walnut ball, raymarched live in Godot: it casts its shadow on the floor, and a mesh bar pushed into it is cut exactly where it enters the surface](docs/images/live_sphere.png)
+
+**Parity.** `tools/parity.sh` renders every demo through Godot and through the CPU reference
+renderer's formula field (every edit, in order, no octree), from the same camera, and diffs
+them pixel by pixel: normals for geometry, unlit albedo for materials. Over all 25 cases
+(the 8 blend modes, 6 material scenes, the carved panel, the fluted ball and a 300-stroke
+session) at 1280x720, the mean channel difference is at most 0.23 / 255, and at most 0.05%
+of pixels differ by more than 24 / 255. Those are single pixels on silhouettes and creases,
+where a pixel centre falls on one side of the edge or the other. The results are identical
+with the node scaled to a metre world (scale 0.001).
+
+What was checked in Godot (Compatibility renderer, the only one without a GPU):
+
+| Check | Result |
+| --- | --- |
+| Depth composition with meshes | exact: meshes pushed into a body are cut at its surface |
+| Casting shadows | works: the shadow pass runs the raymarch and takes its depth |
+| Receiving shadows | Forward+ / Mobile look shadows up per fragment at `LIGHT_VERTEX` (from Godot's source, to confirm on hardware); Compatibility computes shadow coordinates per vertex, on the proxy box, so there Live bodies receive no shadow-map shadows |
+| Orthographic cameras (directional shadow passes are orthographic) | works |
+| Metre-scaled world | works, parity unchanged |
+
+**The decision gate** (plan §4) needs a real GPU. After building (below), run
 
 ```sh
+godot --path game res://bench/live_bench.tscn                                   # Forward+
+godot --path game --rendering-method gl_compatibility res://bench/live_bench.tscn
+```
+
+with the window at 1920x1080 if the screen allows. It times five scenarios: nothing, the panel
+filling the screen, a close-up of the rosette, 2000 random strokes (long tapes), and three
+bodies at once. It prints median and 95th-percentile GPU times against the targets: at most
+~6 ms for a screen-filling body and ~8 ms for three. Add `-- --view=steps` for step-count heat
+maps, or `-- --shots=<dir>` to save each scenario.
+
+## Building and testing
+
+The core has no dependencies; the tests and the image tools need zlib (for PNGs), and the
+Godot extension needs the godot-cpp submodule. The first build compiles godot-cpp's
+bindings, which takes a few minutes; `-DSDF_BUILD_GODOT=OFF` skips the extension.
+
+```sh
+git submodule update --init
 cmake -S native -B native/build -G Ninja
-cmake --build native/build
+cmake --build native/build        # also writes game/bin/sdf_godot.<os>.<ext>
 native/build/sdf_tests            # property tests (exactness, compact support, Lipschitz
                                   # bounds, no phantom surfaces, material weights, culling)
                                   # and golden images of the demo scenes
 native/build/sdf_gallery out 2 2  # re-render the gallery images at 2x, 2x2 supersampled
 
-GODOT=/path/to/godot tools/test_godot.sh   # compiles the shared files through Godot's
-                                           # shader pipeline (needs xvfb-run + Mesa)
+GODOT=/path/to/godot tools/test_godot.sh   # shader compile checks, the extension, live
+                                           # renders and GPU/CPU parity (needs xvfb-run
+                                           # and Mesa; a few minutes on llvmpipe)
+native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, any view
 ```
 
 After editing anything in `native/src/core/shared/`, run `tools/sync_shaders.sh`; the

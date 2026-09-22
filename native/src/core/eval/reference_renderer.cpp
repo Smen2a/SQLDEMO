@@ -79,6 +79,9 @@ public:
 
 private:
 	vec3 background(vec3 dir) const {
+		if (s_.output != RenderSettings::Output::Shaded) {
+			return vec3(0.0f);
+		}
 		const float k = gl::clamp(0.5f + 0.5f * dir.z, 0.0f, 1.0f);
 		return gl::mix(vec3(0.20f, 0.21f, 0.23f), vec3(0.34f, 0.36f, 0.40f), k);
 	}
@@ -109,6 +112,9 @@ private:
 
 	vec3 surface(vec3 p, vec3 view, float eps) const {
 		const vec3 n = normal(p, std::max(eps, 2e-3f));
+		if (s_.output == RenderSettings::Output::Normals) {
+			return n * 0.5f + vec3(0.5f);
+		}
 		const Sample s = octree_ ? octree_->sample(body_, p) : body_.sample_exhaustive(p);
 		vec3 albedo = materials_.albedo(s.m0, p, body_.grain_origin, body_.grain_axis);
 		const Material &m0 = materials_[std::uint16_t(s.m0)];
@@ -118,6 +124,9 @@ private:
 			albedo = gl::mix(albedo, materials_.albedo(s.m1, p, body_.grain_origin, body_.grain_axis), s.t);
 			specular = gl::mix(specular, m1.specular, s.t);
 			shininess = gl::mix(shininess, m1.shininess, s.t);
+		}
+		if (s_.output == RenderSettings::Output::Albedo) {
+			return albedo;
 		}
 
 		const vec3 l = s_.light_dir;
@@ -181,8 +190,11 @@ private:
 	Aabb bounds_;
 };
 
-std::uint8_t encode(float linear) {
-	const float c = std::pow(gl::clamp(linear, 0.0f, 1.0f), 1.0f / 2.2f);
+std::uint8_t encode(float value, bool gamma) {
+	float c = gl::clamp(value, 0.0f, 1.0f);
+	if (gamma) {
+		c = std::pow(c, 1.0f / 2.2f);
+	}
 	return std::uint8_t(std::lround(c * 255.0f));
 }
 
@@ -200,6 +212,7 @@ Image render(const Body &body, const MaterialTable &materials, const Camera &cam
 	const float aspect = float(s.width) / float(s.height);
 	const float pixel_angle = 2.0f * tan_half / float(s.height);
 	const int n = std::max(s.samples_per_axis, 1);
+	const bool gamma = s.output == RenderSettings::Output::Shaded;
 
 	std::atomic<int> next_row{0};
 	auto worker = [&]() {
@@ -217,9 +230,9 @@ Image render(const Body &body, const MaterialTable &materials, const Camera &cam
 				}
 				const vec3 c = sum / float(n * n);
 				std::uint8_t *px = img.at(x, y);
-				px[0] = encode(c.x);
-				px[1] = encode(c.y);
-				px[2] = encode(c.z);
+				px[0] = encode(c.x, gamma);
+				px[1] = encode(c.y, gamma);
+				px[2] = encode(c.z, gamma);
 			}
 		}
 	};

@@ -5,8 +5,12 @@ extends Node3D
 ##   --frames=<n>         frames to render before capturing (default 4)
 
 
-## Renders a few frames, optionally saves a screenshot, then quits.
+## Renders a few frames, optionally saves a screenshot, then quits. Headless runs have
+## no renderer (frame_post_draw never fires), so they quit straight away.
 func capture_and_quit() -> void:
+	if DisplayServer.get_name() == "headless":
+		get_tree().quit()
+		return
 	for i in int(user_arg("--frames", "4")):
 		await RenderingServer.frame_post_draw
 	var path := user_arg("--screenshot", "")

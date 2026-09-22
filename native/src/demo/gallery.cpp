@@ -1,6 +1,8 @@
 #include "demo/gallery.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <random>
 
 namespace sdf::demo {
 
@@ -233,6 +235,73 @@ Camera carved_panel_camera() {
 	c.target = {0, -4, 0};
 	c.fov_deg = 38;
 	return c;
+}
+
+bool named_demo(const std::string &name, Body &body, Camera &camera) {
+	if (name == "carved_panel") {
+		body = carved_panel_body();
+		camera = carved_panel_camera();
+		return true;
+	}
+	if (name.rfind("blend_", 0) == 0 || name.rfind("material_", 0) == 0) {
+		const std::vector<Tile> tiles = name[0] == 'b' ? blend_tiles() : material_tiles();
+		const std::string digits = name.substr(name.find('_') + 1);
+		if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) {
+			return false;
+		}
+		const std::size_t index = std::size_t(std::atoi(digits.c_str()));
+		if (index >= tiles.size()) {
+			return false;
+		}
+		body = tiles[index].body;
+		camera = tiles[index].camera;
+		return true;
+	}
+	if (name == "sphere") {
+		body = Body();
+		body.base = Primitive::sphere({0, 0, 0}, 30);
+		body.base_material = mat::Walnut;
+		body.grain_axis = {0, 0, 1};
+		for (int i = 0; i < 6; ++i) {
+			const float a = kPi / 3 * float(i);
+			// Cutting edge 5mm under the equator, shank pointing out: flutes that fade out
+			// towards the poles.
+			body.add(cut(Primitive::sweep(polar(25, a, -40), polar(25, a, 40), polar(1, a, 0), ToolProfile::gouge(10, 16, 12)),
+					Blend::Round, 2.0f));
+		}
+		camera.eye = {70, -90, 60};
+		camera.target = {0, 0, -4};
+		camera.fov_deg = 40;
+		return true;
+	}
+	if (name == "session") {
+		body = Body();
+		body.base = Primitive::box({0, 0, 0}, {60, 40, 8});
+		body.base_material = mat::Oak;
+		body.grain_origin = {0, -60, 0};
+		for (const Edit &e : random_strokes(body, 300, 1)) {
+			body.add(e);
+		}
+		camera = carved_panel_camera();
+		return true;
+	}
+	return false;
+}
+
+std::vector<Edit> random_strokes(const Body &body, int count, std::uint32_t seed) {
+	std::mt19937 gen{seed};
+	auto uni = [&](float lo, float hi) { return std::uniform_real_distribution<float>(lo, hi)(gen); };
+	const Aabb b = body.base.bounds();
+	const ToolProfile tools[] = {ToolProfile::v_tool(60, 5), ToolProfile::gouge(3, 5, 4), ToolProfile::flat(4, 4)};
+	std::vector<Edit> strokes;
+	for (int i = 0; i < count; ++i) {
+		const float depth = uni(0.5f, 3.0f);
+		const vec3 a(uni(b.lo.x + 5, b.hi.x - 5), uni(b.lo.y + 5, b.hi.y - 5), b.hi.z - depth);
+		const vec3 c = a + vec3(uni(-15, 15), uni(-15, 15), 0);
+		const vec3 ctrl = (a + c) * 0.5f + vec3(uni(-3, 3), uni(-3, 3), 0);
+		strokes.push_back(cut(Primitive::sweep(a, ctrl, c, {0, 0, 1}, tools[i % 3])));
+	}
+	return strokes;
 }
 
 Image blend_gallery(const GalleryOptions &o) {

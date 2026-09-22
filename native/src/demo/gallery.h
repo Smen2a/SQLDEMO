@@ -5,6 +5,7 @@
 #include "eval/image.h"
 #include "eval/reference_renderer.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,15 @@ std::vector<Tile> material_tiles();
 // A relief-carved ash panel: V-tool outlines, gouged petals, border groove.
 Body carved_panel_body();
 Camera carved_panel_camera();
+
+// A demo body and a camera that frames it, by name, shared by the tools and the Godot node:
+// "carved_panel", "blend_<i>" and "material_<i>" (gallery tiles), "sphere" (a walnut ball
+// fluted with round-edged gouge cuts) and "session" (an oak panel under 300 random
+// strokes). Returns false for an unknown name.
+bool named_demo(const std::string &name, Body &body, Camera &camera);
+// Random curved strokes (V-tool, gouge and flat in turn) into the top face of body's base.
+// Some may be too tight for their tool, which Body::add rejects.
+std::vector<Edit> random_strokes(const Body &body, int count, std::uint32_t seed);
 
 Image blend_gallery(const GalleryOptions &o);
 Image material_gallery(const GalleryOptions &o);

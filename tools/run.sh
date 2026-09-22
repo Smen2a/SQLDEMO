@@ -7,7 +7,8 @@
 #
 # SCENE is a res:// path, e.g. res://tests/shader_smoke.tscn. Anything after `--` reaches
 # the scene (see game/tests/harness.gd), e.g. -- --screenshot=out/frame.png
-# Set GODOT to a Godot 4.7 binary if it is not on PATH as `godot`.
+# Set GODOT to a Godot 4.7 binary if it is not on PATH as `godot`, and RESOLUTION (WxH,
+# default 1280x720) to change the rendered window size.
 set -euo pipefail
 
 GODOT="${GODOT:-$(command -v godot || true)}"
@@ -31,16 +32,24 @@ if [[ "${1:-}" == "--" ]]; then
 fi
 
 # Scripts, uids and resources are only registered once the project has been imported.
-if [[ ! -d "$PROJECT/.godot" ]]; then
-	"$GODOT" --headless --audio-driver Dummy --path "$PROJECT" --import >/dev/null 2>&1
+# Godot 4.7.2's headless --import crashes while shutting down whenever a godot-cpp v10
+# extension is loaded (godot-cpp's own test extension reproduces it); the import itself has
+# completed by then, so check its output rather than its exit status.
+if [[ ! -f "$PROJECT/.godot/uid_cache.bin" ]]; then
+	( "$GODOT" --headless --audio-driver Dummy --path "$PROJECT" --import || true ) >/dev/null 2>&1
+	if [[ ! -f "$PROJECT/.godot/uid_cache.bin" ]]; then
+		echo "Project import failed (no .godot/uid_cache.bin)" >&2
+		exit 1
+	fi
 fi
 
 if [[ "$RENDER" == 1 ]]; then
 	# --headless swaps in a dummy renderer that never produces a frame, so rendering needs
-	# a (virtual) display instead.
+	# a (virtual) display instead. Without a GPU only the Compatibility renderer (OpenGL,
+	# here Mesa's llvmpipe) is available; the project's own default is Forward+.
 	LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1920x1080x24" \
-		"$GODOT" --path "$PROJECT" --audio-driver Dummy --rendering-driver opengl3 \
-		--resolution 1280x720 "$SCENE" -- "$@"
+		"$GODOT" --path "$PROJECT" --audio-driver Dummy --rendering-method gl_compatibility --rendering-driver opengl3 \
+		--resolution "${RESOLUTION:-1280x720}" "$SCENE" -- "$@"
 else
 	"$GODOT" --headless --audio-driver Dummy --path "$PROJECT" "$SCENE" -- "$@"
 fi
