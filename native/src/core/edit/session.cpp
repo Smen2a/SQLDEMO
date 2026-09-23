@@ -25,18 +25,32 @@ bool grows_past_root(const Body &body, const Octree &octree, std::size_t index) 
 
 } // namespace
 
-void EditSession::reset(const Body &body, const AdfParams &params) {
+void EditSession::reset(const Body &body, const AdfParams &params, bool with_adf) {
 	const auto start = std::chrono::steady_clock::now();
 	body_ = body;
+	with_adf_ = with_adf;
+	params_ = params;
 	octree_.build(body_);
 	last_.octree_ms = ms_since(start);
 	const auto adf_start = std::chrono::steady_clock::now();
-	adf_.build(body_, octree_, params);
+	adf_ = Adf();
+	if (with_adf_) {
+		adf_.build(body_, octree_, params);
+	}
 	last_.adf_ms = ms_since(adf_start);
 	last_.rebuilt_bricks = adf_.stats().rebuilt_bricks;
 	steps_.clear();
 	redo_.clear();
 	stroke_ = 0;
+}
+
+void EditSession::set_adf(bool with_adf) {
+	if (with_adf && !with_adf_) {
+		adf_.build(body_, octree_, params_);
+	} else if (!with_adf) {
+		adf_ = Adf();
+	}
+	with_adf_ = with_adf;
 }
 
 bool EditSession::set_stroke(const std::vector<Edit> &edits) {
@@ -138,7 +152,9 @@ void EditSession::apply(std::size_t keep, const std::vector<Edit> &add) {
 	const auto adf_start = std::chrono::steady_clock::now();
 	Aabb region = removed;
 	region.include(added);
-	adf_.update(body_, octree_, Adf::Change{region, std::uint32_t(keep), removed});
+	if (with_adf_) {
+		adf_.update(body_, octree_, Adf::Change{region, std::uint32_t(keep), removed});
+	}
 	last_.adf_ms = ms_since(adf_start);
 	last_.rebuilt_bricks = adf_.stats().rebuilt_bricks;
 }

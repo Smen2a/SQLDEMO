@@ -22,8 +22,12 @@ public:
 		std::size_t rebuilt_bricks = 0;
 	};
 
-	// Starts over from `body` (full builds).
-	void reset(const Body &body, const AdfParams &params = {});
+	// Starts over from `body` (full builds). Without an ADF (bodies drawn from their exact
+	// tapes, like tools) only the octree is kept.
+	void reset(const Body &body, const AdfParams &params = {}, bool with_adf = true);
+	bool has_adf() const { return with_adf_; }
+	// Builds the ADF for the current body, or drops it, keeping the edit history.
+	void set_adf(bool with_adf);
 	// Replaces the stroke in progress with `edits`. Returns false and changes nothing if
 	// the body would reject any of them (Body::accepts).
 	bool set_stroke(const std::vector<Edit> &edits);
@@ -53,6 +57,8 @@ private:
 	std::vector<std::size_t> steps_;      // edits per committed step, oldest first
 	std::vector<std::vector<Edit>> redo_; // undone steps, most recent last
 	std::size_t stroke_ = 0;              // edits in the stroke in progress (the last ones)
+	bool with_adf_ = true;
+	AdfParams params_;
 	Timing last_;
 };
 
