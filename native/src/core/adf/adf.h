@@ -91,7 +91,8 @@ public:
 	void build(const Body &body, const Octree &octree, const AdfParams &params = {});
 	// Re-samples every cell overlapping `region`, keeping the rest (bricks included). Call it
 	// after the octree has taken the new edits, with the region where the field changed:
-	// see dirty_region().
+	// see dirty_region(). When edits were only appended, cells in the region that pruning
+	// shows no new edit reaches are kept too. (Undo: pass the removed edits' region.)
 	void update(const Body &body, const Octree &octree, const Aabb &region);
 	// Where edit `index` can have changed the octree's sampled field.
 	static Aabb dirty_region(const Body &body, const Octree &octree, std::size_t index);
@@ -172,6 +173,7 @@ private:
 	std::vector<std::uint32_t> dirty_bricks_, dirty_materials_;
 	std::vector<GridCell> grid_;
 	std::size_t live_bricks_ = 0, live_materials_ = 0, rebuilt_ = 0;
+	std::size_t edits_ = 0; // the body's edit count when last built or updated
 	double seconds_ = 0;
 };
 

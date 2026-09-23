@@ -32,12 +32,15 @@ int index(int x, int y, int z) {
 	return x + kN * (y + kN * z);
 }
 
-// The previous tree, when updating: cells outside `region` are copied from it.
+// The previous tree, when updating: cells outside `region` are copied from it, and so are
+// cells inside it that no new edit reaches, when the change only appended edits.
 struct Old {
 	const std::vector<Adf::Node> *nodes = nullptr;
 	const std::vector<Adf::ExactCell> *exact = nullptr;
 	const std::vector<std::uint32_t> *tape = nullptr;
 	Aabb region;
+	bool appended = false;       // edits were only added since the old tree was built
+	std::uint32_t first_new = 0; // index of the first of them
 };
 
 // Node of `nodes` covering exactly the cube (lo, size), or -1.
@@ -130,6 +133,14 @@ struct Refiner {
 		// Only the edits that can shape this cube: a few, even where the octree cell's tape is
 		// long, and none at all where the cube is provably empty or solid.
 		const Octree::Leaf cell = octree.prune_within(body, parent, lo, size);
+		if (old_node >= 0 && old.appended &&
+				std::none_of(cell.tape.begin(), cell.tape.end(),
+						[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_new; })) {
+			// Pruning dropped every new edit here: each provably changes nothing in this cube
+			// (a long stroke's bounding box holds far more cells than its groove reaches).
+			copy(local, old_node, node);
+			return;
+		}
 		if (old_node >= 0 && (*old.nodes)[std::size_t(old_node)].child >= 0) {
 			// Split before: stay split (at worst finer than now needed) and redo only the
 			// children the change reaches.
@@ -175,12 +186,16 @@ struct Refiner {
 		}
 
 		// Voxels within a voxel of the surface decide what is drawn: check the trilinear
-		// reconstruction against the exact field at their centres.
+		// reconstruction against the exact field at their centres. A cell that may become
+		// exact checks all of them, as its worst difference is its error band; others stop
+		// at the first failure.
 		const bool can_split = voxel * 0.5f >= params.min_voxel;
+		const bool may_be_exact = (size <= params.exact_cell || !can_split) && int(cell.tape.size()) <= params.exact_tape_limit;
+		const float stop = may_be_exact ? std::numeric_limits<float>::max() : params.tolerance;
 		float worst = 0.0f;
-		for (int z = 0; z < kCells && worst <= params.tolerance; ++z) {
-			for (int y = 0; y < kCells && worst <= params.tolerance; ++y) {
-				for (int x = 0; x < kCells && worst <= params.tolerance; ++x) {
+		for (int z = 0; z < kCells && worst <= stop; ++z) {
+			for (int y = 0; y < kCells && worst <= stop; ++y) {
+				for (int x = 0; x < kCells && worst <= stop; ++x) {
 					float lo_v = std::numeric_limits<float>::max(), hi_v = -lo_v, sum = 0.0f, near = lo_v;
 					for (int c = 0; c < 8; ++c) {
 						const float cv = v[index(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))];
@@ -197,8 +212,7 @@ struct Refiner {
 				}
 			}
 		}
-		const bool exact = worst > params.tolerance && (size <= params.exact_cell || !can_split) &&
-				int(cell.tape.size()) <= params.exact_tape_limit;
+		const bool exact = worst > params.tolerance && may_be_exact;
 		if (worst > params.tolerance && can_split && !exact) {
 			const int first = local.add_children(node, lo, size);
 			for (int c = 0; c < 8; ++c) {
@@ -232,32 +246,12 @@ struct Refiner {
 		n.value = std::max(lip, 1e-3f);
 		if (exact) {
 			// The tape decides hits, normals and materials here; the brick only speeds rays up,
-			// to within its error band (see ExactCell::error), measured where rays stop: at the
-			// voxels near the surface (all of them now, not just until the tolerance failed).
+			// to within its error band (see ExactCell::error): the worst difference measured
+			// above, where rays stop, near the surface. Hardware filtering weights carry 8
+			// fractional bits: up to L * voxel / 256 more.
 			n.material = Adf::kExactBase + int(local.exact.size());
 			n.value = std::max(n.value, cell.lipschitz);
-			float measured = 0.0f;
-			for (int z = 0; z < kCells; ++z) {
-				for (int y = 0; y < kCells; ++y) {
-					for (int x = 0; x < kCells; ++x) {
-						float lo_v = std::numeric_limits<float>::max(), hi_v = -lo_v, sum = 0.0f, near = lo_v;
-						for (int c = 0; c < 8; ++c) {
-							const float cv = v[index(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))];
-							lo_v = std::min(lo_v, cv);
-							hi_v = std::max(hi_v, cv);
-							near = std::min(near, std::fabs(cv));
-							sum += cv;
-						}
-						if (!(lo_v < 0.0f && hi_v >= 0.0f) && near > voxel * n.value) {
-							continue;
-						}
-						const float exact_value = at(cell, lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel).d;
-						measured = std::max(measured, std::fabs(sum * 0.125f - exact_value));
-					}
-				}
-			}
-			// Hardware filtering weights carry 8 fractional bits: up to L * voxel / 256 more.
-			const float error = std::min(2.0f * measured + n.value * voxel / 128.0f + 1e-4f, n.value * voxel * kSqrt3);
+			const float error = std::min(2.0f * worst + n.value * voxel / 128.0f + 1e-4f, n.value * voxel * kSqrt3);
 			local.exact.push_back({std::uint32_t(local.tape.size()), std::uint32_t(cell.tape.size()), cell.base, error});
 			local.tape.insert(local.tape.end(), cell.tape.begin(), cell.tape.end());
 			return;
@@ -338,7 +332,9 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Aabb &region, bo
 	nodes_.reserve(old_nodes.size() + 64);
 	exact_cells_.clear();
 	exact_tape_.clear();
-	const Old old{&old_nodes, &old_exact, &old_tape, region};
+	const bool appended = reuse && body.edits().size() >= edits_;
+	const Old old{&old_nodes, &old_exact, &old_tape, region, appended, std::uint32_t(appended ? edits_ : 0)};
+	edits_ = body.edits().size();
 	auto add_exact = [&](const ExactCell &cell, const std::uint32_t *entries) {
 		exact_cells_.push_back({std::uint32_t(exact_tape_.size()), cell.count, cell.base, cell.error});
 		exact_tape_.insert(exact_tape_.end(), entries, entries + cell.count);

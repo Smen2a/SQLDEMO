@@ -132,18 +132,23 @@ voxel instead, when it is made:
   calls it, so it is called from three places only.
 - Bricks live in a `Texture2DArray` and are read with hardware filtering. An edit
   re-samples the cells it reaches, reuses the rest (slots and all) and uploads only the
-  layers that changed.
+  layers that changed. "Reaches" is decided by pruning, not by the edit's bounding box: a
+  long curved stroke's box holds several times more cells than its groove touches.
 - The exact field stays the truth: bricks are a display cache, like a baked mesh.
   `live_source = EXACT` raymarches the tapes alone, for comparison.
 
-`sdf_bench adf` (4 cores):
+`sdf_bench adf` (4 shared cores; per stroke before the pruning test in parentheses, same
+machine):
 
 | Body | Edits | Build | Memory | Exact cells | Per stroke |
 | --- | --- | --- | --- | --- | --- |
-| carved panel | 52 | 0.45 s | 16.5 MB | 4,904 | 33 ms |
-| fluted ball | 6 | 0.08 s | 5.5 MB | 0 | 6 ms |
-| random session | 227 | 2.2 s | 29 MB | 14,892 | 84 ms |
-| random session | 1,495 | 13.5 s | 51 MB | 25,260 | 446 ms |
+| carved panel | 52 | 0.63 s | 16.5 MB | 4,904 | 28 ms (44) |
+| fluted ball | 6 | 0.11 s | 5.5 MB | 0 | 6 ms (7) |
+| random session | 227 | 3.0 s | 29 MB | 14,892 | 51 ms (108) |
+| random session | 1,495 | 18 s | 51 MB | 25,260 | 182 ms (586) |
+
+Nearly all of that is evaluating primitives at brick samples (callgrind: 80%), a quarter
+of it in the Bézier strokes' cubic solve.
 
 The shader is bound by texture fetches, as Claybook's SDF tracer was. `sdf_bench count`
 replays it on the CPU for the benchmark's views and counts texel fetches per pixel:
@@ -204,7 +209,8 @@ The measured times track the fetch count (close-up ≈ 1.6× the panel's, 2000 s
 
 What changed:
 - Live bodies no longer cast shadows by raymarching unless `live_shadows` is on; the
-  baked mesh (E4) will cast them.
+  baked mesh (E4) will cast them. When they do, the caster marches bricks only: a shadow
+  map cannot resolve an exact cell's error band.
 - They draw in one pass (`sdf_live_single.gdshader`: the transparent pipeline, which skips
   the depth prepass but still writes depth). This also fixed speckle on Forward+: after its
   prepass, Forward+ redraws opaque materials with an exact-equality depth test, and a
@@ -212,6 +218,8 @@ What changed:
   pixels. With `live_shadows` on, an internal shadows-only child runs the opaque variant
   in shadow passes, where no such test applies.
 - The ray and the post-hit taps stay in their octree cell.
+- Rays end at the opaque scene's depth (read in the single pass), so the parts of a body
+  hidden behind meshes cost nothing.
 - Edit, node and tape records are packed tighter.
 
 Parity is unchanged. On Mesa that is 5.5× faster, and rendering 3D at half resolution

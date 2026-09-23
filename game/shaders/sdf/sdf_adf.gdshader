@@ -7,4 +7,5 @@ render_mode shadows_disabled;
 #endif
 
 #define SDF_ADF
+#define SDF_SHADOW_CASTER
 #include "res://shaders/sdf/sdf_live.gdshaderinc"

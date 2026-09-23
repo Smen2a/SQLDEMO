@@ -4,7 +4,7 @@
 //   sdf_adf.gdshader          its shadow caster
 //   sdf_live_single.gdshader  the visible surface, from the octree tapes alone (exact)
 //   sdf_live.gdshader         its shadow caster
-// The ADF wrappers define SDF_ADF.
+// The ADF wrappers define SDF_ADF; the shadow casters define SDF_SHADOW_CASTER.
 //
 // Two field backends, one march:
 // - Tapes (native/src/core/compile/octree.h): each octree leaf carries a pruned tape of
@@ -76,6 +76,11 @@ uniform sampler2D sdf_adf_grid : filter_nearest, repeat_disable;
 uniform float sdf_grid_scale = 1.0; // grid blocks per millimetre (Adf::grid_scale)
 uniform sampler2DArray sdf_bricks : filter_linear, repeat_disable;
 uniform sampler2DArray sdf_brick_materials : filter_nearest, repeat_disable;
+#endif
+
+#ifdef SDF_SINGLE_PASS
+// The opaque scene, drawn before this (transparent) pass: rays end at it.
+uniform sampler2D sdf_scene_depth : hint_depth_texture, filter_nearest, repeat_disable;
 #endif
 
 uniform vec3 sdf_root_lo;
@@ -265,7 +270,12 @@ float sdf_brick_value(int slot, vec3 u) {
 }
 
 bool sdf_adf_exact(vec4 a) {
+#ifdef SDF_SHADOW_CASTER
+	// A shadow map cannot resolve an exact cell's error band (microns): its brick will do.
+	return false;
+#else
 	return sdf_exact_cells && int(a.y) >= 0 && int(a.z) >= SDF_ADF_EXACT_BASE;
+#endif
 }
 
 // The trilinear brick value in a brick leaf (exact or not), the centre value elsewhere.
@@ -483,6 +493,21 @@ void fragment() {
 	vec3 ro = ortho ? v_local - rd * dot(v_local - v_eye, rd) : v_eye;
 
 	vec2 span = sdf_clip_box(ro, rd);
+#ifdef SDF_SINGLE_PASS
+	// End the ray at the opaque scene in front of it, so hidden parts of the body cost
+	// nothing: t there is the view distance to the scene (along the view axis for
+	// orthographic cameras), in body units, a little long for depth precision.
+	float scene_depth = textureLod(sdf_scene_depth, SCREEN_UV, 0.0).r;
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+	vec3 scene_ndc = vec3(SCREEN_UV, scene_depth) * 2.0 - 1.0;
+#else
+	vec3 scene_ndc = vec3(SCREEN_UV * 2.0 - 1.0, scene_depth);
+#endif
+	vec4 scene_view = INV_PROJECTION_MATRIX * vec4(scene_ndc, 1.0);
+	scene_view.xyz /= scene_view.w;
+	float scene_t = (ortho ? -scene_view.z : length(scene_view.xyz)) * v_scale;
+	span.y = min(span.y, scene_t * 1.001 + 1.0e-3);
+#endif
 	float t = span.x;
 	vec4 s = vec4(SDF_BIG, 0.0, 0.0, 0.0);
 	float eps = 1.0e-4;
