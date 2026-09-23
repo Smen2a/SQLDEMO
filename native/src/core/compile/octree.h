@@ -69,6 +69,14 @@ public:
 	// Empty cells report +inf unless want_distance asks for their (still valid) value.
 	Step step(const Body &body, vec3 p, vec3 dir, bool want_distance = false) const;
 
+	// A tape pruned further to the cube (lo, size) inside the cell it came from (a leaf's,
+	// or one already pruned from it): exact there, as leaf tapes are in their cells.
+	Leaf prune_within(const Body &body, const Leaf &from, vec3 lo, float size) const {
+		return prune(body, from, lo, size);
+	}
+	// A tape (entries as in Leaf::tape) evaluated at p.
+	static Sample eval_tape(const Body &body, bool base, const std::uint32_t *tape, std::size_t count, vec3 p);
+
 	const std::vector<Node> &nodes() const { return nodes_; }
 	const std::vector<Leaf> &leaves() const { return leaves_; }
 	float value_margin() const { return params_.value_margin; }

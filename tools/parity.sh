@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # GPU/CPU parity: renders demo bodies through the Live raymarch (Godot, Compatibility
-# renderer, software OpenGL) and through the CPU reference renderer (the formula field,
-# every edit in order), then compares them pixel by pixel. Normals check geometry, albedo
-# checks the material functions and mixing. Needs the native build (SDF_BUILD, default
-# native/build) and what tools/run.sh --render needs.
+# renderer, software OpenGL) and compares them pixel by pixel with the CPU reference
+# renderer twice: against the formula field (every edit, in order: the ground truth) and
+# against the CPU tracing the same source (ADF by default: the same algorithm, so a
+# mismatch there is a shader bug). Normals check geometry, albedo the material functions
+# and mixing. Needs the native build (SDF_BUILD, default native/build) and what
+# tools/run.sh --render needs.
 #
 #   tools/parity.sh [case ...]     case = <demo>:<normals|albedo>; default: the full set
 #
-# PARITY_ARGS passes extra arguments to the Godot scene.
+# PARITY_ARGS passes extra arguments to the Godot scene; --live-source=exact checks the
+# exact Live path instead (then the second comparison traces the octree tapes).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,6 +33,11 @@ if grep -E -q "SHADER ERROR|SCRIPT ERROR|Parse Error|^ERROR:" "$log"; then
 	exit 1
 fi
 
+source_flag=--adf
+if [[ "${PARITY_ARGS:-}" == *"--live-source=exact"* ]]; then
+	source_flag=--octree
+fi
+
 status=0
 for c in "${CASES[@]}"; do
 	demo="${c%%:*}" view="${c#*:}"
@@ -39,12 +47,18 @@ for c in "${CASES[@]}"; do
 		status=1
 		continue
 	fi
-	if result=$("$BUILD/sdf_render" "$demo" "$OUT/${demo}_${view}_cpu.png" --view "$view" --compare "$gpu" \
-			--diff "$OUT/${demo}_${view}_diff.png" --max-mean 0.5 --max-over 0.002 | tail -1); then
-		echo "ok    $c  ${result#*: }"
-	else
-		echo "FAIL  $c  ${result#*: }"
-		status=1
-	fi
+	for ref in truth same; do
+		flags=()
+		if [[ "$ref" == same ]]; then
+			flags=("$source_flag")
+		fi
+		if result=$("$BUILD/sdf_render" "$demo" "$OUT/${demo}_${view}_${ref}.png" --view "$view" "${flags[@]}" \
+				--compare "$gpu" --diff "$OUT/${demo}_${view}_${ref}_diff.png" --max-mean 0.5 --max-over 0.002 | tail -1); then
+			printf "ok    %-22s vs %-5s %s\n" "$c" "$ref" "${result#*: }"
+		else
+			printf "FAIL  %-22s vs %-5s %s\n" "$c" "$ref" "${result#*: }"
+			status=1
+		fi
+	done
 done
 exit $status

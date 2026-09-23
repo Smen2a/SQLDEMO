@@ -41,8 +41,9 @@ bool clip_to_box(const Ray &ray, const Aabb &box, float &t0, float &t1) {
 
 class Tracer {
 public:
-	Tracer(const Body &body, const MaterialTable &materials, const RenderSettings &s, const Octree *octree)
-		: body_(body), materials_(materials), s_(s), octree_(octree), lipschitz_(body.lipschitz()),
+	Tracer(const Body &body, const MaterialTable &materials, const RenderSettings &s, const Octree *octree,
+			const Adf *adf)
+		: body_(body), materials_(materials), s_(s), octree_(octree), adf_(adf), lipschitz_(body.lipschitz()),
 		  bounds_(body.bounds().expanded(1.0f)) {}
 
 	// Linear RGB for one ray. pixel_angle is the angular size of a pixel, for the
@@ -51,10 +52,31 @@ public:
 		float t0, t1;
 		if (clip_to_box(ray, bounds_, t0, t1)) {
 			float t = t0;
-			const int max_steps = octree_ ? s_.max_steps * 2 : s_.max_steps;
+			const int max_steps = octree_ || adf_ ? s_.max_steps * 2 : s_.max_steps;
 			for (int i = 0; i < max_steps && t <= t1; ++i) {
 				const vec3 p = ray.o + ray.d * t;
 				const float eps = std::max(t * pixel_angle * 0.5f, 1e-4f);
+				if (adf_) {
+					const Adf::Step st = adf_->step(p, ray.d);
+					if (st.brick == Adf::kEmpty) {
+						t += st.exit + 1e-4f;
+						continue;
+					}
+					float d = st.d;
+					if (st.exact) {
+						// March on the brick while it guarantees clearance; the tape decides hits.
+						if (d - st.error > eps) {
+							t += std::min(std::max((d - st.error) / st.lipschitz, eps * 0.5f), st.exit + 1e-4f);
+							continue;
+						}
+						d = octree_->distance(body_, p);
+					}
+					if (d < eps) {
+						return surface(refine(ray, t, d), ray.d, eps);
+					}
+					t += std::min(std::max(d / st.lipschitz, eps * 0.5f), st.exit + 1e-4f);
+					continue;
+				}
 				if (octree_) {
 					const Octree::Step st = octree_->step(body_, p, ray.d);
 					if (st.state == Octree::State::Empty) {
@@ -101,7 +123,23 @@ private:
 	// truth. Body::sample's per-point culling is sign-exact but only a bound in value near
 	// bound-type primitives, which shading effects that read values (AO) would pick up.
 	float distance(vec3 p) const {
+		if (adf_) {
+			return adf_->distance(body_, *octree_, p);
+		}
 		return octree_ ? octree_->distance(body_, p) : body_.sample_exhaustive(p).d;
+	}
+
+	// Tetrahedral normal step. Inside an ADF brick it spans half a voxel, which smooths the
+	// trilinear field's gradient across voxel faces; elsewhere it is as fine as precision
+	// allows.
+	float normal_step(vec3 p, float eps) const {
+		if (adf_) {
+			const int node = adf_->leaf(p);
+			if (node >= 0 && adf_->nodes()[std::size_t(node)].brick >= 0 && !adf_->nodes()[std::size_t(node)].exact()) {
+				return std::max(eps, 0.5f * adf_->nodes()[std::size_t(node)].size / float(Adf::kSide - 1));
+			}
+		}
+		return std::max(eps, 2e-3f);
 	}
 
 	vec3 normal(vec3 p, float h) const {
@@ -111,11 +149,12 @@ private:
 	}
 
 	vec3 surface(vec3 p, vec3 view, float eps) const {
-		const vec3 n = normal(p, std::max(eps, 2e-3f));
+		const vec3 n = normal(p, normal_step(p, eps));
 		if (s_.output == RenderSettings::Output::Normals) {
 			return n * 0.5f + vec3(0.5f);
 		}
-		const Sample s = octree_ ? octree_->sample(body_, p) : body_.sample_exhaustive(p);
+		const Sample s = adf_ ? adf_->sample(body_, *octree_, p)
+							  : octree_ ? octree_->sample(body_, p) : body_.sample_exhaustive(p);
 		vec3 albedo = materials_.albedo(s.m0, p, body_.grain_origin, body_.grain_axis);
 		const Material &m0 = materials_[std::uint16_t(s.m0)];
 		float specular = m0.specular, shininess = m0.shininess;
@@ -155,7 +194,12 @@ private:
 				break;
 			}
 			float h, lip = lipschitz_, limit = 4.0f;
-			if (octree_) {
+			if (adf_) {
+				const Adf::Step st = adf_->step(p, rd);
+				h = st.brick == Adf::kEmpty ? adf_->approx_distance(p) : st.d - st.error;
+				lip = st.lipschitz;
+				limit = std::max(st.exit + 1e-3f, 0.02f);
+			} else if (octree_) {
 				const Octree::Step st = octree_->step(body_, p, rd, true);
 				h = st.d;
 				lip = st.lipschitz;
@@ -176,7 +220,7 @@ private:
 		float occ = 0.0f, weight = 1.0f;
 		const float dist[5] = {0.3f, 0.9f, 1.8f, 3.0f, 4.5f};
 		for (float h : dist) {
-			occ += (h - distance(p + n * h)) * weight;
+			occ += (h - (adf_ ? adf_->approx_distance(p + n * h) : distance(p + n * h))) * weight;
 			weight *= 0.8f;
 		}
 		return gl::clamp(1.0f - 0.25f * occ, 0.0f, 1.0f);
@@ -186,6 +230,7 @@ private:
 	const MaterialTable &materials_;
 	const RenderSettings &s_;
 	const Octree *octree_;
+	const Adf *adf_;
 	float lipschitz_;
 	Aabb bounds_;
 };
@@ -201,9 +246,9 @@ std::uint8_t encode(float value, bool gamma) {
 } // namespace
 
 Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &s,
-		const Octree *octree) {
+		const Octree *octree, const Adf *adf) {
 	Image img(s.width, s.height);
-	const Tracer tracer(body, materials, s, octree);
+	const Tracer tracer(body, materials, s, octree, adf);
 
 	const vec3 forward = gl::normalize(camera.target - camera.eye);
 	const vec3 right = gl::normalize(gl::cross(forward, camera.up));

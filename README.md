@@ -14,6 +14,7 @@ mode. The full design is in the approved plan; this README covers what exists to
 | `native/src/core/glsl_compat.h` | Just enough GLSL (`vec3`, `mix`, `clamp`, …) in C++ to compile the shared files. |
 | `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds; the material table. |
 | `native/src/core/compile/` | The octree: per-cell pruned edit lists ("tapes") that keep per-query cost independent of edit count. |
+| `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer: ground truth for every later GPU path. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live. |
@@ -103,24 +104,62 @@ forging) is what will bound it for very long jobs.
 
 ## In Godot: the Live path
 
-`SdfBody` (a `MeshInstance3D`) compiles its body into the octree and flattens it into four
-float data textures: cells, tapes, edit parameters and materials. A proxy box around the
-body then runs the Live shader (`sdf_live.gdshaderinc`), which sphere-traces each pixel in the body's own
-millimetres, interpreting the tape of whichever cell the ray is in with the same shared
-functions the C++ evaluator uses. It writes the true hit's depth, normal and position
-(`DEPTH`, `NORMAL`, `LIGHT_VERTEX`), so Godot lights and composites it like any mesh. Adding
-a stroke updates the touched cells and re-uploads the textures; nothing is meshed.
+`SdfBody` (a `MeshInstance3D`) compiles its body into the octree and an **adaptive distance
+field** (ADF, below), and flattens both into data textures. A proxy box around the body
+runs the Live shader (`sdf_live.gdshaderinc`), which sphere-traces each pixel in the body's
+own millimetres. It writes the true hit's depth, normal and position (`DEPTH`, `NORMAL`,
+`LIGHT_VERTEX`), so Godot lights and composites it like any mesh. Adding a stroke updates
+the touched cells and bricks and uploads only what changed; nothing is meshed.
+
+**The ADF.** Interpreting edit tapes per pixel costs the tape's length in texel fetches on
+every frame, for edits that never change. So each edit is evaluated once per affected
+voxel instead, when it is made:
+- The octree continues into bricks of 8³ half-float distance samples along the surface.
+- Each cell is refined until trilinear reconstruction is within 5 µm of the exact field
+  near the surface. Planes are exact under trilinear filtering, so flat and gently curved
+  faces get coarse bricks (up to 1 mm between samples).
+- Creases would need ever finer bricks, so a crease cell ≤ 1 mm becomes an *exact* cell. Rays
+  march on its brick while they are further from the surface than the brick's error bound
+  (L · voxel · √3), then evaluate its own tape: the octree tape pruned again to that small
+  cell, which leaves only the 2–3 edits forming the crease. Hits, normals and materials
+  there are exact.
+- Bricks live in a `Texture2DArray` and are read with hardware filtering. An edit
+  re-samples the cells it reaches, reuses the rest (slots and all) and uploads only the
+  layers that changed.
+- The exact field stays the truth: bricks are a display cache, like a baked mesh.
+  `live_source = EXACT` raymarches the tapes alone, for comparison.
+
+`sdf_bench adf` (4 cores):
+
+| Body | Edits | Build | Memory | Exact cells | Per stroke |
+| --- | --- | --- | --- | --- | --- |
+| carved panel | 52 | 0.45 s | 16.5 MB | 4,904 | 33 ms |
+| fluted ball | 6 | 0.08 s | 5.5 MB | 0 | 6 ms |
+| random session | 227 | 2.2 s | 29 MB | 14,892 | 84 ms |
+| random session | 1,495 | 13.5 s | 51 MB | 25,260 | 446 ms |
+
+Replaying the shader on the CPU for the benchmark's views: texel fetches per pixel fall
+from ~1070 to ~113 on the screen-filling panel, and from ~1670 to ~241 on the close-up.
 
 ![A fluted walnut ball, raymarched live in Godot: it casts its shadow on the floor, and a mesh bar pushed into it is cut exactly where it enters the surface](docs/images/live_sphere.png)
 
-**Parity.** `tools/parity.sh` renders every demo through Godot and through the CPU reference
-renderer's formula field (every edit, in order, no octree), from the same camera, and diffs
-them pixel by pixel: normals for geometry, unlit albedo for materials. Over all 25 cases
-(the 8 blend modes, 6 material scenes, the carved panel, the fluted ball and a 300-stroke
-session) at 1280x720, the mean channel difference is at most 0.23 / 255, and at most 0.05%
-of pixels differ by more than 24 / 255. Those are single pixels on silhouettes and creases,
-where a pixel centre falls on one side of the edge or the other. The results are identical
-with the node scaled to a metre world (scale 0.001).
+**Parity.** `tools/parity.sh` renders every demo through Godot and diffs it pixel by pixel,
+from the same camera, against two CPU renders:
+- the formula field (every edit, in order, no octree): the ground truth;
+- the CPU tracing the same source (the ADF), the same algorithm, so any mismatch is a
+  shader bug.
+
+Normals check geometry and unlit albedo checks materials. The 25 cases are the 8 blend
+modes, 6 material scenes, the carved panel, the fluted ball and a 300-stroke session, at
+1280x720.
+- **Against the ground truth:** the mean channel difference is at most 0.34 / 255, and at
+  most 0.16% of pixels differ by more than 24 / 255. Those are single pixels on silhouettes
+  and creases, where a pixel centre falls on one side of the edge or the other.
+- **Against the CPU ADF:** at most 0.007% of pixels differ.
+
+The exact Live path (`PARITY_ARGS=--live-source=exact`) matched the ground truth within
+0.23 / 255 and 0.05%. Results are identical with the node scaled to a metre world
+(scale 0.001).
 
 What was checked in Godot (Compatibility renderer, the only one without a GPU):
 
@@ -163,8 +202,7 @@ What changed:
 - Edit, node and tape records are packed tighter.
 
 Parity is unchanged. On Mesa that is 5.5× faster, and rendering 3D at half resolution
-another 3.4×. Long carving sessions still scale with tape length; moving old edits into
-sampled bricks is the next lever for them.
+another 3.4×. The ADF (above) then removed the tape-length term from the per-pixel cost.
 
 Run it after building (below):
 
@@ -174,7 +212,7 @@ godot --path game --rendering-method gl_compatibility res://bench/live_bench.tsc
 ```
 
 Use a 1920x1080 window if the screen allows. The switches after `--` show where time goes:
-`--shadows=off`, `--live-shadows=on`, `--ao=off`, and `--scale3d=0.5`
+`--shadows=off`, `--live-shadows=on`, `--live-source=exact`, `--ao=off`, and `--scale3d=0.5`
 for half-resolution 3D. `--view=steps` shows step-count heat maps, and `--shots=<dir>`
 saves each scenario.
 

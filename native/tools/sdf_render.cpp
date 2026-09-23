@@ -2,10 +2,12 @@
 // result with another image (a Godot screenshot, for GPU/CPU parity).
 //
 //   sdf_render DEMO OUT.png [--view shaded|normals|albedo] [--size WxH] [--eye x,y,z]
-//              [--target x,y,z] [--fov deg] [--octree]
+//              [--target x,y,z] [--fov deg] [--octree | --adf]
 //              [--compare IMAGE.png [--threshold N] [--max-mean M] [--max-over F] [--diff DIFF.png]]
 //
-// DEMO is a name from sdf::demo::named_demo; the camera defaults to the demo's. With
+// DEMO is a name from sdf::demo::named_demo; the camera defaults to the demo's. By
+// default it traces the formula field (every edit, in order); --octree traces the pruned
+// tapes and --adf the Live display cache, as the Godot shaders do. With
 // --compare, prints the difference and exits 1 when the mean channel difference exceeds
 // M (0..255) or more than a fraction F of pixels differ by more than N in some channel.
 
@@ -29,7 +31,7 @@ bool parse_vec3(const char *s, sdf::vec3 &out) {
 int usage(const char *argv0) {
 	std::fprintf(stderr,
 			"usage: %s DEMO OUT.png [--view shaded|normals|albedo] [--size WxH] [--eye x,y,z] [--target x,y,z]\n"
-			"       [--fov deg] [--octree] [--compare IMAGE.png [--threshold N] [--max-mean M] [--max-over F]\n"
+			"       [--fov deg] [--octree | --adf] [--compare IMAGE.png [--threshold N] [--max-mean M] [--max-over F]\n"
 			"       [--diff DIFF.png]]\n",
 			argv0);
 	return 2;
@@ -60,7 +62,7 @@ int main(int argc, char **argv) {
 	sdf::RenderSettings rs;
 	rs.width = 1280;
 	rs.height = 720;
-	bool use_octree = false;
+	bool use_octree = false, use_adf = false;
 	std::string compare_path, diff_path;
 	int threshold = 24;
 	double max_mean = 1.0, max_over = 0.005;
@@ -70,6 +72,8 @@ int main(int argc, char **argv) {
 		const bool has_value = next != nullptr;
 		if (arg == "--octree") {
 			use_octree = true;
+		} else if (arg == "--adf") {
+			use_octree = use_adf = true;
 		} else if (!has_value) {
 			return usage(argv[0]);
 		} else if (arg == "--view") {
@@ -110,11 +114,16 @@ int main(int argc, char **argv) {
 	}
 
 	sdf::Octree octree;
+	sdf::Adf adf;
 	if (use_octree) {
 		octree.build(body);
 	}
+	if (use_adf) {
+		adf.build(body, octree);
+	}
 	const auto start = std::chrono::steady_clock::now();
-	const sdf::Image img = sdf::render(body, sdf::MaterialTable::standard(), camera, rs, use_octree ? &octree : nullptr);
+	const sdf::Image img = sdf::render(body, sdf::MaterialTable::standard(), camera, rs, use_octree ? &octree : nullptr,
+			use_adf ? &adf : nullptr);
 	const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	if (!sdf::write_png(out_path, img)) {
 		std::fprintf(stderr, "could not write %s\n", out_path.c_str());

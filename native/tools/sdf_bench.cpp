@@ -1,13 +1,18 @@
 // Octree scaling benchmark: builds, incrementally updates and queries bodies with growing
 // edit counts, and reports tape statistics and memory.
 //   sdf_bench [max_edits]
+// Adaptive distance field (Live display cache): build cost, size and per-stroke updates.
+//   sdf_bench adf
 
+#include "adf/adf.h"
 #include "compile/octree.h"
+#include "demo/gallery.h"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <string>
 
 using namespace sdf;
 
@@ -51,7 +56,56 @@ void report(const char *what, int edits, const Body &body, const Octree &oct, do
 
 } // namespace
 
+int adf_bench() {
+	struct Case {
+		const char *demo;
+		int extra_strokes;
+	};
+	for (const Case c : {Case{"carved_panel", 0}, Case{"sphere", 0}, Case{"session", 0}, Case{"session", 1700}}) {
+		Body body;
+		Camera camera;
+		demo::named_demo(c.demo, body, camera);
+		for (const Edit &e : demo::random_strokes(body, c.extra_strokes, 7)) {
+			body.add(e);
+		}
+		Octree oct;
+		oct.build(body);
+		Adf adf;
+		adf.build(body, oct);
+		const Adf::Stats s = adf.stats();
+		std::printf("%-13s %5zu edits  build %6.2fs  %6zu bricks %6.1f MB  %6zu exact cells  %7zu nodes  finest %.3f mm\n",
+				c.demo, body.edits().size(), s.seconds, s.bricks, double(s.bytes) / 1048576.0, s.exact_leaves, s.nodes,
+				double(s.finest_voxel));
+		// One stroke at a time, as a carver works: octree update, then the ADF around it.
+		double worst = 0, total = 0, oct_total = 0;
+		std::size_t rebuilt = 0;
+		int strokes = 0;
+		for (const Edit &e : demo::random_strokes(body, 40, 11)) {
+			if (!body.add(e)) {
+				continue;
+			}
+			const std::size_t index = body.edits().size() - 1;
+			const double t0 = now();
+			oct.add_edit(body, std::uint32_t(index));
+			const double t1 = now();
+			adf.update(body, oct, Adf::dirty_region(body, oct, index));
+			const double t2 = now();
+			oct_total += t1 - t0;
+			total += t2 - t1;
+			worst = std::max(worst, t2 - t1);
+			rebuilt += adf.stats().rebuilt_bricks;
+			++strokes;
+		}
+		std::printf("              per stroke: octree %.1f ms, ADF %.1f ms (worst %.1f), %.0f bricks re-sampled\n",
+				1e3 * oct_total / strokes, 1e3 * total / strokes, 1e3 * worst, double(rebuilt) / strokes);
+	}
+	return 0;
+}
+
 int main(int argc, char **argv) {
+	if (argc > 1 && std::string(argv[1]) == "adf") {
+		return adf_bench();
+	}
 	const int max_edits = argc > 1 ? std::atoi(argv[1]) : 100000;
 	for (int n = 1000; n <= max_edits; n *= 10) {
 		const Body body = stone_job(n, 7);

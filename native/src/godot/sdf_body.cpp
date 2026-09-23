@@ -10,6 +10,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -90,12 +91,11 @@ Ref<ArrayMesh> proxy_box(const Aabb &b) {
 
 SdfBody::SdfBody() {
 	material_.instantiate();
-	material_->set_shader(ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live_single.gdshader"));
 	set_material_override(material_);
 	set_cast_shadows_setting(SHADOW_CASTING_SETTING_OFF);
 
 	caster_material_.instantiate();
-	caster_material_->set_shader(ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live.gdshader"));
+	update_shaders();
 	shadow_caster_ = memnew(MeshInstance3D);
 	shadow_caster_->set_material_override(caster_material_);
 	shadow_caster_->set_cast_shadows_setting(SHADOW_CASTING_SETTING_SHADOWS_ONLY);
@@ -106,6 +106,22 @@ SdfBody::SdfBody() {
 void SdfBody::set_live_shadows(bool enabled) {
 	live_shadows_ = enabled;
 	shadow_caster_->set_visible(enabled);
+}
+
+void SdfBody::set_live_source(int source) {
+	live_source_ = source;
+	update_shaders();
+	if (!octree_.nodes().empty()) {
+		update_material(); // a new shader starts from default parameters
+	}
+}
+
+void SdfBody::update_shaders() {
+	const bool adf = live_source_ == LIVE_ADF;
+	ResourceLoader *loader = ResourceLoader::get_singleton();
+	const String dir = "res://shaders/sdf/";
+	material_->set_shader(loader->load(dir + String(adf ? "sdf_adf_single.gdshader" : "sdf_live_single.gdshader")));
+	caster_material_->set_shader(loader->load(dir + String(adf ? "sdf_adf.gdshader" : "sdf_live.gdshader")));
 }
 
 bool SdfBody::load_demo(const String &name) {
@@ -131,23 +147,117 @@ Dictionary SdfBody::get_demo_camera() const {
 }
 
 void SdfBody::add_random_strokes(int count, int seed) {
+	const auto start = std::chrono::steady_clock::now();
+	// One ADF update for the whole batch: over the union of the strokes' regions, or from
+	// scratch when the batch is large enough to touch most of the body anyway.
+	Aabb region;
+	int added = 0;
 	for (const Edit &e : demo::random_strokes(body_, count, std::uint32_t(seed))) {
-		if (body_.add(e)) {
-			octree_.add_edit(body_, std::uint32_t(body_.edits().size() - 1));
+		if (!body_.add(e)) {
+			continue;
 		}
+		const std::size_t index = body_.edits().size() - 1;
+		octree_.add_edit(body_, std::uint32_t(index));
+		region.include(Adf::dirty_region(body_, octree_, index));
+		++added;
+	}
+	const bool full = added > 16;
+	if (full) {
+		adf_.build(body_, octree_, adf_.params());
+	} else if (added > 0) {
+		adf_.update(body_, octree_, region);
 	}
 	upload_textures();
+	upload_adf(full, adf_.dirty_bricks(), adf_.dirty_materials());
 	update_material();
+	last_update_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
 void SdfBody::rebuild() {
+	const auto start = std::chrono::steady_clock::now();
 	octree_.build(body_);
+	adf_.build(body_, octree_); // before upload_textures(), which carries its exact tapes
 	// The proxy only needs to cover the body; the octree's root cube is usually larger.
 	const Ref<ArrayMesh> proxy = proxy_box(body_.bounds().expanded(0.5f));
 	set_mesh(proxy);
 	shadow_caster_->set_mesh(proxy);
 	upload_textures();
+	upload_adf(true, {}, {});
 	update_material();
+	last_update_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+namespace {
+
+constexpr int kLayerSize = 1024;
+constexpr int kBricksPerLayer = 2048; // 16 x 128 tiles of 64 x 8 texels
+
+// One 1024^2 layer of brick tiles: each brick's 8 z-slices of 8x8 samples side by side
+// (the layout sdf_live.gdshaderinc reads). `texel_bytes` per sample, copied from `data`.
+Ref<godot::Image> brick_layer(const std::uint8_t *data, std::size_t slots, int layer, int texel_bytes,
+		godot::Image::Format format) {
+	PackedByteArray bytes;
+	bytes.resize(int64_t(kLayerSize) * kLayerSize * texel_bytes);
+	std::memset(bytes.ptrw(), 0, size_t(bytes.size()));
+	std::uint8_t *out = bytes.ptrw();
+	for (int tile = 0; tile < kBricksPerLayer; ++tile) {
+		const std::size_t slot = std::size_t(layer) * kBricksPerLayer + std::size_t(tile);
+		if (slot >= slots) {
+			break;
+		}
+		const int ox = (tile % 16) * 64, oy = (tile / 16) * 8;
+		for (int z = 0; z < 8; ++z) {
+			for (int y = 0; y < 8; ++y) {
+				const std::uint8_t *row = data + (slot * Adf::kBrickSamples + std::size_t(z * 64 + y * 8)) * texel_bytes;
+				std::memcpy(out + (std::size_t(oy + y) * kLayerSize + std::size_t(ox + z * 8)) * texel_bytes, row,
+						std::size_t(8 * texel_bytes));
+			}
+		}
+	}
+	return godot::Image::create_from_data(kLayerSize, kLayerSize, false, format, bytes);
+}
+
+// Brings a layered texture up to date: all layers when its layer count changes (or on
+// request), otherwise only those holding `dirty` slots.
+void upload_layers(Ref<Texture2DArray> &tex, const std::uint8_t *data, std::size_t slots, int texel_bytes,
+		godot::Image::Format format, bool full, const std::vector<std::uint32_t> &dirty) {
+	const int layers = std::max<int>(1, int((slots + kBricksPerLayer - 1) / kBricksPerLayer));
+	if (full || tex.is_null() || tex->get_layers() != layers) {
+		TypedArray<Ref<godot::Image>> images;
+		for (int l = 0; l < layers; ++l) {
+			images.push_back(brick_layer(data, slots, l, texel_bytes, format));
+		}
+		if (tex.is_null()) {
+			tex.instantiate();
+		}
+		tex->create_from_images(images);
+		return;
+	}
+	std::vector<int> touched;
+	for (std::uint32_t slot : dirty) {
+		touched.push_back(int(slot / kBricksPerLayer));
+	}
+	std::sort(touched.begin(), touched.end());
+	touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
+	for (int l : touched) {
+		tex->update_layer(brick_layer(data, slots, l, texel_bytes, format), l);
+	}
+}
+
+} // namespace
+
+void SdfBody::upload_adf(bool full, const std::vector<std::uint32_t> &bricks,
+		const std::vector<std::uint32_t> &materials) {
+	std::vector<float> node_texels;
+	node_texels.reserve(adf_.nodes().size() * 4);
+	for (const Adf::Node &n : adf_.nodes()) {
+		push(node_texels, vec4(float(n.child), float(n.brick), float(n.material), n.value));
+	}
+	upload(adf_nodes_tex_, node_texels);
+	upload_layers(bricks_tex_, reinterpret_cast<const std::uint8_t *>(adf_.brick_values().data()), adf_.brick_slots(),
+			2, godot::Image::FORMAT_RH, full, bricks);
+	upload_layers(brick_materials_tex_, adf_.material_values().data(), adf_.material_slots(), 4,
+			godot::Image::FORMAT_RGBA8, full, materials);
 }
 
 // Indices travel as floats (Godot images have no integer formats), exact below 2^24: fine
@@ -175,6 +285,18 @@ void SdfBody::upload_textures() {
 			tape_values.push_back(entry & Octree::kResetBit ? -code : code);
 		}
 	}
+	// The ADF's exact leaves have their own (shorter) tapes: append them, and describe each
+	// leaf with a texel in the octree nodes' format so the shader evaluates it the same way.
+	const std::size_t adf_tape_base = tape_values.size();
+	for (std::uint32_t entry : adf_.exact_tape()) {
+		const float code = float((entry & ~Octree::kResetBit) + 1);
+		tape_values.push_back(entry & Octree::kResetBit ? -code : code);
+	}
+	std::vector<float> cell_texels;
+	for (const Adf::ExactCell &cell : adf_.exact_cells()) {
+		push(cell_texels, vec4(-1.0f, float(adf_tape_base + cell.offset), float(cell.count), cell.base ? 4.0f : 1.0f));
+	}
+	upload(adf_cells_tex_, cell_texels);
 	while (tape_values.size() % 4) {
 		tape_values.push_back(0.0f);
 	}
@@ -218,6 +340,10 @@ void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	material->set_shader_parameter("sdf_tape", tape_tex_);
 	material->set_shader_parameter("sdf_edits", edits_tex_);
 	material->set_shader_parameter("sdf_materials", materials_tex_);
+	material->set_shader_parameter("sdf_adf_nodes", adf_nodes_tex_);
+	material->set_shader_parameter("sdf_adf_cells", adf_cells_tex_);
+	material->set_shader_parameter("sdf_bricks", bricks_tex_);
+	material->set_shader_parameter("sdf_brick_materials", brick_materials_tex_);
 	material->set_shader_parameter("sdf_root_lo", to_godot(root.lo));
 	material->set_shader_parameter("sdf_root_size", root.size);
 	material->set_shader_parameter("sdf_box_lo", to_godot(box.lo));
@@ -246,6 +372,12 @@ Dictionary SdfBody::get_stats() const {
 	d["surface_leaves"] = int64_t(s.surface_leaves);
 	d["mean_tape"] = s.mean_surface_tape;
 	d["max_tape"] = int64_t(s.max_tape);
+	const Adf::Stats a = adf_.stats();
+	d["adf_bricks"] = int64_t(a.bricks);
+	d["adf_exact_cells"] = int64_t(a.exact_leaves);
+	d["adf_mb"] = double(a.bytes) / 1048576.0;
+	d["adf_finest_voxel"] = a.finest_voxel;
+	d["update_ms"] = last_update_ms_;
 	return d;
 }
 
@@ -260,6 +392,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
 	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
 	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
+	ClassDB::bind_method(D_METHOD("set_live_source", "source"), &SdfBody::set_live_source);
+	ClassDB::bind_method(D_METHOD("get_live_source"), &SdfBody::get_live_source);
 	ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &SdfBody::set_debug_view);
 	ClassDB::bind_method(D_METHOD("get_debug_view"), &SdfBody::get_debug_view);
 	ClassDB::bind_method(D_METHOD("get_stats"), &SdfBody::get_stats);
@@ -267,6 +401,10 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,Steps,Albedo"), "set_debug_view",
 			"get_debug_view");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_shadows"), "set_live_shadows", "get_live_shadows");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "live_source", PROPERTY_HINT_ENUM, "ADF,Exact"), "set_live_source",
+			"get_live_source");
+	BIND_ENUM_CONSTANT(LIVE_ADF);
+	BIND_ENUM_CONSTANT(LIVE_EXACT);
 	BIND_ENUM_CONSTANT(SHADED);
 	BIND_ENUM_CONSTANT(NORMALS);
 	BIND_ENUM_CONSTANT(STEPS);

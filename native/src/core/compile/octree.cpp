@@ -434,9 +434,14 @@ int Octree::leaf_node(vec3 p) const {
 }
 
 Sample Octree::eval_leaf(const Body &body, const Leaf &leaf, vec3 p) const {
-	float d = leaf.base ? body.base.eval(p) : gl::SDF_BIG;
+	return eval_tape(body, leaf.base, leaf.tape.data(), leaf.tape.size(), p);
+}
+
+Sample Octree::eval_tape(const Body &body, bool base, const std::uint32_t *tape, std::size_t count, vec3 p) {
+	float d = base ? body.base.eval(p) : gl::SDF_BIG;
 	vec3 mat(float(body.base_material), float(body.base_material), 0.0f);
-	for (std::uint32_t entry : leaf.tape) {
+	for (std::size_t i = 0; i < count; ++i) {
+		const std::uint32_t entry = tape[i];
 		const Edit &e = body.edits()[entry & ~kResetBit];
 		if (entry & kResetBit) {
 			d = reset_value(e.op);

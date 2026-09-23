@@ -5,6 +5,7 @@ extends "res://tests/harness.gd"
 ##   --cases=<demo>:<view>,...   view is normals or albedo (unlit, so renderer lighting
 ##                               does not enter the comparison)
 ##   --out=<dir>                 writes <dir>/<demo>_<view>.png
+##   --live-source=exact         raymarch the octree tapes instead of the ADF
 
 const VIEWS := {"normals": 1, "albedo": 3}
 
@@ -31,6 +32,7 @@ func _ready() -> void:
 	camera.far = 4000.0
 	add_child(camera)
 	var body = ClassDB.instantiate("SdfBody")
+	body.live_source = 1 if user_arg("--live-source", "adf") == "exact" else 0
 	add_child(body)
 
 	var failed := false

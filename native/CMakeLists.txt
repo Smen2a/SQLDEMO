@@ -24,6 +24,7 @@ endif()
 
 # Engine-agnostic core: no Godot headers anywhere under src/core.
 add_library(sdf_core STATIC
+	src/core/adf/adf.cpp
 	src/core/body/body.cpp
 	src/core/body/materials.cpp
 	src/core/compile/octree.cpp
@@ -42,7 +43,7 @@ set_target_properties(sdf_demo PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(sdf_demo PUBLIC sdf_core)
 
 add_executable(sdf_bench tools/sdf_bench.cpp)
-target_link_libraries(sdf_bench PRIVATE sdf_core)
+target_link_libraries(sdf_bench PRIVATE sdf_core sdf_demo)
 
 # PNG tooling and the tests need zlib; without it only the core and the extension build.
 find_package(ZLIB)
@@ -64,6 +65,7 @@ if(ZLIB_FOUND)
 		tests/test_body.cpp
 		tests/test_golden.cpp
 		tests/test_octree.cpp
+		tests/test_adf.cpp
 	)
 	target_link_libraries(sdf_tests PRIVATE sdf_core sdf_demo sdf_io)
 	target_compile_definitions(sdf_tests PRIVATE SDF_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")

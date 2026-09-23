@@ -2,6 +2,7 @@
 
 #include "body/body.h"
 #include "body/materials.h"
+#include "adf/adf.h"
 #include "compile/octree.h"
 #include "eval/image.h"
 
@@ -41,7 +42,9 @@ struct RenderSettings {
 // skipping empty cells and clamping every step at the cell's exit. Those tapes are exact
 // only within the octree's value_margin of the surface, so ambient occlusion — which
 // samples further out — is approximate on that path (still from valid distance bounds).
+// With an ADF as well (built from that octree), it traces the ADF exactly as the Live
+// shader does: trilinear bricks, tapes in exact cells, normals half a voxel wide in bricks.
 Image render(const Body &body, const MaterialTable &materials, const Camera &camera, const RenderSettings &settings,
-		const Octree *octree = nullptr);
+		const Octree *octree = nullptr, const Adf *adf = nullptr);
 
 } // namespace sdf
