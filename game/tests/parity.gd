@@ -5,6 +5,7 @@ extends "res://tests/harness.gd"
 ##   --cases=<demo>:<view>,...   view is normals or albedo (unlit, so renderer lighting
 ##                               does not enter the comparison)
 ##   --out=<dir>                 writes <dir>/<demo>_<view>.png
+##   --single-pass=off           draw through the opaque pipeline instead
 
 const VIEWS := {"normals": 1, "albedo": 3}
 
@@ -31,6 +32,7 @@ func _ready() -> void:
 	camera.far = 4000.0
 	add_child(camera)
 	var body = ClassDB.instantiate("SdfBody")
+	body.live_single_pass = user_arg("--single-pass", "on") == "on"
 	add_child(body)
 
 	var failed := false

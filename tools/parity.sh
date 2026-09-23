@@ -6,6 +6,8 @@
 # native/build) and what tools/run.sh --render needs.
 #
 #   tools/parity.sh [case ...]     case = <demo>:<normals|albedo>; default: the full set
+#
+# PARITY_ARGS passes extra arguments to the Godot scene, e.g. --single-pass=off.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +23,7 @@ if [[ ${#CASES[@]} -eq 0 ]]; then
 fi
 
 log="$OUT/godot.log"
-"$ROOT/tools/run.sh" --render res://tests/parity.tscn -- --cases="$(IFS=,; echo "${CASES[*]}")" --out="$OUT" >"$log" 2>&1
+"$ROOT/tools/run.sh" --render res://tests/parity.tscn -- --cases="$(IFS=,; echo "${CASES[*]}")" --out="$OUT" ${PARITY_ARGS:-} >"$log" 2>&1
 if grep -E -q "SHADER ERROR|SCRIPT ERROR|Parse Error|^ERROR:" "$log"; then
 	echo "FAIL  Godot reported errors (see ${log#$ROOT/})"
 	grep -E -A6 "SHADER ERROR|SCRIPT ERROR|Parse Error|^ERROR:" "$log" | head -40

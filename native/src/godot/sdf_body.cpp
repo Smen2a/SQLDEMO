@@ -21,7 +21,11 @@ namespace {
 
 constexpr int kTextureWidth = 1024;
 constexpr int kNodeTexels = 2;
-constexpr int kEditTexels = 7;
+constexpr int kEditTexels = 6;
+// An edit's kinds share one float in the shader: prim | op << 3 | blend << 6 | profile << 9.
+static_assert(int(Prim::SweepBezier) < 8 && int(Op::Paint) < 8 && int(Blend::Profile) < 8 &&
+				int(EdgeProfile::Ogee) < 4,
+		"edit kinds outgrew their bits in sdf_live.gdshaderinc");
 constexpr int kMaterialTexels = 4;
 
 Vector3 to_godot(vec3 v) {
@@ -85,10 +89,31 @@ Ref<ArrayMesh> proxy_box(const Aabb &b) {
 } // namespace
 
 SdfBody::SdfBody() {
+	opaque_shader_ = ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live.gdshader");
+	single_pass_shader_ = ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live_single.gdshader");
 	material_.instantiate();
-	Ref<Shader> shader = ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live.gdshader");
-	material_->set_shader(shader);
 	set_material_override(material_);
+	update_pipeline();
+}
+
+void SdfBody::update_pipeline() {
+	const bool opaque = live_shadows_ || !live_single_pass_;
+	material_->set_shader(opaque ? opaque_shader_ : single_pass_shader_);
+	set_cast_shadows_setting(live_shadows_ ? SHADOW_CASTING_SETTING_ON : SHADOW_CASTING_SETTING_OFF);
+	if (octree_.nodes().empty()) {
+		return;
+	}
+	update_material(); // a new shader starts from default parameters
+}
+
+void SdfBody::set_live_shadows(bool enabled) {
+	live_shadows_ = enabled;
+	update_pipeline();
+}
+
+void SdfBody::set_live_single_pass(bool enabled) {
+	live_single_pass_ = enabled;
+	update_pipeline();
 }
 
 bool SdfBody::load_demo(const String &name) {
@@ -148,8 +173,9 @@ void SdfBody::upload_textures() {
 			continue;
 		}
 		const Octree::Leaf &leaf = leaves[std::size_t(n.leaf)];
-		push(node_texels, vec4(-1.0f, float(tape_values.size()), float(leaf.tape.size()), float(int(leaf.state))));
-		push(node_texels, vec4(leaf.base ? 1.0f : 0.0f, leaf.lipschitz, 0, 0));
+		const float flags = float(int(leaf.state) + 1 + (leaf.base ? 3 : 0));
+		push(node_texels, vec4(-1.0f, float(tape_values.size()), float(leaf.tape.size()), flags));
+		push(node_texels, vec4(leaf.lipschitz, 0, 0, 0));
 		for (std::uint32_t entry : leaf.tape) {
 			const float code = float((entry & ~Octree::kResetBit) + 1);
 			tape_values.push_back(entry & Octree::kResetBit ? -code : code);
@@ -162,8 +188,8 @@ void SdfBody::upload_textures() {
 	std::vector<float> edit_texels;
 	edit_texels.reserve(body_.edits().size() * kEditTexels * 4);
 	for (const Edit &e : body_.edits()) {
-		push(edit_texels, vec4(float(e.prim.type), float(e.op), float(e.blend), float(e.shape)));
-		push(edit_texels, vec4(e.r, e.r2, float(e.material), 0));
+		const int code = int(e.prim.type) | int(e.op) << 3 | int(e.blend) << 6 | int(e.shape) << 9;
+		push(edit_texels, vec4(float(code), e.r, e.r2, float(e.material)));
 		for (const vec4 &p : e.prim.p) {
 			push(edit_texels, p);
 		}
@@ -232,12 +258,18 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_demo", "name"), &SdfBody::load_demo);
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
+	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
+	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
+	ClassDB::bind_method(D_METHOD("set_live_single_pass", "enabled"), &SdfBody::set_live_single_pass);
+	ClassDB::bind_method(D_METHOD("get_live_single_pass"), &SdfBody::get_live_single_pass);
 	ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &SdfBody::set_debug_view);
 	ClassDB::bind_method(D_METHOD("get_debug_view"), &SdfBody::get_debug_view);
 	ClassDB::bind_method(D_METHOD("get_stats"), &SdfBody::get_stats);
 	ClassDB::bind_method(D_METHOD("get_body_bounds"), &SdfBody::get_body_bounds);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,Steps,Albedo"), "set_debug_view",
 			"get_debug_view");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_shadows"), "set_live_shadows", "get_live_shadows");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_single_pass"), "set_live_single_pass", "get_live_single_pass");
 	BIND_ENUM_CONSTANT(SHADED);
 	BIND_ENUM_CONSTANT(NORMALS);
 	BIND_ENUM_CONSTANT(STEPS);

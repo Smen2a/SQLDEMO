@@ -105,7 +105,7 @@ forging) is what will bound it for very long jobs.
 
 `SdfBody` (a `MeshInstance3D`) compiles its body into the octree and flattens it into four
 float data textures: cells, tapes, edit parameters and materials. A proxy box around the
-body then runs `sdf_live.gdshader`, which sphere-traces each pixel in the body's own
+body then runs the Live shader (`sdf_live.gdshaderinc`), which sphere-traces each pixel in the body's own
 millimetres, interpreting the tape of whichever cell the ray is in with the same shared
 functions the C++ evaluator uses. It writes the true hit's depth, normal and position
 (`DEPTH`, `NORMAL`, `LIGHT_VERTEX`), so Godot lights and composites it like any mesh. Adding
@@ -127,23 +127,52 @@ What was checked in Godot (Compatibility renderer, the only one without a GPU):
 | Check | Result |
 | --- | --- |
 | Depth composition with meshes | exact: meshes pushed into a body are cut at its surface |
-| Casting shadows | works: the shadow pass runs the raymarch and takes its depth |
+| Casting shadows | works: the shadow pass runs the raymarch and takes its depth (opt-in, see below) |
 | Receiving shadows | Forward+ / Mobile look shadows up per fragment at `LIGHT_VERTEX` (from Godot's source, to confirm on hardware); Compatibility computes shadow coordinates per vertex, on the proxy box, so there Live bodies receive no shadow-map shadows |
 | Orthographic cameras (directional shadow passes are orthographic) | works |
 | Metre-scaled world | works, parity unchanged |
 
-**The decision gate** (plan §4) needs a real GPU. After building (below), run
+**The decision gate** (plan §4) runs `game/bench/live_bench.tscn` on real hardware. The
+first run (RTX 3060 Ti, Forward+, 1280x720) failed it clearly:
+
+| Scenario | GPU median | Target (at 1080p) |
+| --- | --- | --- |
+| panel filling the screen | 19.1 ms | 6 ms |
+| close-up of the rosette | 40.7 ms | 6 ms |
+| 2000 random strokes | 283.9 ms | 6 ms |
+| three bodies | 21.6 ms | 8 ms |
+
+Where the time went (counted by replaying the shader on the CPU, and timed with Mesa):
+- raymarching again in every shadow pass: about two thirds of the frame;
+- Forward+ running the shader twice (depth prepass and colour pass);
+- evaluations after the hit (refine, normal, AO): about 75% of the rest;
+- about 8 texel fetches per edit in each evaluation.
+
+The measured times track the fetch count (close-up ≈ 1.6× the panel's, 2000 strokes ≈ 14×).
+
+What changed:
+- Live bodies no longer cast shadows by raymarching unless `live_shadows` is on; the
+  baked mesh (E4) will cast them.
+- They draw in one pass (`live_single_pass`, `sdf_live_single.gdshader`: the transparent
+  pipeline, which skips the depth prepass but still writes depth).
+- The ray and the post-hit taps stay in their octree cell.
+- Edit, node and tape records are packed tighter.
+
+Parity is unchanged. On Mesa that is 5.5× faster, and rendering 3D at half resolution
+another 3.4×. Long carving sessions still scale with tape length; moving old edits into
+sampled bricks is the next lever for them.
+
+Run it after building (below):
 
 ```sh
 godot --path game res://bench/live_bench.tscn                                   # Forward+
 godot --path game --rendering-method gl_compatibility res://bench/live_bench.tscn
 ```
 
-with the window at 1920x1080 if the screen allows. It times five scenarios: nothing, the panel
-filling the screen, a close-up of the rosette, 2000 random strokes (long tapes), and three
-bodies at once. It prints median and 95th-percentile GPU times against the targets: at most
-~6 ms for a screen-filling body and ~8 ms for three. Add `-- --view=steps` for step-count heat
-maps, or `-- --shots=<dir>` to save each scenario.
+Use a 1920x1080 window if the screen allows. The switches after `--` show where time goes:
+`--shadows=off`, `--live-shadows=on`, `--single-pass=off`, `--ao=off`, and `--scale3d=0.5`
+for half-resolution 3D. `--view=steps` shows step-count heat maps, and `--shots=<dir>`
+saves each scenario.
 
 ## Building and testing
 
