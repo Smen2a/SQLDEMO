@@ -119,10 +119,17 @@ voxel instead, when it is made:
   near the surface. Planes are exact under trilinear filtering, so flat and gently curved
   faces get coarse bricks (up to 1 mm between samples).
 - Creases would need ever finer bricks, so a crease cell ≤ 1 mm becomes an *exact* cell. Rays
-  march on its brick while they are further from the surface than the brick's error bound
-  (L · voxel · √3), then evaluate its own tape: the octree tape pruned again to that small
-  cell, which leaves only the 2–3 edits forming the crease. Hits, normals and materials
-  there are exact.
+  march on its brick while they are further from the surface than the brick's error band,
+  then evaluate its own tape: the octree tape pruned again to that small cell, which leaves
+  only the 2–3 edits forming the crease. Hits, normals and materials there are exact. The
+  band is measured when the cell is built (twice the worst brick-vs-tape difference near
+  the surface), some 30× narrower than the worst case L · voxel · √3, so rays reach the
+  tape later and need fewer tape steps.
+- Lookups start from a 64³ grid over the root cube that names each block's node, a few
+  levels above its leaves, instead of descending a dozen levels from the root.
+- Normals come from the hit's own leaf: four taps on its brick, or one pass over its tape
+  for all four taps in an exact cell. The tape interpreter is inlined wherever the shader
+  calls it, so it is called from three places only.
 - Bricks live in a `Texture2DArray` and are read with hardware filtering. An edit
   re-samples the cells it reaches, reuses the rest (slots and all) and uploads only the
   layers that changed.
@@ -138,8 +145,14 @@ voxel instead, when it is made:
 | random session | 227 | 2.2 s | 29 MB | 14,892 | 84 ms |
 | random session | 1,495 | 13.5 s | 51 MB | 25,260 | 446 ms |
 
-Replaying the shader on the CPU for the benchmark's views: texel fetches per pixel fall
-from ~1070 to ~113 on the screen-filling panel, and from ~1670 to ~241 on the close-up.
+The shader is bound by texture fetches, as Claybook's SDF tracer was. `sdf_bench count`
+replays it on the CPU for the benchmark's views and counts texel fetches per pixel:
+
+| View | Exact tapes (E3b) | ADF (E3d) | ADF, measured bands and grid (E3e) |
+| --- | --- | --- | --- |
+| panel filling the screen | ~1070 | 129 | 64 |
+| close-up of the rosette | ~1670 | 262 | 128 |
+| 2000 random strokes | ~15,000 | 765 | 335 |
 
 ![A fluted walnut ball, raymarched live in Godot: it casts its shadow on the floor, and a mesh bar pushed into it is cut exactly where it enters the surface](docs/images/live_sphere.png)
 
@@ -212,8 +225,9 @@ godot --path game --rendering-method gl_compatibility res://bench/live_bench.tsc
 ```
 
 Use a 1920x1080 window if the screen allows. The switches after `--` show where time goes:
-`--shadows=off`, `--live-shadows=on`, `--live-source=exact`, `--ao=off`, and `--scale3d=0.5`
-for half-resolution 3D. `--view=steps` shows step-count heat maps, and `--shots=<dir>`
+`--shadows=off`, `--live-shadows=on`, `--live-source=exact`, `--exact=off` (the ADF's crease
+cells shade from their bricks, to measure what their tapes cost), `--ao=off`, and
+`--scale3d=0.5` for half-resolution 3D. `--view=steps` shows step-count heat maps, and `--shots=<dir>`
 saves each scenario.
 
 ## Building and testing

@@ -164,3 +164,54 @@ TEST(adf_is_independent_of_thread_count) {
 	}
 	CHECK(same);
 }
+
+// Lookups start at the grid block's node; they must land in a leaf containing the point,
+// the one a descent from the root finds except on a shared face (where the block's rounded
+// coordinate may pick the neighbour; both hold the point). And the grid must name, for
+// every block, a node covering all of it.
+TEST(adf_grid_lookup_matches_root_descent) {
+	for (const char *name : {"carved_panel", "sphere", "blend_4"}) {
+		const Built b = build_demo(name);
+		const auto &nodes = b.adf.nodes();
+		auto from_root = [&](vec3 p) {
+			int node = 0;
+			while (nodes[std::size_t(node)].child >= 0) {
+				const Adf::Node &n = nodes[std::size_t(node)];
+				const float half = n.size * 0.5f;
+				node = n.child + int(p.x >= n.lo.x + half) + 2 * int(p.y >= n.lo.y + half) + 4 * int(p.z >= n.lo.z + half);
+			}
+			return node;
+		};
+		t::Rng rng(21);
+		const Adf::Node &root = nodes[0];
+		int outside = 0, other = 0;
+		for (int i = 0; i < 200000; ++i) {
+			const vec3 p = root.lo + vec3(rng.uniform(0.0f, 1.0f), rng.uniform(0.0f, 1.0f), rng.uniform(0.0f, 1.0f)) * root.size;
+			const int found = b.adf.leaf(p);
+			const Adf::Node &n = nodes[std::size_t(found)];
+			const float tol = n.size * 1e-5f;
+			outside += p.x < n.lo.x - tol || p.y < n.lo.y - tol || p.z < n.lo.z - tol || p.x > n.lo.x + n.size + tol ||
+					p.y > n.lo.y + n.size + tol || p.z > n.lo.z + n.size + tol;
+			other += found != from_root(p);
+		}
+		CHECK(outside == 0);
+		CHECK(other <= 10);
+		const float block = root.size / float(Adf::kGridSide);
+		bool covering = true;
+		for (int z = 0; z < Adf::kGridSide && covering; ++z) {
+			for (int y = 0; y < Adf::kGridSide && covering; ++y) {
+				for (int x = 0; x < Adf::kGridSide && covering; ++x) {
+					const Adf::GridCell &g = b.adf.grid()[std::size_t(x + Adf::kGridSide * (y + Adf::kGridSide * z))];
+					const Adf::Node &n = nodes[std::size_t(g.node)];
+					const vec3 lo = root.lo + vec3(float(x), float(y), float(z)) * block;
+					const float tol = block * 1e-3f;
+					covering = std::fabs(n.size - root.size / float(1 << g.depth)) < tol && lo.x >= n.lo.x - tol &&
+							lo.y >= n.lo.y - tol && lo.z >= n.lo.z - tol && lo.x + block <= n.lo.x + n.size + tol &&
+							lo.y + block <= n.lo.y + n.size + tol && lo.z + block <= n.lo.z + n.size + tol &&
+							(g.depth == Adf::kGridLevels || n.child < 0);
+				}
+			}
+		}
+		CHECK(covering);
+	}
+}

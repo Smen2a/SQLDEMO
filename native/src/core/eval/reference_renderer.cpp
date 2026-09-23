@@ -72,7 +72,7 @@ public:
 						d = octree_->distance(body_, p);
 					}
 					if (d < eps) {
-						return surface(refine(ray, t, d), ray.d, eps);
+						return surface(refine(ray, t, d, eps), ray.d, eps);
 					}
 					t += std::min(std::max(d / st.lipschitz, eps * 0.5f), st.exit + 1e-4f);
 					continue;
@@ -84,14 +84,14 @@ public:
 						continue;
 					}
 					if (st.d < eps) {
-						return surface(refine(ray, t, st.d), ray.d, eps);
+						return surface(refine(ray, t, st.d, eps), ray.d, eps);
 					}
 					t += std::min(std::max(st.d / st.lipschitz, eps * 0.5f), st.exit + 1e-4f);
 					continue;
 				}
 				const float d = distance(p);
 				if (d < eps) {
-					return surface(refine(ray, t, d), ray.d, eps);
+					return surface(refine(ray, t, d, eps), ray.d, eps);
 				}
 				t += std::max(d / lipschitz_, eps * 0.5f);
 			}
@@ -109,10 +109,14 @@ private:
 	}
 
 	// Sphere tracing stops anywhere within the hit epsilon, and where it stops depends on
-	// the step sequence. A few signed steps settle onto the surface itself, so shading does
-	// not depend on how the ray got there (and the octree and exhaustive paths agree).
-	vec3 refine(const Ray &ray, float t, float d) const {
-		for (int i = 0; i < 4 && std::fabs(d) > 1e-5f; ++i) {
+	// the step sequence. A few signed steps settle onto the surface itself, to within a
+	// tenth of the epsilon, so shading does not depend on how the ray got there (and the
+	// octree and exhaustive paths agree); the normal stencil spans the epsilon anyway.
+	// (Secant steps would converge faster on grazing rays, but on rays that only pass
+	// within the epsilon of an edge they extrapolate onto another face.)
+	vec3 refine(const Ray &ray, float t, float d, float eps) const {
+		const float settled = std::max(0.1f * eps, 1e-5f);
+		for (int i = 0; i < 4 && std::fabs(d) > settled; ++i) {
 			t += d;
 			d = distance(ray.o + ray.d * t);
 		}
@@ -129,19 +133,7 @@ private:
 		return octree_ ? octree_->distance(body_, p) : body_.sample_exhaustive(p).d;
 	}
 
-	// Tetrahedral normal step. Inside an ADF brick it spans half a voxel, which smooths the
-	// trilinear field's gradient across voxel faces; elsewhere it is as fine as precision
-	// allows.
-	float normal_step(vec3 p, float eps) const {
-		if (adf_) {
-			const int node = adf_->leaf(p);
-			if (node >= 0 && adf_->nodes()[std::size_t(node)].brick >= 0 && !adf_->nodes()[std::size_t(node)].exact()) {
-				return std::max(eps, 0.5f * adf_->nodes()[std::size_t(node)].size / float(Adf::kSide - 1));
-			}
-		}
-		return std::max(eps, 2e-3f);
-	}
-
+	// Tetrahedral normal, as fine as precision allows (the ADF has its own: Adf::normal).
 	vec3 normal(vec3 p, float h) const {
 		const vec3 k0(1, -1, -1), k1(-1, -1, 1), k2(-1, 1, -1), k3(1, 1, 1);
 		return gl::normalize(k0 * distance(p + k0 * h) + k1 * distance(p + k1 * h) + k2 * distance(p + k2 * h) +
@@ -149,7 +141,7 @@ private:
 	}
 
 	vec3 surface(vec3 p, vec3 view, float eps) const {
-		const vec3 n = normal(p, normal_step(p, eps));
+		const vec3 n = adf_ ? adf_->normal(body_, p, eps, -view) : normal(p, std::max(eps, 2e-3f));
 		if (s_.output == RenderSettings::Output::Normals) {
 			return n * 0.5f + vec3(0.5f);
 		}

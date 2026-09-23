@@ -17,7 +17,9 @@
 // are skipped whole, steps are clamped to the cell exit and divided by the cell's
 // Lipschitz bound, hits are refined with a few signed steps, normals are tetrahedral. The
 // ray keeps the cell it is in and only descends again when it leaves; the refine, normal
-// and AO taps reuse the hit's cell the same way.
+// and AO taps reuse the hit's cell the same way. The tape interpreter is inlined wherever
+// it is called, and it dwarfs the rest of the shader, so it is called from as few places
+// as possible: the march, the settling steps, and (ADF) one pass for all four normal taps.
 //
 // Data textures (1024 texels wide, written by native/src/godot/sdf_body.cpp):
 //   sdf_nodes      RGBA32F, 2 texels per octree node: (first child or -1, tape offset,
@@ -30,8 +32,12 @@
 //   sdf_adf_nodes  RGBA32F, 1 texel per ADF node: (first child or -1, brick slot or
 //                  -1 empty / -2 solid, material id or -(material brick + 1) or 256 +
 //                  exact cell, Lipschitz bound or (empty, solid) centre value)
-//   sdf_adf_cells  RGBA32F, 1 texel per exact cell, in sdf_nodes' format: its own tape,
-//                  the octree cell's pruned to it, stored after the octree's in sdf_tape
+//   sdf_adf_cells  RGBA32F, 1 texel per exact cell, in sdf_nodes' format but for x: (error
+//                  band of its brick, tape offset, tape length, flags). Its tape is the
+//                  octree cell's pruned to it, stored after the octree's in sdf_tape
+//   sdf_adf_grid   RGBA32F, 2 cells per texel: the ADF's top-level grid (Adf::grid(), 64^3
+//                  blocks over the root cube, x fastest), each (node, depth): the deepest
+//                  node covering the block, where leaf lookups start
 //   sdf_bricks     R16F array, 1024^2 layers of 2048 bricks: a brick is a 64x8 tile of
 //                  its 8 z-slices of 8x8 samples side by side
 //   sdf_brick_materials  RGBA8 array, the same layout: (material 0, material 1, mix, -)
@@ -50,11 +56,14 @@ const int SDF_ADF_EMPTY = -1;
 const int SDF_ADF_SOLID = -2;
 const int SDF_ADF_EXACT_BASE = 256;
 const int SDF_BRICKS_PER_LAYER = 2048;
+const int SDF_GRID_LEVELS = 6; // Adf::kGridLevels
+const int SDF_GRID_SIDE = 64;
 const float SDF_BRICK_CELLS = 7.0;
 const int SDF_VIEW_SHADED = 0;
 const int SDF_VIEW_NORMALS = 1;
 const int SDF_VIEW_STEPS = 2;
 const int SDF_VIEW_ALBEDO = 3;
+const float SDF_EXACT_NORMAL_REACH = 0.25; // Adf::kExactNormalReach
 
 uniform sampler2D sdf_nodes : filter_nearest, repeat_disable;
 uniform sampler2D sdf_tape : filter_nearest, repeat_disable;
@@ -63,6 +72,8 @@ uniform sampler2D sdf_materials : filter_nearest, repeat_disable;
 #ifdef SDF_ADF
 uniform sampler2D sdf_adf_nodes : filter_nearest, repeat_disable;
 uniform sampler2D sdf_adf_cells : filter_nearest, repeat_disable;
+uniform sampler2D sdf_adf_grid : filter_nearest, repeat_disable;
+uniform float sdf_grid_scale = 1.0; // grid blocks per millimetre (Adf::grid_scale)
 uniform sampler2DArray sdf_bricks : filter_linear, repeat_disable;
 uniform sampler2DArray sdf_brick_materials : filter_nearest, repeat_disable;
 #endif
@@ -84,6 +95,8 @@ uniform vec3 sdf_grain_axis = vec3(1.0, 0.0, 0.0);
 uniform int sdf_debug_view = 0;
 uniform int sdf_max_steps = 512;
 uniform bool sdf_ambient_occlusion = true;
+// Off: exact ADF cells march and shade on their bricks (measurements only).
+uniform bool sdf_exact_cells = true;
 
 varying vec3 v_local;
 varying flat vec3 v_eye;     // camera position in body space (perspective)
@@ -165,15 +178,63 @@ vec4 sdf_eval_tape(vec3 p, vec4 n0) {
 	return vec4(d, mat);
 }
 
+// The distances at four points in one pass over a leaf's tape: each entry's texels are read
+// once for all four (normal taps).
+vec4 sdf_eval_tape4(vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec4 n0) {
+	vec3 q[4] = vec3[](p0, p1, p2, p3);
+	float d[4] = float[](SDF_BIG, SDF_BIG, SDF_BIG, SDF_BIG);
+	if (int(n0.w) >= 3) {
+		for (int j = 0; j < 4; j++) {
+			d[j] = sdf_primitive(q[j], sdf_base_type, sdf_base_p0, sdf_base_p1, sdf_base_p2, sdf_base_p3, sdf_base_p4);
+		}
+	}
+	int offset = int(n0.y);
+	int count = int(n0.z);
+	vec4 codes = vec4(0.0);
+	for (int k = 0; k < count; k++) {
+		int entry = offset + k;
+		if (k == 0 || entry % 4 == 0) {
+			codes = sdf_texel(sdf_tape, entry / 4);
+		}
+		float code = sdf_component(codes, entry % 4);
+		int e = (int(abs(code)) - 1) * SDF_EDIT_TEXELS;
+		vec4 head = sdf_texel(sdf_edits, e);
+		vec4 e1 = sdf_texel(sdf_edits, e + 1);
+		vec4 e2 = sdf_texel(sdf_edits, e + 2);
+		vec4 e3 = sdf_texel(sdf_edits, e + 3);
+		vec4 e4 = sdf_texel(sdf_edits, e + 4);
+		vec4 e5 = sdf_texel(sdf_edits, e + 5);
+		int packed = int(head.x);
+		int op = (packed >> 3) & 7;
+		for (int j = 0; j < 4; j++) {
+			if (code < 0.0) {
+				d[j] = op == SDF_OP_UNION ? SDF_BIG : -SDF_BIG;
+			}
+			float pd = sdf_primitive(q[j], packed & 7, e1, e2, e3, e4, e5);
+			d[j] = sdf_apply_edit(d[j], vec3(0.0), pd, op, (packed >> 6) & 7, head.y, head.z, (packed >> 9) & 3, head.w).x;
+		}
+	}
+	return vec4(d[0], d[1], d[2], d[3]);
+}
+
 // --- ADF --------------------------------------------------------------------------------
 #ifdef SDF_ADF
 
-int sdf_adf_find_leaf(vec3 p, out vec3 lo, out float size) {
-	lo = sdf_root_lo;
-	size = sdf_root_size;
-	int node = 0;
-	for (int depth = 0; depth < 32; depth++) {
-		int child = int(sdf_texel(sdf_adf_nodes, node).x);
+// ADF leaf containing p (which must lie in the root cube), as Adf::leaf: node index, its
+// texel a, and the cell's lower corner and size through lo / size. Starts at the node of
+// p's grid block, a few levels above the leaf rather than a dozen.
+int sdf_adf_find_leaf(vec3 p, out vec3 lo, out float size, out vec4 a) {
+	ivec3 b = clamp(ivec3(floor((p - sdf_root_lo) * sdf_grid_scale)), ivec3(0), ivec3(SDF_GRID_SIDE - 1));
+	int i = b.x + SDF_GRID_SIDE * (b.y + SDF_GRID_SIDE * b.z);
+	vec4 pair = sdf_texel(sdf_adf_grid, i / 2);
+	vec2 cell = i % 2 == 0 ? pair.xy : pair.zw;
+	int node = int(cell.x);
+	int depth = int(cell.y);
+	size = sdf_root_size / float(1 << depth);
+	lo = sdf_root_lo + vec3(b >> ivec3(SDF_GRID_LEVELS - depth)) * size;
+	for (int k = 0; k < 32; k++) {
+		a = sdf_texel(sdf_adf_nodes, node);
+		int child = int(a.x);
 		if (child < 0) {
 			break;
 		}
@@ -204,7 +265,7 @@ float sdf_brick_value(int slot, vec3 u) {
 }
 
 bool sdf_adf_exact(vec4 a) {
-	return int(a.y) >= 0 && int(a.z) >= SDF_ADF_EXACT_BASE;
+	return sdf_exact_cells && int(a.y) >= 0 && int(a.z) >= SDF_ADF_EXACT_BASE;
 }
 
 // The trilinear brick value in a brick leaf (exact or not), the centre value elsewhere.
@@ -226,6 +287,9 @@ vec4 sdf_adf_eval(vec3 p, vec3 lo, float size, vec4 a, vec4 n0) {
 	vec3 u = (p - lo) / size * SDF_BRICK_CELLS;
 	float d = sdf_brick_value(kind, u);
 	int m = int(a.z);
+	if (m >= SDF_ADF_EXACT_BASE) {
+		return vec4(d, sdf_base_material, sdf_base_material, 0.0); // sdf_exact_cells off
+	}
 	if (m >= 0) {
 		return vec4(d, float(m), float(m), 0.0);
 	}
@@ -244,8 +308,7 @@ vec4 sdf_adf_eval(vec3 p, vec3 lo, float size, vec4 a, vec4 n0) {
 // SDF_STATE_EMPTY, SDF_STATE_SOLID or 0 (surface).
 void sdf_enter_cell(vec3 p, out vec3 lo, out float size, out vec4 n0, out vec4 a, out float lipschitz, out int state) {
 #ifdef SDF_ADF
-	int node = sdf_adf_find_leaf(p, lo, size);
-	a = sdf_texel(sdf_adf_nodes, node);
+	sdf_adf_find_leaf(p, lo, size, a);
 	int kind = int(a.y);
 	state = kind == SDF_ADF_EMPTY ? SDF_STATE_EMPTY : (kind == SDF_ADF_SOLID ? SDF_STATE_SOLID : 0);
 	lipschitz = a.w;
@@ -267,28 +330,25 @@ vec4 sdf_cell_eval(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 #endif
 }
 
-// The body's field at p (vec4(distance, material state)), as Octree::sample / Adf::sample.
-vec4 sdf_sample(vec3 p) {
-	if (!sdf_in_cell(p, sdf_root_lo, sdf_root_size)) {
-		vec3 outside = max(max(sdf_root_lo - p, p - (sdf_root_lo + vec3(sdf_root_size))), vec3(0.0));
-		return vec4(max(length(outside), 1.0e-3), sdf_base_material, sdf_base_material, 0.0);
-	}
-	vec3 lo;
-	float size;
-	vec4 n0;
-	vec4 a;
-	float lipschitz;
-	int state;
-	sdf_enter_cell(p, lo, size, n0, a, lipschitz, state);
-	return sdf_cell_eval(p, lo, size, n0, a);
+// The field outside the root cube, where there is no surface (as Octree::sample / Adf).
+vec4 sdf_outside_root(vec3 p) {
+	vec3 outside = max(max(sdf_root_lo - p, p - (sdf_root_lo + vec3(sdf_root_size))), vec3(0.0));
+	return vec4(max(length(outside), 1.0e-3), sdf_base_material, sdf_base_material, 0.0);
 }
 
-// The same, reusing a known cell when p is in it.
-vec4 sdf_sample_near(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
-	if (sdf_in_cell(p, lo, size)) {
-		return sdf_cell_eval(p, lo, size, n0, a);
+// The body's field at p (vec4(distance, material state)), as Octree::sample / Adf::sample:
+// in the known cell (lo, size, n0, a) if p is in it, else in p's cell, which becomes the
+// known one. One evaluation site, so one inlined interpreter.
+vec4 sdf_sample_near(vec3 p, inout vec3 lo, inout float size, inout vec4 n0, inout vec4 a) {
+	if (!sdf_in_cell(p, lo, size)) {
+		if (!sdf_in_cell(p, sdf_root_lo, sdf_root_size)) {
+			return sdf_outside_root(p);
+		}
+		float lipschitz_unused;
+		int state_unused;
+		sdf_enter_cell(p, lo, size, n0, a, lipschitz_unused, state_unused);
 	}
-	return sdf_sample(p);
+	return sdf_cell_eval(p, lo, size, n0, a);
 }
 
 // For ambient occlusion: bricks only (the ADF), within about a voxel of the field.
@@ -296,7 +356,7 @@ float sdf_sample_approx(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 #ifdef SDF_ADF
 	if (!sdf_in_cell(p, lo, size)) {
 		if (!sdf_in_cell(p, sdf_root_lo, sdf_root_size)) {
-			return sdf_sample(p).x;
+			return sdf_outside_root(p).x;
 		}
 		float lipschitz_unused;
 		int state_unused;
@@ -308,23 +368,43 @@ float sdf_sample_approx(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 #endif
 }
 
-// Tetrahedral normal step: half a voxel inside a brick (smoothing the trilinear field's
-// gradient across voxel faces), otherwise as fine as precision allows.
-float sdf_normal_step(vec3 p, float eps, vec3 lo, float size, vec4 a) {
 #ifdef SDF_ADF
+// The surface normal at a converged hit p, as Adf::normal: tetrahedral differences within
+// p's leaf, never descending again. Exact leaves difference their tape (exact that close
+// outside the leaf too) in one pass; brick leaves their brick, half a voxel apart, the
+// stencil shifted to stay inside the leaf.
+vec3 sdf_adf_normal(vec3 p, float eps, vec3 lo, float size, vec4 n0, vec4 a, vec3 fallback) {
+	vec3 k0 = vec3(1.0, -1.0, -1.0);
+	vec3 k1 = vec3(-1.0, -1.0, 1.0);
+	vec3 k2 = vec3(-1.0, 1.0, -1.0);
+	vec3 k3 = vec3(1.0, 1.0, 1.0);
 	if (!sdf_in_cell(p, lo, size)) {
-		vec4 n0_unused;
+		if (!sdf_in_cell(p, sdf_root_lo, sdf_root_size)) {
+			return fallback;
+		}
 		float lipschitz_unused;
 		int state_unused;
-		sdf_enter_cell(p, lo, size, n0_unused, a, lipschitz_unused, state_unused);
+		sdf_enter_cell(p, lo, size, n0, a, lipschitz_unused, state_unused);
 	}
-	if (int(a.y) >= 0 && !sdf_adf_exact(a)) {
-		return max(eps, 0.5 * size / SDF_BRICK_CELLS);
+	int kind = int(a.y);
+	if (kind < 0) {
+		return fallback;
 	}
-#endif
-	return max(eps, 2.0e-3);
+	vec4 d;
+	if (sdf_adf_exact(a)) {
+		float h = min(max(eps, 2.0e-3), SDF_EXACT_NORMAL_REACH);
+		d = sdf_eval_tape4(p + k0 * h, p + k1 * h, p + k2 * h, p + k3 * h, n0);
+	} else {
+		float h = min(max(eps, 0.5 * size / SDF_BRICK_CELLS), 0.25 * size);
+		vec3 c = clamp(p, lo + vec3(h), lo + vec3(size - h));
+		float scale = SDF_BRICK_CELLS / size;
+		d = vec4(sdf_brick_value(kind, (c + k0 * h - lo) * scale), sdf_brick_value(kind, (c + k1 * h - lo) * scale),
+				sdf_brick_value(kind, (c + k2 * h - lo) * scale), sdf_brick_value(kind, (c + k3 * h - lo) * scale));
+	}
+	vec3 g = k0 * d.x + k1 * d.y + k2 * d.z + k3 * d.w;
+	return dot(g, g) > 1.0e-24 ? normalize(g) : fallback;
 }
-
+#else
 vec3 sdf_normal(vec3 p, float h, vec3 lo, float size, vec4 n0, vec4 a) {
 	vec3 k0 = vec3(1.0, -1.0, -1.0);
 	vec3 k1 = vec3(-1.0, -1.0, 1.0);
@@ -334,6 +414,7 @@ vec3 sdf_normal(vec3 p, float h, vec3 lo, float size, vec4 n0, vec4 a) {
 			k1 * sdf_sample_near(p + k1 * h, lo, size, n0, a).x + k2 * sdf_sample_near(p + k2 * h, lo, size, n0, a).x +
 			k3 * sdf_sample_near(p + k3 * h, lo, size, n0, a).x);
 }
+#endif
 
 float sdf_occlusion(vec3 p, vec3 n, vec3 lo, float size, vec4 n0, vec4 a) {
 	float occ = 0.0;
@@ -431,10 +512,9 @@ void fragment() {
 		}
 #ifdef SDF_ADF
 		if (sdf_adf_exact(a)) {
-			// March on the brick while it guarantees clearance (trilinear weights are convex
-			// and every sample is within voxel * sqrt(3)); the tape decides hits.
-			float margin = lipschitz * size / SDF_BRICK_CELLS * 1.7320508;
-			float coarse = sdf_adf_approx(p, lo, size, a) - margin;
+			// March on the brick while it is clear of the surface by its measured error band
+			// (n0.x, see Adf::ExactCell::error); the tape decides hits.
+			float coarse = sdf_adf_approx(p, lo, size, a) - n0.x;
 			if (coarse > eps) {
 				t += min(max(coarse / lipschitz, eps * 0.5), exit + 1.0e-4);
 				continue;
@@ -458,9 +538,10 @@ void fragment() {
 		discard;
 	}
 
-	// Settle onto the surface so shading does not depend on the step sequence. s ends up
-	// as the field at p, material included.
-	for (int i = 0; i < 4 && hit && abs(s.x) > 1.0e-5; i++) {
+	// Settle onto the surface, to within a tenth of the epsilon, so shading does not depend
+	// on the step sequence. s ends up as the field at p, material included.
+	float settled = max(0.1 * eps, 1.0e-5);
+	for (int i = 0; i < 4 && hit && abs(s.x) > settled; i++) {
 		t += s.x;
 		s = sdf_sample_near(ro + rd * t, lo, size, n0, a);
 	}
@@ -480,7 +561,11 @@ void fragment() {
 #endif
 
 	if (sdf_debug_view != SDF_VIEW_STEPS) {
-		vec3 n = sdf_normal(p, sdf_normal_step(p, eps, lo, size, a), lo, size, n0, a);
+#ifdef SDF_ADF
+		vec3 n = sdf_adf_normal(p, eps, lo, size, n0, a, -rd);
+#else
+		vec3 n = sdf_normal(p, max(eps, 2.0e-3), lo, size, n0, a);
+#endif
 		NORMAL = normalize((VIEW_MATRIX * (MODEL_MATRIX * vec4(n, 0.0))).xyz);
 		vec3 albedo = sdf_material_rgb(s.y, p);
 		vec4 props = sdf_texel(sdf_materials, int(s.y + 0.5) * 4 + 3);

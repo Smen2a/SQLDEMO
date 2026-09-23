@@ -107,7 +107,7 @@ struct Refiner {
 		if (n.exact()) {
 			const Adf::ExactCell &cell = (*old.exact)[std::size_t(n.material - Adf::kExactBase)];
 			local.nodes[std::size_t(to)].material = Adf::kExactBase + int(local.exact.size());
-			local.exact.push_back({std::uint32_t(local.tape.size()), cell.count, cell.base});
+			local.exact.push_back({std::uint32_t(local.tape.size()), cell.count, cell.base, cell.error});
 			local.tape.insert(local.tape.end(), old.tape->begin() + cell.offset, old.tape->begin() + cell.offset + cell.count);
 		}
 		local.kept_brick[std::size_t(to)] = n.brick >= 0;
@@ -231,10 +231,34 @@ struct Refiner {
 		}
 		n.value = std::max(lip, 1e-3f);
 		if (exact) {
-			// The tape decides hits, normals and materials here; the brick only speeds rays up.
+			// The tape decides hits, normals and materials here; the brick only speeds rays up,
+			// to within its error band (see ExactCell::error), measured where rays stop: at the
+			// voxels near the surface (all of them now, not just until the tolerance failed).
 			n.material = Adf::kExactBase + int(local.exact.size());
 			n.value = std::max(n.value, cell.lipschitz);
-			local.exact.push_back({std::uint32_t(local.tape.size()), std::uint32_t(cell.tape.size()), cell.base});
+			float measured = 0.0f;
+			for (int z = 0; z < kCells; ++z) {
+				for (int y = 0; y < kCells; ++y) {
+					for (int x = 0; x < kCells; ++x) {
+						float lo_v = std::numeric_limits<float>::max(), hi_v = -lo_v, sum = 0.0f, near = lo_v;
+						for (int c = 0; c < 8; ++c) {
+							const float cv = v[index(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))];
+							lo_v = std::min(lo_v, cv);
+							hi_v = std::max(hi_v, cv);
+							near = std::min(near, std::fabs(cv));
+							sum += cv;
+						}
+						if (!(lo_v < 0.0f && hi_v >= 0.0f) && near > voxel * n.value) {
+							continue;
+						}
+						const float exact_value = at(cell, lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel).d;
+						measured = std::max(measured, std::fabs(sum * 0.125f - exact_value));
+					}
+				}
+			}
+			// Hardware filtering weights carry 8 fractional bits: up to L * voxel / 256 more.
+			const float error = std::min(2.0f * measured + n.value * voxel / 128.0f + 1e-4f, n.value * voxel * kSqrt3);
+			local.exact.push_back({std::uint32_t(local.tape.size()), std::uint32_t(cell.tape.size()), cell.base, error});
 			local.tape.insert(local.tape.end(), cell.tape.begin(), cell.tape.end());
 			return;
 		}
@@ -316,7 +340,7 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Aabb &region, bo
 	exact_tape_.clear();
 	const Old old{&old_nodes, &old_exact, &old_tape, region};
 	auto add_exact = [&](const ExactCell &cell, const std::uint32_t *entries) {
-		exact_cells_.push_back({std::uint32_t(exact_tape_.size()), cell.count, cell.base});
+		exact_cells_.push_back({std::uint32_t(exact_tape_.size()), cell.count, cell.base, cell.error});
 		exact_tape_.insert(exact_tape_.end(), entries, entries + cell.count);
 		return kExactBase + int(exact_cells_.size()) - 1;
 	};
@@ -529,7 +553,31 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Aabb &region, bo
 		live_materials_ += n.brick >= 0 && n.material < 0;
 	}
 	rebuilt_ = dirty_bricks_.size();
+	build_grid();
 	seconds_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
+void Adf::build_grid() {
+	grid_.assign(std::size_t(kGridSide) * kGridSide * kGridSide, GridCell{});
+	// Fills the blocks [x, x + span)^3 (grid coordinates) under `node`, at `depth`.
+	std::function<void(int, int, int, int, int, int)> fill = [&](int node, int depth, int x, int y, int z, int span) {
+		const Node &n = nodes_[std::size_t(node)];
+		if (n.child < 0 || depth == kGridLevels) {
+			for (int k = z; k < z + span; ++k) {
+				for (int j = y; j < y + span; ++j) {
+					for (int i = x; i < x + span; ++i) {
+						grid_[std::size_t(i + kGridSide * (j + kGridSide * k))] = {node, depth};
+					}
+				}
+			}
+			return;
+		}
+		const int half = span / 2;
+		for (int c = 0; c < 8; ++c) {
+			fill(n.child + c, depth + 1, x + (c & 1) * half, y + ((c >> 1) & 1) * half, z + ((c >> 2) & 1) * half, half);
+		}
+	};
+	fill(0, 0, 0, 0, 0, kGridSide);
 }
 
 int Adf::leaf(vec3 p) const {
@@ -541,7 +589,11 @@ int Adf::leaf(vec3 p) const {
 	if (rel.x < 0 || rel.y < 0 || rel.z < 0 || rel.x > root.size || rel.y > root.size || rel.z > root.size) {
 		return -1;
 	}
-	int node = 0;
+	// The grid cell's node, then down (as sdf_adf_find_leaf in the Live shader).
+	const vec3 g = rel * grid_scale();
+	const int bx = std::clamp(int(std::floor(g.x)), 0, kGridSide - 1), by = std::clamp(int(std::floor(g.y)), 0, kGridSide - 1),
+			  bz = std::clamp(int(std::floor(g.z)), 0, kGridSide - 1);
+	int node = grid_[std::size_t(bx + kGridSide * (by + kGridSide * bz))].node;
 	while (nodes_[std::size_t(node)].child >= 0) {
 		const Node &n = nodes_[std::size_t(node)];
 		const float half = n.size * 0.5f;
@@ -642,9 +694,34 @@ Adf::Step Adf::step(vec3 p, vec3 dir) const {
 		return {-1.0f, exit, kSolid, false, 0.0f, 1.0f, voxel};
 	}
 	const float v = brick_value(&values_[std::size_t(n.brick) * kBrickSamples], (p - n.lo) / n.size * float(kCells));
-	// Trilinear weights are convex, and every sample is within voxel * sqrt(3) of p, so the
-	// brick is within that times the field's Lipschitz bound of the field.
-	return {v, exit, n.brick, n.exact(), n.exact() ? n.value * voxel * kSqrt3 : 0.0f, n.value, voxel};
+	const float error = n.exact() ? exact_cells_[std::size_t(n.material - kExactBase)].error : 0.0f;
+	return {v, exit, n.brick, n.exact(), error, n.value, voxel};
+}
+
+vec3 Adf::normal(const Body &body, vec3 p, float eps, vec3 fallback) const {
+	const int node = leaf(p);
+	if (node < 0 || nodes_[std::size_t(node)].brick < 0) {
+		return fallback;
+	}
+	const Node &n = nodes_[std::size_t(node)];
+	const vec3 k[4] = {vec3(1, -1, -1), vec3(-1, -1, 1), vec3(-1, 1, -1), vec3(1, 1, 1)};
+	vec3 g(0.0f);
+	if (n.exact()) {
+		const ExactCell &cell = exact_cells_[std::size_t(n.material - kExactBase)];
+		const float h = std::min(std::max(eps, 2e-3f), kExactNormalReach);
+		for (const vec3 &kk : k) {
+			g += kk * Octree::eval_tape(body, cell.base, exact_tape_.data() + cell.offset, cell.count, p + kk * h).d;
+		}
+	} else {
+		const float h = std::min(std::max(eps, 0.5f * n.size / float(kCells)), 0.25f * n.size);
+		const vec3 c = gl::min(gl::max(p, n.lo + vec3(h)), n.lo + vec3(n.size - h));
+		const std::uint16_t *b = &values_[std::size_t(n.brick) * kBrickSamples];
+		for (const vec3 &kk : k) {
+			g += kk * brick_value(b, (c + kk * h - n.lo) / n.size * float(kCells));
+		}
+	}
+	const float len2 = gl::dot(g, g);
+	return len2 > 1e-24f ? g / std::sqrt(len2) : fallback;
 }
 
 Adf::Stats Adf::stats() const {

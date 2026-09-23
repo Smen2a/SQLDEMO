@@ -12,8 +12,9 @@ extends Node3D
 ## a screenshot of each scenario. To see where the time goes: --shadows=off (no shadow
 ## passes at all), --live-shadows=on (Live bodies cast shadows by raymarching in the shadow
 ## passes; off by default), --live-source=exact (raymarch the octree tapes instead of the
-## ADF), --ao=off (no SDF ambient occlusion), --scale3d=<f> (render 3D at f times the
-## window resolution, e.g. 0.5, and upscale).
+## ADF), --exact=off (the ADF's exact crease cells march and shade on their bricks, to
+## measure what they cost), --ao=off (no SDF ambient occlusion), --scale3d=<f> (render 3D at
+## f times the window resolution, e.g. 0.5, and upscale).
 ##
 ## Gate targets at 1920x1080: a bench-filling body <= ~6 ms GPU, three Live bodies <= ~8 ms.
 
@@ -66,8 +67,9 @@ func _ready() -> void:
 	var size := get_viewport().get_visible_rect().size
 	print("Live raymarch benchmark: %s, %s, %dx%d" % [RenderingServer.get_video_adapter_name(),
 			RenderingServer.get_current_rendering_method(), size.x, size.y])
-	print("  source %s, shadows %s, live shadows %s, AO %s, 3D scale %s" % [_arg("--live-source", "adf"),
-			_arg("--shadows", "on"), _arg("--live-shadows", "off"), _arg("--ao", "on"), _arg("--scale3d", "1")])
+	print("  source %s, exact cells %s, shadows %s, live shadows %s, AO %s, 3D scale %s" % [
+			_arg("--live-source", "adf"), _arg("--exact", "on"), _arg("--shadows", "on"), _arg("--live-shadows", "off"),
+			_arg("--ao", "on"), _arg("--scale3d", "1")])
 	if size != Vector2(1920, 1080):
 		print("  (gate targets assume 1920x1080; the window is %dx%d)" % [size.x, size.y])
 
@@ -101,6 +103,7 @@ func _run(name: String, s: Array, frames: int) -> Array:
 		body.debug_view = view
 		body.live_shadows = _arg("--live-shadows", "off") == "on"
 		body.live_source = 1 if _arg("--live-source", "adf") == "exact" else 0
+		body.exact_cells = _arg("--exact", "on") == "on"
 		body.material_override.set_shader_parameter("sdf_ambient_occlusion", _arg("--ao", "on") == "on")
 		_bodies.append(body)
 	_camera.look_at_from_position(s[2], s[3], Vector3(0, 0, 1))

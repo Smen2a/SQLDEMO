@@ -116,6 +116,13 @@ void SdfBody::set_live_source(int source) {
 	}
 }
 
+void SdfBody::set_exact_cells(bool enabled) {
+	exact_cells_ = enabled;
+	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
+		m->set_shader_parameter("sdf_exact_cells", exact_cells_);
+	}
+}
+
 void SdfBody::update_shaders() {
 	const bool adf = live_source_ == LIVE_ADF;
 	ResourceLoader *loader = ResourceLoader::get_singleton();
@@ -254,6 +261,14 @@ void SdfBody::upload_adf(bool full, const std::vector<std::uint32_t> &bricks,
 		push(node_texels, vec4(float(n.child), float(n.brick), float(n.material), n.value));
 	}
 	upload(adf_nodes_tex_, node_texels);
+	static_assert(Adf::kGridLevels == 6, "SDF_GRID_LEVELS in sdf_live.gdshaderinc");
+	std::vector<float> grid_texels;
+	grid_texels.reserve(adf_.grid().size() * 2);
+	for (const Adf::GridCell &cell : adf_.grid()) {
+		grid_texels.push_back(float(cell.node));
+		grid_texels.push_back(float(cell.depth));
+	}
+	upload(adf_grid_tex_, grid_texels);
 	upload_layers(bricks_tex_, reinterpret_cast<const std::uint8_t *>(adf_.brick_values().data()), adf_.brick_slots(),
 			2, godot::Image::FORMAT_RH, full, bricks);
 	upload_layers(brick_materials_tex_, adf_.material_values().data(), adf_.material_slots(), 4,
@@ -286,7 +301,8 @@ void SdfBody::upload_textures() {
 		}
 	}
 	// The ADF's exact leaves have their own (shorter) tapes: append them, and describe each
-	// leaf with a texel in the octree nodes' format so the shader evaluates it the same way.
+	// leaf with a texel in the octree nodes' format so the shader evaluates it the same way
+	// (x, unused by the tape interpreter, carries the brick's error band).
 	const std::size_t adf_tape_base = tape_values.size();
 	for (std::uint32_t entry : adf_.exact_tape()) {
 		const float code = float((entry & ~Octree::kResetBit) + 1);
@@ -294,7 +310,7 @@ void SdfBody::upload_textures() {
 	}
 	std::vector<float> cell_texels;
 	for (const Adf::ExactCell &cell : adf_.exact_cells()) {
-		push(cell_texels, vec4(-1.0f, float(adf_tape_base + cell.offset), float(cell.count), cell.base ? 4.0f : 1.0f));
+		push(cell_texels, vec4(cell.error, float(adf_tape_base + cell.offset), float(cell.count), cell.base ? 4.0f : 1.0f));
 	}
 	upload(adf_cells_tex_, cell_texels);
 	while (tape_values.size() % 4) {
@@ -342,6 +358,8 @@ void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	material->set_shader_parameter("sdf_materials", materials_tex_);
 	material->set_shader_parameter("sdf_adf_nodes", adf_nodes_tex_);
 	material->set_shader_parameter("sdf_adf_cells", adf_cells_tex_);
+	material->set_shader_parameter("sdf_adf_grid", adf_grid_tex_);
+	material->set_shader_parameter("sdf_grid_scale", adf_.grid_scale());
 	material->set_shader_parameter("sdf_bricks", bricks_tex_);
 	material->set_shader_parameter("sdf_brick_materials", brick_materials_tex_);
 	material->set_shader_parameter("sdf_root_lo", to_godot(root.lo));
@@ -357,6 +375,7 @@ void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	material->set_shader_parameter("sdf_grain_origin", to_godot(body_.grain_origin));
 	material->set_shader_parameter("sdf_grain_axis", to_godot(body_.grain_axis));
 	material->set_shader_parameter("sdf_debug_view", debug_view_);
+	material->set_shader_parameter("sdf_exact_cells", exact_cells_);
 }
 
 void SdfBody::set_debug_view(int view) {
@@ -394,6 +413,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
 	ClassDB::bind_method(D_METHOD("set_live_source", "source"), &SdfBody::set_live_source);
 	ClassDB::bind_method(D_METHOD("get_live_source"), &SdfBody::get_live_source);
+	ClassDB::bind_method(D_METHOD("set_exact_cells", "enabled"), &SdfBody::set_exact_cells);
+	ClassDB::bind_method(D_METHOD("get_exact_cells"), &SdfBody::get_exact_cells);
 	ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &SdfBody::set_debug_view);
 	ClassDB::bind_method(D_METHOD("get_debug_view"), &SdfBody::get_debug_view);
 	ClassDB::bind_method(D_METHOD("get_stats"), &SdfBody::get_stats);
@@ -403,6 +424,7 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_shadows"), "set_live_shadows", "get_live_shadows");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "live_source", PROPERTY_HINT_ENUM, "ADF,Exact"), "set_live_source",
 			"get_live_source");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "exact_cells"), "set_exact_cells", "get_exact_cells");
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);
 	BIND_ENUM_CONSTANT(SHADED);

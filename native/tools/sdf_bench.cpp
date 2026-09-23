@@ -3,12 +3,18 @@
 //   sdf_bench [max_edits]
 // Adaptive distance field (Live display cache): build cost, size and per-stroke updates.
 //   sdf_bench adf
+// Texel fetches per pixel of the Live ADF shader, replayed on the CPU for the Live bench's
+// scenarios (game/bench/live_bench.gd) at 1280x720. The shader is fetch bound, so this
+// ranks optimizations before a GPU run; keep it in step with sdf_live.gdshaderinc.
+//   sdf_bench count
 
 #include "adf/adf.h"
 #include "compile/octree.h"
 #include "demo/gallery.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
@@ -102,9 +108,223 @@ int adf_bench() {
 	return 0;
 }
 
+namespace {
+
+// Replays fragment() of sdf_live.gdshaderinc (ADF source) and tallies texel fetches.
+struct FetchCounter {
+	const Body &body;
+	const Octree &octree;
+	const Adf &adf;
+	double descent = 0, brick = 0, tape = 0, shading = 0, steps = 0, empty_steps = 0, enters = 0, settle_steps = 0, hits = 0;
+	double tape_evals[3] = {0, 0, 0}; // march, settle, normal
+	int phase = 0;
+
+	struct Cell {
+		int node = -1;
+		vec3 lo;
+		float size = -1.0f;
+	};
+
+	const Adf::Node &node(const Cell &c) const { return adf.nodes()[std::size_t(c.node)]; }
+
+	static bool inside(vec3 p, vec3 lo, float size) {
+		const vec3 r = p - lo;
+		return std::min(r.x, std::min(r.y, r.z)) >= 0.0f && std::max(r.x, std::max(r.y, r.z)) <= size;
+	}
+	bool in_root(vec3 p) const { return inside(p, adf.nodes()[0].lo, adf.nodes()[0].size); }
+
+	// sdf_enter_cell: sdf_adf_find_leaf reads the grid texel, then a node texel per level
+	// down to the leaf's, then an exact leaf's cell texel.
+	Cell enter(vec3 p) {
+		const auto &nodes = adf.nodes();
+		const vec3 g = (p - nodes[0].lo) * adf.grid_scale();
+		auto block = [](float c) { return std::clamp(int(std::floor(c)), 0, Adf::kGridSide - 1); };
+		int n = adf.grid()[std::size_t(block(g.x) + Adf::kGridSide * (block(g.y) + Adf::kGridSide * block(g.z)))].node;
+		descent += 2;
+		enters += 1;
+		while (nodes[std::size_t(n)].child >= 0) {
+			const Adf::Node &x = nodes[std::size_t(n)];
+			const float h = x.size * 0.5f;
+			n = x.child + int(p.x >= x.lo.x + h) + 2 * int(p.y >= x.lo.y + h) + 4 * int(p.z >= x.lo.z + h);
+			descent += 1;
+		}
+		descent += nodes[std::size_t(n)].exact() ? 1 : 0;
+		return {n, nodes[std::size_t(n)].lo, nodes[std::size_t(n)].size};
+	}
+	void count_tape(const Adf::Node &n) {
+		const std::uint32_t count = adf.exact_cells()[std::size_t(n.material - Adf::kExactBase)].count;
+		tape += 6.0 * count + std::ceil(count / 4.0) + 1.0;
+		tape_evals[phase] += 1;
+	}
+	// sdf_cell_eval
+	float eval(const Cell &c, vec3 p) {
+		const Adf::Node &n = node(c);
+		if (n.exact()) {
+			count_tape(n);
+		} else if (n.brick >= 0) {
+			brick += 2 + (n.material < 0 ? 1 : 0);
+		}
+		return n.brick < 0 ? n.value : adf.distance(body, octree, p);
+	}
+	float near(Cell &c, vec3 p) {
+		if (!inside(p, c.lo, c.size)) {
+			if (!in_root(p)) {
+				return 1.0f;
+			}
+			c = enter(p);
+		}
+		return eval(c, p);
+	}
+
+	// One pixel's ray.
+	void trace(vec3 ro, vec3 rd, float t0, float t1, float pixel) {
+		float t = t0, eps = 1e-4f, s = 0.0f;
+		Cell c;
+		bool hit = false;
+		phase = 0;
+		for (int i = 0; i < 512 && t <= t1; ++i) {
+			steps += 1;
+			const vec3 p = ro + rd * t;
+			eps = std::max(t * pixel * 0.5f, 1e-4f);
+			if (c.node < 0 || !inside(p, c.lo, c.size)) {
+				if (!in_root(p)) {
+					break;
+				}
+				c = enter(p);
+			}
+			const Adf::Step st = adf.step(p, rd);
+			const Adf::Node &n = node(c);
+			if (n.brick == Adf::kEmpty) {
+				empty_steps += 1;
+				t += st.exit + 1e-4f;
+				continue;
+			}
+			if (n.exact()) {
+				brick += 2;
+				const float coarse = st.d - st.error;
+				if (coarse > eps) {
+					t += std::min(std::max(coarse / n.value, eps * 0.5f), st.exit + 1e-4f);
+					continue;
+				}
+			}
+			s = n.brick == Adf::kSolid ? -1.0f : eval(c, p);
+			if (s < eps) {
+				hit = true;
+				break;
+			}
+			t += std::min(std::max(s / n.value, eps * 0.5f), st.exit + 1e-4f);
+		}
+		if (!hit) {
+			return;
+		}
+		hits += 1;
+		phase = 1;
+		for (int i = 0; i < 4 && std::fabs(s) > std::max(0.1f * eps, 1e-5f); ++i) {
+			t += s;
+			s = near(c, ro + rd * t);
+			settle_steps += 1;
+		}
+		phase = 2;
+		const vec3 p = ro + rd * t;
+		// sdf_adf_normal: one tape pass in exact leaves, four brick lookups otherwise.
+		if (!inside(p, c.lo, c.size) && in_root(p)) {
+			c = enter(p);
+		}
+		if (node(c).exact()) {
+			count_tape(node(c));
+		} else if (node(c).brick >= 0) {
+			brick += 8;
+		}
+		shading += 4; // material colour and properties
+		const vec3 nrm = adf.normal(body, p, eps, -rd);
+		for (float h : {0.3f, 0.9f, 1.8f, 3.0f, 4.5f}) { // sdf_occlusion
+			const vec3 q = p + nrm * h;
+			Cell ao = c;
+			if (!inside(q, ao.lo, ao.size)) {
+				if (!in_root(q)) {
+					continue;
+				}
+				ao = enter(q);
+			}
+			brick += node(ao).brick >= 0 ? 2 : 0;
+		}
+	}
+};
+
+int count_bench() {
+	struct Scenario {
+		const char *name, *demo;
+		int strokes;
+		vec3 eye, target;
+	};
+	const Scenario scenarios[] = {
+			{"panel_fill", "carved_panel", 0, {0, -62, 78}, {0, -3, 0}},
+			{"panel_close", "carved_panel", 0, {6, -26, 32}, {0, 0, 4}},
+			{"session_2000", "session", 1700, {0, -62, 78}, {0, -3, 0}},
+	};
+	const int width = 1280, height = 720, stride = 4; // every 4th pixel each way
+	for (const Scenario &sc : scenarios) {
+		Body body;
+		Camera camera;
+		demo::named_demo(sc.demo, body, camera);
+		for (const Edit &e : demo::random_strokes(body, sc.strokes, 7)) {
+			body.add(e);
+		}
+		Octree oct;
+		oct.build(body);
+		Adf adf;
+		adf.build(body, oct);
+		FetchCounter fc{body, oct, adf};
+		const vec3 f = gl::normalize(sc.target - sc.eye), r = gl::normalize(gl::cross(f, vec3(0, 0, 1))),
+				   u = gl::cross(r, f);
+		const float tan_half = std::tan(gl::radians(38.0f) * 0.5f), pixel = 2.0f * tan_half / float(height);
+		const Aabb box = body.bounds().expanded(0.5f);
+		double covered = 0;
+		for (int y = stride / 2; y < height; y += stride) {
+			for (int x = stride / 2; x < width; x += stride) {
+				const vec3 rd = gl::normalize(f + r * ((2.0f * (x + 0.5f) / width - 1.0f) * tan_half * width / height) +
+						u * ((1.0f - 2.0f * (y + 0.5f) / height) * tan_half));
+				float t0 = 0.0f, t1 = 1e9f;
+				for (int a = 0; a < 3; ++a) {
+					const float o = (&sc.eye.x)[a], d = (&rd.x)[a];
+					const float inv = 1.0f / (std::fabs(d) > 1e-12f ? d : 1e-12f);
+					float ta = ((&box.lo.x)[a] - o) * inv, tb = ((&box.hi.x)[a] - o) * inv;
+					if (ta > tb) {
+						std::swap(ta, tb);
+					}
+					t0 = std::max(t0, ta);
+					t1 = std::min(t1, tb);
+				}
+				if (t0 > t1) {
+					continue;
+				}
+				covered += 1;
+				fc.trace(sc.eye, rd, t0, t1, pixel);
+			}
+		}
+		const double total = fc.descent + fc.brick + fc.tape + fc.shading;
+		std::printf("%-13s per pixel on the proxy: %5.1f steps; texel fetches: descent %5.1f, bricks %5.1f, tapes %6.1f,"
+					" shading %3.1f, total %6.1f\n",
+				sc.name, fc.steps / covered, fc.descent / covered, fc.brick / covered, fc.tape / covered,
+				fc.shading / covered, total / covered);
+		std::printf("              tape evaluations %.2f march + %.2f settle + %.2f normal; %.1f settling steps per hit;"
+					" %.0f%% of the proxy hit\n",
+				fc.tape_evals[0] / covered, fc.tape_evals[1] / covered, fc.tape_evals[2] / covered, fc.settle_steps / fc.hits,
+				100.0 * fc.hits / covered);
+		std::printf("              %.1f steps through empty cells; %.1f descents of %.1f fetches\n", fc.empty_steps / covered,
+				fc.enters / covered, fc.descent / fc.enters);
+	}
+	return 0;
+}
+
+} // namespace
+
 int main(int argc, char **argv) {
 	if (argc > 1 && std::string(argv[1]) == "adf") {
 		return adf_bench();
+	}
+	if (argc > 1 && std::string(argv[1]) == "count") {
+		return count_bench();
 	}
 	const int max_edits = argc > 1 ? std::atoi(argv[1]) : 100000;
 	for (int n = 1000; n <= max_edits; n *= 10) {

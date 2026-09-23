@@ -54,6 +54,13 @@ public:
 	struct ExactCell {
 		std::uint32_t offset = 0, count = 0; // entries of exact_tape(), as in Octree::Leaf::tape
 		bool base = true;                     // whether the base primitive is still in play
+		// How far the leaf's brick strays from the tape near the surface: twice the largest
+		// difference measured at the centres of the voxels there, plus filtering precision.
+		// Rays march on the brick until it is within this of the hit epsilon. (The worst case,
+		// L * voxel * sqrt(3), is some 30x wider at creases and would send far more steps to
+		// the tape; an underestimate costs microns of overshoot, which the hit's settling steps
+		// take back.)
+		float error = 0;
 	};
 
 	struct Node {
@@ -97,21 +104,45 @@ public:
 	float approx_distance(vec3 p) const;
 	// With the material of the nearest sample (or the tape's, in exact leaves).
 	Sample sample(const Body &body, const Octree &octree, vec3 p) const;
-	// Leaf node containing p, or -1 outside the root.
+	// Leaf node containing p, or -1 outside the root: from the grid cell containing p down.
 	int leaf(vec3 p) const;
+
+	// A dense grid over the root cube, kGridSide blocks a side: each block's deepest node
+	// covering all of it (the block's node at depth kGridLevels, or a leaf above it), so a
+	// lookup descends a few levels from there rather than a dozen from the root.
+	static constexpr int kGridLevels = 6;
+	static constexpr int kGridSide = 1 << kGridLevels;
+	struct GridCell {
+		std::int32_t node = 0;
+		std::int32_t depth = 0;
+	};
+	// x fastest, then y, then z.
+	const std::vector<GridCell> &grid() const { return grid_; }
+	// Blocks per millimetre: grid coordinates are (p - root lo) * grid_scale(). One multiply,
+	// correctly rounded on CPUs and GPUs alike, so both pick the same block.
+	float grid_scale() const { return float(kGridSide) / nodes_[0].size; }
 
 	struct Step {
 		float d;        // brick value at p (+inf in empty cells, -1 in solid ones)
 		float exit;     // distance along dir to where the ray leaves the cell
 		std::int32_t brick;
 		bool exact;     // an exact leaf: d is only within `error` of the field
-		float error;    // bound on |brick value - field| in the cell (exact leaves)
+		float error;    // its ExactCell::error (exact leaves), else 0
 		float lipschitz;
 		float voxel;    // sample spacing in the cell
 	};
 	// For tracing: the cell containing p and its brick's value there. In an exact leaf,
 	// step by (d - error) while that exceeds the hit epsilon, then evaluate the tape.
 	Step step(vec3 p, vec3 dir) const;
+
+	// The surface normal at p (a converged hit), as the Live shader computes it: tetrahedral
+	// differences within the leaf containing p, never descending again. An exact leaf
+	// differences its tape with h = clamp(eps, 2e-3, kExactNormalReach): its tape is exact
+	// that close outside it too, as pruning keeps every edit within the value margin of the
+	// cell. A brick leaf differences its brick half a voxel apart (or eps, if larger), the
+	// stencil shifted to stay inside the leaf. `fallback` elsewhere (not on the surface).
+	vec3 normal(const Body &body, vec3 p, float eps, vec3 fallback) const;
+	static constexpr float kExactNormalReach = 0.25f;
 
 	const std::vector<Node> &nodes() const { return nodes_; }
 	// Half floats, kBrickSamples per slot, x fastest, then y, then z.
@@ -130,6 +161,7 @@ public:
 
 private:
 	void rebuild(const Body &body, const Octree &octree, const Aabb &region, bool reuse);
+	void build_grid();
 
 	AdfParams params_;
 	std::vector<Node> nodes_;
@@ -138,6 +170,7 @@ private:
 	std::vector<ExactCell> exact_cells_;
 	std::vector<std::uint32_t> exact_tape_;
 	std::vector<std::uint32_t> dirty_bricks_, dirty_materials_;
+	std::vector<GridCell> grid_;
 	std::size_t live_bricks_ = 0, live_materials_ = 0, rebuilt_ = 0;
 	double seconds_ = 0;
 };

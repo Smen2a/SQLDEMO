@@ -50,6 +50,11 @@ public:
 	bool get_live_shadows() const { return live_shadows_; }
 	void set_live_source(int source);
 	int get_live_source() const { return live_source_; }
+	// Off: the ADF's exact cells (creases) march and shade on their bricks instead of their
+	// tapes, which rounds creases and uses the base material there. For measuring what
+	// exact cells cost; always on otherwise.
+	void set_exact_cells(bool enabled);
+	bool get_exact_cells() const { return exact_cells_; }
 	godot::Dictionary get_stats() const;
 	godot::AABB get_body_bounds() const;
 
@@ -74,6 +79,7 @@ private:
 	int debug_view_ = SHADED;
 	bool live_shadows_ = false;
 	int live_source_ = LIVE_ADF;
+	bool exact_cells_ = true;
 
 	// The visible surface draws in one pass (sdf_live_single.gdshader), never through the
 	// opaque pipeline: Forward+ redraws opaque materials after its depth prepass with an
@@ -83,7 +89,8 @@ private:
 	godot::Ref<godot::ShaderMaterial> material_;
 	godot::MeshInstance3D *shadow_caster_ = nullptr;
 	godot::Ref<godot::ShaderMaterial> caster_material_;
-	godot::Ref<godot::ImageTexture> nodes_tex_, tape_tex_, edits_tex_, materials_tex_, adf_nodes_tex_, adf_cells_tex_;
+	godot::Ref<godot::ImageTexture> nodes_tex_, tape_tex_, edits_tex_, materials_tex_, adf_nodes_tex_, adf_cells_tex_,
+			adf_grid_tex_;
 	godot::Ref<godot::Texture2DArray> bricks_tex_, brick_materials_tex_;
 	double last_update_ms_ = 0;
 };
