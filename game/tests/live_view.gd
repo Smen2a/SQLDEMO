@@ -9,6 +9,7 @@ extends "res://tests/harness.gd"
 ##   --ortho=<height>     orthographic camera showing <height> millimetres vertically
 ##   --floor              add a floor under the body and a bar through it, to check
 ##                        shadows and depth composition against ordinary meshes
+##   --live-shadows       let the body cast shadow-map shadows (SdfBody.live_shadows)
 ## plus the harness's --screenshot and --frames.
 
 const LIGHT_DIR := Vector3(-0.55, -0.40, 0.73)
@@ -27,6 +28,7 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	body.debug_view = ["shaded", "normals", "steps", "albedo"].find(view)
+	body.live_shadows = "--live-shadows" in OS.get_cmdline_user_args()
 	print("stats: ", body.get_stats())
 
 	var camera := Camera3D.new()

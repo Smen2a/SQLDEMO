@@ -11,8 +11,7 @@ extends Node3D
 ## scenario (default 240), --view=steps to show step-count heat maps, --shots=<dir> to save
 ## a screenshot of each scenario. To see where the time goes: --shadows=off (no shadow
 ## passes at all), --live-shadows=on (Live bodies cast shadows by raymarching in the shadow
-## passes; off by default), --single-pass=off (opaque pipeline: depth prepass + colour
-## pass), --ao=off (no SDF ambient occlusion), --scale3d=<f> (render 3D at f times the
+## passes; off by default), --ao=off (no SDF ambient occlusion), --scale3d=<f> (render 3D at f times the
 ## window resolution, e.g. 0.5, and upscale).
 ##
 ## Gate targets at 1920x1080: a bench-filling body <= ~6 ms GPU, three Live bodies <= ~8 ms.
@@ -66,8 +65,8 @@ func _ready() -> void:
 	var size := get_viewport().get_visible_rect().size
 	print("Live raymarch benchmark: %s, %s, %dx%d" % [RenderingServer.get_video_adapter_name(),
 			RenderingServer.get_current_rendering_method(), size.x, size.y])
-	print("  shadows %s, live shadows %s, single pass %s, AO %s, 3D scale %s" % [_arg("--shadows", "on"),
-			_arg("--live-shadows", "off"), _arg("--single-pass", "on"), _arg("--ao", "on"), _arg("--scale3d", "1")])
+	print("  shadows %s, live shadows %s, AO %s, 3D scale %s" % [_arg("--shadows", "on"),
+			_arg("--live-shadows", "off"), _arg("--ao", "on"), _arg("--scale3d", "1")])
 	if size != Vector2(1920, 1080):
 		print("  (gate targets assume 1920x1080; the window is %dx%d)" % [size.x, size.y])
 
@@ -100,7 +99,6 @@ func _run(name: String, s: Array, frames: int) -> Array:
 			body.add_random_strokes(layout[2], 7)
 		body.debug_view = view
 		body.live_shadows = _arg("--live-shadows", "off") == "on"
-		body.live_single_pass = _arg("--single-pass", "on") == "on"
 		body.material_override.set_shader_parameter("sdf_ambient_occlusion", _arg("--ao", "on") == "on")
 		_bodies.append(body)
 	_camera.look_at_from_position(s[2], s[3], Vector3(0, 0, 1))

@@ -89,31 +89,23 @@ Ref<ArrayMesh> proxy_box(const Aabb &b) {
 } // namespace
 
 SdfBody::SdfBody() {
-	opaque_shader_ = ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live.gdshader");
-	single_pass_shader_ = ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live_single.gdshader");
 	material_.instantiate();
+	material_->set_shader(ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live_single.gdshader"));
 	set_material_override(material_);
-	update_pipeline();
-}
+	set_cast_shadows_setting(SHADOW_CASTING_SETTING_OFF);
 
-void SdfBody::update_pipeline() {
-	const bool opaque = live_shadows_ || !live_single_pass_;
-	material_->set_shader(opaque ? opaque_shader_ : single_pass_shader_);
-	set_cast_shadows_setting(live_shadows_ ? SHADOW_CASTING_SETTING_ON : SHADOW_CASTING_SETTING_OFF);
-	if (octree_.nodes().empty()) {
-		return;
-	}
-	update_material(); // a new shader starts from default parameters
+	caster_material_.instantiate();
+	caster_material_->set_shader(ResourceLoader::get_singleton()->load("res://shaders/sdf/sdf_live.gdshader"));
+	shadow_caster_ = memnew(MeshInstance3D);
+	shadow_caster_->set_material_override(caster_material_);
+	shadow_caster_->set_cast_shadows_setting(SHADOW_CASTING_SETTING_SHADOWS_ONLY);
+	shadow_caster_->set_visible(false);
+	add_child(shadow_caster_, false, INTERNAL_MODE_FRONT);
 }
 
 void SdfBody::set_live_shadows(bool enabled) {
 	live_shadows_ = enabled;
-	update_pipeline();
-}
-
-void SdfBody::set_live_single_pass(bool enabled) {
-	live_single_pass_ = enabled;
-	update_pipeline();
+	shadow_caster_->set_visible(enabled);
 }
 
 bool SdfBody::load_demo(const String &name) {
@@ -151,7 +143,9 @@ void SdfBody::add_random_strokes(int count, int seed) {
 void SdfBody::rebuild() {
 	octree_.build(body_);
 	// The proxy only needs to cover the body; the octree's root cube is usually larger.
-	set_mesh(proxy_box(body_.bounds().expanded(0.5f)));
+	const Ref<ArrayMesh> proxy = proxy_box(body_.bounds().expanded(0.5f));
+	set_mesh(proxy);
+	shadow_caster_->set_mesh(proxy);
 	upload_textures();
 	update_material();
 }
@@ -212,25 +206,31 @@ void SdfBody::upload_textures() {
 }
 
 void SdfBody::update_material() {
+	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
+		apply_parameters(m);
+	}
+}
+
+void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	const Octree::Node &root = octree_.nodes()[0];
 	const Aabb box = body_.bounds().expanded(0.5f);
-	material_->set_shader_parameter("sdf_nodes", nodes_tex_);
-	material_->set_shader_parameter("sdf_tape", tape_tex_);
-	material_->set_shader_parameter("sdf_edits", edits_tex_);
-	material_->set_shader_parameter("sdf_materials", materials_tex_);
-	material_->set_shader_parameter("sdf_root_lo", to_godot(root.lo));
-	material_->set_shader_parameter("sdf_root_size", root.size);
-	material_->set_shader_parameter("sdf_box_lo", to_godot(box.lo));
-	material_->set_shader_parameter("sdf_box_hi", to_godot(box.hi));
-	material_->set_shader_parameter("sdf_base_type", int(body_.base.type));
+	material->set_shader_parameter("sdf_nodes", nodes_tex_);
+	material->set_shader_parameter("sdf_tape", tape_tex_);
+	material->set_shader_parameter("sdf_edits", edits_tex_);
+	material->set_shader_parameter("sdf_materials", materials_tex_);
+	material->set_shader_parameter("sdf_root_lo", to_godot(root.lo));
+	material->set_shader_parameter("sdf_root_size", root.size);
+	material->set_shader_parameter("sdf_box_lo", to_godot(box.lo));
+	material->set_shader_parameter("sdf_box_hi", to_godot(box.hi));
+	material->set_shader_parameter("sdf_base_type", int(body_.base.type));
 	const char *names[] = {"sdf_base_p0", "sdf_base_p1", "sdf_base_p2", "sdf_base_p3", "sdf_base_p4"};
 	for (int i = 0; i < 5; ++i) {
-		material_->set_shader_parameter(names[i], to_godot(body_.base.p[i]));
+		material->set_shader_parameter(names[i], to_godot(body_.base.p[i]));
 	}
-	material_->set_shader_parameter("sdf_base_material", float(body_.base_material));
-	material_->set_shader_parameter("sdf_grain_origin", to_godot(body_.grain_origin));
-	material_->set_shader_parameter("sdf_grain_axis", to_godot(body_.grain_axis));
-	material_->set_shader_parameter("sdf_debug_view", debug_view_);
+	material->set_shader_parameter("sdf_base_material", float(body_.base_material));
+	material->set_shader_parameter("sdf_grain_origin", to_godot(body_.grain_origin));
+	material->set_shader_parameter("sdf_grain_axis", to_godot(body_.grain_axis));
+	material->set_shader_parameter("sdf_debug_view", debug_view_);
 }
 
 void SdfBody::set_debug_view(int view) {
@@ -260,8 +260,6 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
 	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
 	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
-	ClassDB::bind_method(D_METHOD("set_live_single_pass", "enabled"), &SdfBody::set_live_single_pass);
-	ClassDB::bind_method(D_METHOD("get_live_single_pass"), &SdfBody::get_live_single_pass);
 	ClassDB::bind_method(D_METHOD("set_debug_view", "view"), &SdfBody::set_debug_view);
 	ClassDB::bind_method(D_METHOD("get_debug_view"), &SdfBody::get_debug_view);
 	ClassDB::bind_method(D_METHOD("get_stats"), &SdfBody::get_stats);
@@ -269,7 +267,6 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "debug_view", PROPERTY_HINT_ENUM, "Shaded,Normals,Steps,Albedo"), "set_debug_view",
 			"get_debug_view");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_shadows"), "set_live_shadows", "get_live_shadows");
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "live_single_pass"), "set_live_single_pass", "get_live_single_pass");
 	BIND_ENUM_CONSTANT(SHADED);
 	BIND_ENUM_CONSTANT(NORMALS);
 	BIND_ENUM_CONSTANT(STEPS);

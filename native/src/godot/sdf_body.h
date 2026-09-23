@@ -41,11 +41,6 @@ public:
 	// it is off by default; the baked mesh will cast them instead.
 	void set_live_shadows(bool enabled);
 	bool get_live_shadows() const { return live_shadows_; }
-	// Draw in Godot's transparent pipeline, which runs the raymarch once per pixel instead
-	// of twice (depth prepass + colour pass). Ignored while live_shadows is on: that needs
-	// the opaque pipeline.
-	void set_live_single_pass(bool enabled);
-	bool get_live_single_pass() const { return live_single_pass_; }
 	godot::Dictionary get_stats() const;
 	godot::AABB get_body_bounds() const;
 
@@ -56,7 +51,7 @@ private:
 	void rebuild();          // octree + proxy mesh + textures
 	void upload_textures();  // flatten octree, edits and materials into data textures
 	void update_material();
-	void update_pipeline(); // shader and shadow casting from live_shadows / live_single_pass
+	void apply_parameters(const godot::Ref<godot::ShaderMaterial> &material);
 
 	sdf::Body body_;
 	sdf::Octree octree_;
@@ -64,10 +59,15 @@ private:
 	sdf::Camera demo_camera_;
 	int debug_view_ = SHADED;
 	bool live_shadows_ = false;
-	bool live_single_pass_ = true;
 
+	// The visible surface draws in one pass (sdf_live_single.gdshader), never through the
+	// opaque pipeline: Forward+ redraws opaque materials after its depth prepass with an
+	// exact-equality depth test, and a depth recomputed by a separately compiled variant
+	// misses it on some pixels (speckle). Shadows come from an internal child that runs
+	// the opaque shader in shadow passes only.
 	godot::Ref<godot::ShaderMaterial> material_;
-	godot::Ref<godot::Shader> opaque_shader_, single_pass_shader_;
+	godot::MeshInstance3D *shadow_caster_ = nullptr;
+	godot::Ref<godot::ShaderMaterial> caster_material_;
 	godot::Ref<godot::ImageTexture> nodes_tex_, tape_tex_, edits_tex_, materials_tex_;
 };
 

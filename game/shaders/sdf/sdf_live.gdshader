@@ -1,6 +1,9 @@
-// Live SdfBody, opaque: Godot runs it in the depth prepass and again in the colour pass,
-// and in shadow passes when the body casts shadows (SdfBody.live_shadows). See
-// sdf_live.gdshaderinc for the raymarch itself.
+// Live SdfBody's shadow caster: an internal SHADOWS_ONLY child runs this opaque variant in
+// shadow passes when SdfBody.live_shadows is on. It must never draw the visible surface:
+// Forward+ redraws opaque materials after the depth prepass with an exact-equality depth
+// test (scene_shader_forward_clustered.cpp), and a raymarched depth recomputed by a
+// separately compiled variant misses it on some pixels, which shows as speckle. The
+// visible surface uses sdf_live_single.gdshader. See sdf_live.gdshaderinc for the raymarch.
 //
 // Shadows: casting works everywhere, since the shadow pass runs this shader and takes the
 // raymarched DEPTH. Receiving needs the shadow lookup at LIGHT_VERTEX, which Forward+ and

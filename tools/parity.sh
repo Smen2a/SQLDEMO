@@ -7,7 +7,7 @@
 #
 #   tools/parity.sh [case ...]     case = <demo>:<normals|albedo>; default: the full set
 #
-# PARITY_ARGS passes extra arguments to the Godot scene, e.g. --single-pass=off.
+# PARITY_ARGS passes extra arguments to the Godot scene.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

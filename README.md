@@ -153,8 +153,12 @@ The measured times track the fetch count (close-up ≈ 1.6× the panel's, 2000 s
 What changed:
 - Live bodies no longer cast shadows by raymarching unless `live_shadows` is on; the
   baked mesh (E4) will cast them.
-- They draw in one pass (`live_single_pass`, `sdf_live_single.gdshader`: the transparent
-  pipeline, which skips the depth prepass but still writes depth).
+- They draw in one pass (`sdf_live_single.gdshader`: the transparent pipeline, which skips
+  the depth prepass but still writes depth). This also fixed speckle on Forward+: after its
+  prepass, Forward+ redraws opaque materials with an exact-equality depth test, and a
+  raymarched depth recomputed by a separately compiled shader variant misses it on some
+  pixels. With `live_shadows` on, an internal shadows-only child runs the opaque variant
+  in shadow passes, where no such test applies.
 - The ray and the post-hit taps stay in their octree cell.
 - Edit, node and tape records are packed tighter.
 
@@ -170,7 +174,7 @@ godot --path game --rendering-method gl_compatibility res://bench/live_bench.tsc
 ```
 
 Use a 1920x1080 window if the screen allows. The switches after `--` show where time goes:
-`--shadows=off`, `--live-shadows=on`, `--single-pass=off`, `--ao=off`, and `--scale3d=0.5`
+`--shadows=off`, `--live-shadows=on`, `--ao=off`, and `--scale3d=0.5`
 for half-resolution 3D. `--view=steps` shows step-count heat maps, and `--shots=<dir>`
 saves each scenario.
 

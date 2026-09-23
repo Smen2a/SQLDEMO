@@ -2,7 +2,8 @@
 // sphere-traced through the body's octree in body-local millimetres. Each octree leaf
 // carries a pruned tape of edits, interpreted here with the same shared functions the C++
 // evaluator uses, so what is drawn is the body itself, not an approximation of it.
-// Included by sdf_live.gdshader (opaque) and sdf_live_single.gdshader (one pass).
+// Included by sdf_live_single.gdshader (the visible surface, one pass) and
+// sdf_live.gdshader (opaque, shadow passes only).
 //
 // Mirrors native/src/core/eval/reference_renderer.cpp (octree path): empty cells are
 // skipped whole, steps are clamped to the cell exit and divided by the leaf's Lipschitz
