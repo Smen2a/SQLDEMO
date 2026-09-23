@@ -1,5 +1,6 @@
 #include "edit/session.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace sdf {
@@ -54,24 +55,22 @@ void EditSession::set_adf(bool with_adf) {
 }
 
 bool EditSession::set_stroke(const std::vector<Edit> &edits) {
-	for (const Edit &e : edits) {
-		if (!Body::accepts(e)) {
-			return false;
-		}
-	}
-	apply(body_.edits().size() - stroke_, edits);
-	stroke_ = edits.size();
-	return true;
+	return revise_stroke(stroke_, edits);
 }
 
 bool EditSession::extend_stroke(const std::vector<Edit> &edits) {
+	return revise_stroke(0, edits);
+}
+
+bool EditSession::revise_stroke(std::size_t drop, const std::vector<Edit> &edits) {
 	for (const Edit &e : edits) {
 		if (!Body::accepts(e)) {
 			return false;
 		}
 	}
-	apply(body_.edits().size(), edits);
-	stroke_ += edits.size();
+	drop = std::min(drop, stroke_);
+	apply(body_.edits().size() - drop, edits);
+	stroke_ = stroke_ - drop + edits.size();
 	return true;
 }
 

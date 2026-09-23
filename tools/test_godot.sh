@@ -3,6 +3,8 @@
 #   - the shared SDF includes and the Live shader compile in Godot's shader pipeline
 #   - the extension loads and builds a body
 #   - the Live path renders a shaded scene with shadows and mesh intersections
+#   - the workshop: each tool, driven through the scene's own pointer methods, cuts, and
+#     undo takes a stroke back
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 # Fails on any shader or script error. Needs xvfb-run and a software OpenGL driver; set
 # GODOT as for tools/run.sh.
@@ -37,5 +39,6 @@ check extension_smoke "extension smoke: carved panel" res://tests/extension_smok
 check live_sphere "Screenshot saved" --render res://tests/live_view.tscn -- --demo=sphere --floor \
 	--screenshot="$OUT/live_sphere.png"
 check live_panel "Screenshot saved" --render res://tests/live_view.tscn -- --screenshot="$OUT/live_panel.png"
+check workshop_drive "workshop drive: chisel" --render res://tests/workshop_drive.tscn -- --out="$OUT"
 "$ROOT/tools/parity.sh" || status=1
 exit $status

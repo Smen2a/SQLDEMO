@@ -12,6 +12,7 @@ config_version=5
 
 config/name="Object Builder"
 config/description="SDF engine test bed: carvable, joinable parts rendered from signed distance fields."
+run/main_scene="res://workshop/workshop.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [display]

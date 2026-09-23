@@ -33,6 +33,8 @@ public:
 	bool set_stroke(const std::vector<Edit> &edits);
 	// Appends `edits` to the stroke in progress: only cells they reach are re-sampled.
 	bool extend_stroke(const std::vector<Edit> &edits);
+	// Drops the stroke's last `drop` edits (at most all of them), then appends `edits`.
+	bool revise_stroke(std::size_t drop, const std::vector<Edit> &edits);
 	void commit();  // the stroke in progress, if it has edits, becomes an undo step
 	void cancel();  // drops the stroke in progress
 	bool undo();    // removes the last step (dropping any stroke in progress first)

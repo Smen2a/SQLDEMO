@@ -178,9 +178,8 @@ TEST(tool_strokes_cut_what_their_tools_cut) {
 		std::vector<Edit> edits;
 		for (const vec3 &p : path) {
 			const tools::StrokeUpdate u = stroke.move_to(p);
-			if (u.replace) {
-				edits.clear();
-			}
+			CHECK(u.drop <= edits.size());
+			edits.resize(edits.size() - std::min(u.drop, edits.size()));
 			edits.insert(edits.end(), u.edits.begin(), u.edits.end());
 		}
 		const std::vector<Edit> end = stroke.finish();
@@ -201,6 +200,22 @@ TEST(tool_strokes_cut_what_their_tools_cut) {
 		}
 	}
 	CHECK_NEAR(push->pose().origin.x, 20.0, 1e-3);
+	// A long push stays a few edits: a ramp, 10 mm pieces and the lift-out.
+	auto long_push = tools::chisel_stroke(chisel, {-60, 0, top}, up, {1, 0, 0}, 1.0f);
+	std::vector<vec3> steps;
+	for (float x = -58.0f; x <= 40.0f; x += 0.7f) {
+		steps.push_back({x, 0, top});
+	}
+	const std::vector<Edit> pieces = run(*long_push, steps);
+	CHECK(pieces.size() <= 14);
+	// And its pieces join without leaving slivers: halfway down the flat run, the nearest
+	// surface is the floor, half a millimetre away (a zero-thickness wall would read 0).
+	const Body pared = board_with(pieces);
+	float clearance = 1.0f;
+	for (float x = -55.0f; x <= 37.0f; x += 0.01f) {
+		clearance = std::min(clearance, pared.sample_exhaustive({x, 0.0f, top - 0.5f}).d);
+	}
+	CHECK_NEAR(clearance, 0.5, 1e-3);
 	CHECK_NEAR(push->pose().origin.z, top - 1.5, 1e-3);
 
 	// Saw: 20 strokes of 20 mm at 0.02 mm per mm: 8 mm deep, in slices.
@@ -211,12 +226,25 @@ TEST(tool_strokes_cut_what_their_tools_cut) {
 	}
 	strokes.insert(strokes.begin(), vec3(0, 0, top));
 	const std::vector<Edit> slices = run(*sawing, strokes);
-	CHECK(slices.size() > 10);
+	CHECK(slices.size() >= 7 && slices.size() <= 9); // 1 mm slices, the last one open
 	const Heights sawn(board_with(slices));
 	for (float y = -40.0f; y <= 40.0f; y += 10.0f) {
 		CHECK_NEAR(sawn.at(0.0f, y), top - 0.02f * (10.0f + 20.0f * 19.0f), 2e-3); // 390 mm of travel
 		CHECK_NEAR(sawn.at(0.6f, y), top, 2e-3);
 	}
+	// Down the middle of the kerf the nearest surface is a wall, 0.4 mm away: no seams.
+	float in_kerf = 1.0f;
+	for (float z = top - 0.5f; z >= top - 7.3f; z -= 0.005f) {
+		in_kerf = std::min(in_kerf, sawn.body.sample_exhaustive({0.0f, 5.0f, z}).d);
+	}
+	CHECK_NEAR(in_kerf, 0.4, 1e-3);
+
+	// Sawn through, the saw stops going deeper.
+	auto through = tools::saw_stroke(tools::Saw{}, {0, 0, top}, up, {0, 1, 0}, 0.05f, 26.0f);
+	for (int k = 0; k < 40; ++k) {
+		through->move_to({0, k % 2 ? -10.0f : 10.0f, top});
+	}
+	CHECK_NEAR(-through->pose().origin.z + top, 26.0, 1e-3);
 
 	// Sanding: the pass replaces itself as the block moves; the last one stands.
 	auto rub = tools::sanding_stroke(tools::SandingBlock{}, {0, 0, top}, up, {1, 0, 0});

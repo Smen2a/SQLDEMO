@@ -107,8 +107,9 @@ protected:
 private:
 	// An edit-session command, queued on the main thread and applied on a worker.
 	struct Command {
-		enum Kind { REPLACE, EXTEND, COMMIT, CANCEL, UNDO, REDO } kind;
-		std::vector<Edit> edits;
+		enum Kind { STROKE, COMMIT, CANCEL, UNDO, REDO } kind;
+		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
+		std::vector<Edit> edits; // then append these
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body

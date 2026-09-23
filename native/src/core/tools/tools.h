@@ -77,17 +77,19 @@ struct SandingBlock {
 	Edit pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const;
 };
 
-// What a stroke asks of the edit session after the tool moves.
+// What a stroke asks of the edit session after the tool moves: drop its last `drop` edits,
+// then append `edits`.
 struct StrokeUpdate {
-	bool replace = false;    // replace the stroke in progress with `edits`, else append them
-	std::vector<Edit> edits; // (replace with none: clear it)
-	bool empty() const { return !replace && edits.empty(); }
+	std::size_t drop = 0;
+	std::vector<Edit> edits;
+	bool empty() const { return drop == 0 && edits.empty(); }
 };
 
 // A tool in use, from engaging it to lifting it off: it turns the tool's motion into edits.
-// Cuts that only ever grow (a chisel pushing on, a saw going deeper) are appended piece by
-// piece, so each update touches only the new part; a sanding pass changes throughout, so
-// it replaces the stroke.
+// Cuts that only ever grow (a chisel pushing on, a saw going deeper) keep their newest piece
+// open, re-cutting just that as it grows and freezing it at a set size, so an update
+// touches only the part that moved and a stroke stays a handful of edits. A sanding pass
+// changes throughout, so it replaces itself.
 class Stroke {
 public:
 	virtual ~Stroke() = default;
@@ -103,8 +105,9 @@ public:
 // direction (after 2 mm), cutting `depth` deep. It cannot un-cut: pulling back does nothing.
 std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 normal, vec3 facing, float depth);
 // A saw set on the surface at `contact` along `along`: each millimetre of blade travel,
-// either way, deepens the kerf by `feed`.
-std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed);
+// either way, deepens the kerf by `feed`, down to `max_depth` (through the work).
+std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed,
+		float max_depth = 1e9f);
 // A sanding block pressed flat at `contact` (its length along `along`), rubbed about the
 // plane there: it takes removal_per_mm() off per millimetre travelled, over what it covered.
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, vec3 contact, vec3 normal, vec3 along);

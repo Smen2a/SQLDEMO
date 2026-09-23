@@ -183,8 +183,9 @@ Edit Saw::kerf_cut(vec3 centre, vec3 along, vec3 normal, float depth) const {
 Edit Saw::kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth) const {
 	const Frame f = Frame::at(centre, normal, along);
 	const float half = blade_length * 0.5f;
-	// A slice overlaps the one above it a little; the first reaches well above the surface.
-	const float height = from_depth > 0.0f ? to_depth - from_depth + 0.05f : to_depth + 5.0f;
+	// A slice reaches a millimetre up into the one above it (the seam between overlapping
+	// cuts must not read as a surface: see ChiselStroke); the first, well above the work.
+	const float height = from_depth > 1.0f ? to_depth - from_depth + 1.0f : to_depth + 5.0f;
 	return cut(Primitive::sweep(centre - f.x * half - f.z * to_depth, centre + f.x * half - f.z * to_depth, f.z,
 			ToolProfile::flat(kerf, height)));
 }
@@ -246,15 +247,28 @@ public:
 			moving_ = true;
 			dir_ = gl::normalize(d);
 			reached_ = depth_ / std::tan(chisel_.approach_deg * kDegToRad);
+			run_from_ = ramp_end_ = reached_;
 			u.edits = chisel_.paring(start_, start_ + dir_ * reached_, n_, depth_);
 			return u;
 		}
-		// Then the flat run grows forward in steps of at least a millimetre.
+		// Then the flat run grows forward: its newest piece is re-cut as it lengthens, and
+		// left behind once it is 10 mm long.
 		const float along = gl::dot(d, dir_);
-		if (along >= reached_ + 1.0f) {
-			u.edits.push_back(cut(Primitive::sweep(edge(), start_ + dir_ * along - n_ * depth_, n_,
-					ToolProfile::flat(chisel_.width, depth_ + 2.0f))));
-			reached_ = along;
+		if (along < reached_ + 0.5f) {
+			return u;
+		}
+		reached_ = along;
+		u.drop = open_ ? 1 : 0;
+		// Each piece starts inside the one before (not the ramp): cuts ending flush would
+		// leave a wall of zero thickness, and even overlapping ones leave a seam where the
+		// field, only a bound inside the union, drops to half the overlap. A seam thinner
+		// than the hit epsilon would show as a wall; 2 mm keeps it deeper than the floor.
+		const float from = std::max(run_from_ - kOverlap, ramp_end_);
+		u.edits.push_back(cut(Primitive::sweep(point_at(from), point_at(reached_), n_,
+				ToolProfile::flat(chisel_.width, depth_ + 2.0f))));
+		open_ = reached_ - run_from_ < 10.0f;
+		if (!open_) {
+			run_from_ = reached_;
 		}
 		return u;
 	}
@@ -263,58 +277,64 @@ public:
 		if (!moving_) {
 			return {};
 		}
-		return {chisel_.lift_out(edge(), dir_, n_, depth_)};
+		return {chisel_.lift_out(point_at(reached_), dir_, n_, depth_)};
 	}
 
-	Frame pose() const override { return Frame::at(moving_ ? edge() : start_, n_, dir_); }
+	Frame pose() const override { return Frame::at(moving_ ? point_at(reached_) : start_, n_, dir_); }
+
+	static constexpr float kOverlap = 2.0f;
 
 private:
-	vec3 edge() const { return start_ + dir_ * reached_ - n_ * depth_; }
+	vec3 point_at(float along) const { return start_ + dir_ * along - n_ * depth_; }
 
 	Chisel chisel_;
 	vec3 start_, n_, dir_;
 	float depth_;
-	bool moving_ = false;
-	float reached_ = 0.0f; // how far along dir_ the edge has cut
+	bool moving_ = false, open_ = false;
+	float reached_ = 0.0f;  // how far along dir_ the edge has cut
+	float run_from_ = 0.0f; // where the open piece of the flat run starts
+	float ramp_end_ = 0.0f;
 };
 
 class SawStroke : public Stroke {
 public:
-	SawStroke(const Saw &s, vec3 contact, vec3 normal, vec3 along, float feed)
-		: saw_(s), frame_(Frame::at(contact, normal, along)), feed_(feed) {}
+	SawStroke(const Saw &s, vec3 contact, vec3 normal, vec3 along, float feed, float max_depth)
+		: saw_(s), frame_(Frame::at(contact, normal, along)), feed_(feed), max_depth_(max_depth) {}
 
 	StrokeUpdate move_to(vec3 point) override {
 		const float s = gl::dot(point - frame_.origin, frame_.x);
-		depth_ += feed_ * std::fabs(s - position_);
+		depth_ = std::min(depth_ + feed_ * std::fabs(s - position_), max_depth_);
 		// The blade slides with the hand but stays in the board.
 		const float reach = saw_.blade_length * 0.5f - 20.0f;
 		position_ = std::clamp(s, -reach, reach);
 		StrokeUpdate u;
-		if (depth_ >= sliced_ + 0.25f) {
-			u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, sliced_, depth_));
-			sliced_ = depth_;
+		// The kerf's newest slice is re-cut as it deepens, and left behind at 1 mm.
+		if (depth_ >= cut_ + 0.05f) {
+			u.drop = open_ ? 1 : 0;
+			u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, frozen_, depth_));
+			cut_ = depth_;
+			open_ = depth_ - frozen_ < 1.0f;
+			if (!open_) {
+				frozen_ = depth_;
+			}
 		}
 		return u;
 	}
 
-	std::vector<Edit> finish() override {
-		if (depth_ > sliced_ + 1e-3f) {
-			return {saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, sliced_, depth_)};
-		}
-		return {};
-	}
-
 	Frame pose() const override {
 		Frame f = frame_;
-		f.origin = frame_.point({position_, 0.0f, -sliced_});
+		f.origin = frame_.point({position_, 0.0f, -cut_});
 		return f;
 	}
 
 private:
 	Saw saw_;
 	Frame frame_;
-	float feed_;
-	float depth_ = 0.0f, sliced_ = 0.0f, position_ = 0.0f;
+	float feed_, max_depth_;
+	float depth_ = 0.0f, position_ = 0.0f;
+	float cut_ = 0.0f;    // depth the kerf has been cut to
+	float frozen_ = 0.0f; // depth where the open slice starts
+	bool open_ = false;
 };
 
 class SandingStroke : public Stroke {
@@ -335,16 +355,15 @@ public:
 		// Re-cut only once the pass has deepened (0.02 mm) or spread (2 mm) noticeably.
 		if (depth >= cut_depth_ + 0.02f || lo_.x < cut_lo_.x - 2.0f || lo_.y < cut_lo_.y - 2.0f ||
 				hi_.x > cut_hi_.x + 2.0f || hi_.y > cut_hi_.y + 2.0f) {
-			u.replace = true;
+			u.drop = cut_ ? 1 : 0;
 			u.edits.push_back(block_.pass(plane_, lo_, hi_, depth));
+			cut_ = true;
 			cut_depth_ = depth;
 			cut_lo_ = lo_;
 			cut_hi_ = hi_;
 		}
 		return u;
 	}
-
-	std::vector<Edit> finish() override { return {}; }
 
 	Frame pose() const override {
 		Frame f = plane_;
@@ -364,6 +383,7 @@ private:
 	vec2 at_{0.0f, 0.0f}, lo_{1e9f, 1e9f}, hi_{-1e9f, -1e9f};
 	vec2 cut_lo_{0.0f, 0.0f}, cut_hi_{0.0f, 0.0f};
 	float travel_ = 0.0f, cut_depth_ = 0.0f;
+	bool cut_ = false;
 };
 
 } // namespace
@@ -372,8 +392,8 @@ std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 n
 	return std::make_unique<ChiselStroke>(chisel, contact, normal, facing, depth);
 }
 
-std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed) {
-	return std::make_unique<SawStroke>(saw, contact, normal, along, feed);
+std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed, float max_depth) {
+	return std::make_unique<SawStroke>(saw, contact, normal, along, feed, max_depth);
 }
 
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, vec3 contact, vec3 normal, vec3 along) {

@@ -290,7 +290,14 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		chisel.width = float(double(settings.get("width", 12.0)));
 		stroke_ = tools::chisel_stroke(chisel, p, n, a, float(double(settings.get("depth", 1.0))));
 	} else if (tool == "saw") {
-		stroke_ = tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))));
+		// Deep enough to go right through the body, no deeper.
+		float through = 0.0f;
+		for (int c = 0; c < 8; ++c) {
+			const vec3 corner(c & 1 ? bounds_.hi.x : bounds_.lo.x, c & 2 ? bounds_.hi.y : bounds_.lo.y,
+					c & 4 ? bounds_.hi.z : bounds_.lo.z);
+			through = std::max(through, gl::dot(p - corner, n));
+		}
+		stroke_ = tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))), through + 1.0f);
 	} else if (tool == "sanding_block") {
 		tools::SandingBlock block;
 		block.grit = int(settings.get("grit", 120));
@@ -308,7 +315,7 @@ void SdfBody::move_stroke(const Vector3 &point) {
 	}
 	tools::StrokeUpdate u = stroke_->move_to(to_body(point));
 	if (!u.empty()) {
-		queue({u.replace ? Command::REPLACE : Command::EXTEND, std::move(u.edits)});
+		queue({Command::STROKE, u.drop, std::move(u.edits)});
 	}
 }
 
@@ -318,15 +325,15 @@ void SdfBody::end_stroke() {
 	}
 	std::vector<Edit> finish = stroke_->finish();
 	if (!finish.empty()) {
-		queue({Command::EXTEND, std::move(finish)});
+		queue({Command::STROKE, 0, std::move(finish)});
 	}
-	queue({Command::COMMIT, {}});
+	queue({Command::COMMIT, 0, {}});
 	stroke_.reset();
 }
 
 void SdfBody::cancel_stroke() {
 	if (stroke_) {
-		queue({Command::CANCEL, {}});
+		queue({Command::CANCEL, 0, {}});
 		stroke_.reset();
 	}
 }
@@ -342,12 +349,12 @@ Transform3D SdfBody::pose_at(const Vector3 &contact, const Vector3 &normal, cons
 
 void SdfBody::undo() {
 	cancel_stroke();
-	queue({Command::UNDO, {}});
+	queue({Command::UNDO, 0, {}});
 }
 
 void SdfBody::redo() {
 	cancel_stroke();
-	queue({Command::REDO, {}});
+	queue({Command::REDO, 0, {}});
 }
 
 void SdfBody::queue(Command c) {
@@ -358,19 +365,19 @@ void SdfBody::queue(Command c) {
 }
 
 void SdfBody::start_job() {
-	// Fold runs of stroke updates: a replace makes whatever the stroke did before it moot,
-	// and appends pile up.
+	// Fold runs of stroke updates into one: what a later update drops comes off the earlier
+	// one's appends first.
 	std::vector<Command> batch;
 	for (Command &c : queue_) {
-		const bool stroke = c.kind == Command::REPLACE || c.kind == Command::EXTEND;
-		const bool after_stroke =
-				!batch.empty() && (batch.back().kind == Command::REPLACE || batch.back().kind == Command::EXTEND);
-		if (stroke && after_stroke) {
-			if (c.kind == Command::REPLACE) {
-				batch.back() = std::move(c);
+		if (c.kind == Command::STROKE && !batch.empty() && batch.back().kind == Command::STROKE) {
+			Command &a = batch.back();
+			if (c.drop <= a.edits.size()) {
+				a.edits.resize(a.edits.size() - c.drop);
 			} else {
-				batch.back().edits.insert(batch.back().edits.end(), c.edits.begin(), c.edits.end());
+				a.drop += c.drop - a.edits.size();
+				a.edits.clear();
 			}
+			a.edits.insert(a.edits.end(), c.edits.begin(), c.edits.end());
 		} else {
 			batch.push_back(std::move(c));
 		}
@@ -382,11 +389,8 @@ void SdfBody::start_job() {
 		const auto start = std::chrono::steady_clock::now();
 		for (const Command &c : batch) {
 			switch (c.kind) {
-				case Command::REPLACE:
-					session_.set_stroke(c.edits);
-					break;
-				case Command::EXTEND:
-					session_.extend_stroke(c.edits);
+				case Command::STROKE:
+					session_.revise_stroke(c.drop, c.edits);
 					break;
 				case Command::COMMIT:
 					session_.commit();

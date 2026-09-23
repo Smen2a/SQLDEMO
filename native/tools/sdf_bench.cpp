@@ -355,11 +355,7 @@ int tools_bench() {
 				continue;
 			}
 			const double t0 = now();
-			if (u.replace) {
-				s.set_stroke(u.edits);
-			} else {
-				s.extend_stroke(u.edits);
-			}
+			s.revise_stroke(u.drop, u.edits);
 			const double ms = 1e3 * (now() - t0);
 			total += ms;
 			worst = std::max(worst, ms);

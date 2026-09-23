@@ -6,6 +6,71 @@ joined. Every part is a **signed distance field**: an analytic base shape plus a
 list of edits (tool strokes, fillets, inlays, paint), each combined with a chosen blend
 mode. The full design is in the approved plan; this README covers what exists today.
 
+## The workshop
+
+Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). A board lies on a
+bench with three hand tools beside it: a chisel, a back saw and a sanding block. Every one
+is an SDF body, built by the engine in steel, brass, ash, walnut, cork and abrasive paper.
+
+1. **Pick up a tool.** Click it on the bench, or press 1 / 2 / 3.
+2. **Point at the board.** The tool floats where it will engage, and an outline marks what
+   it will touch: the chisel's edge and its push direction, the saw's line, the block's
+   face.
+3. **Hold the left button and drag.** The cut follows live:
+   - **Chisel:** pares along the drag, at the width and depth set in the panel. It ramps
+     in at its approach angle and lifts out when you let go. It cannot un-cut: pulling
+     back does nothing.
+   - **Saw:** stroke it back and forth along its line. Every millimetre of travel deepens
+     the kerf by the feed, until it is through the board.
+   - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits.
+     Being a flat block, it flattens: high spots and edges go first, and the edges of the
+     patch feather out.
+
+Other controls:
+- Q / E turn the tool; Esc drops the stroke in progress.
+- Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit.
+- Right-drag orbits, middle-drag pans, the wheel zooms.
+- The panel switches the wood (ash, oak, walnut), starts a new board, and lets the board
+  cast shadows.
+- The status line shows how long the last edit took to apply and upload, and the GPU
+  frame time.
+
+| | |
+| --- | --- |
+| ![The chisel hovering over an ash board where it will engage, with the saw and the sanding block on the bench](docs/images/workshop_chisel.png) | ![The chisel at work, its edge riding in the groove it has pared](docs/images/workshop_chisel_working.png) |
+| ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) | ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) |
+
+(Rendered here on software OpenGL, at about a frame a second; the status line reads the
+GPU time on real hardware.)
+
+**How it works:**
+- A tool in use is a *stroke* (`native/src/core/tools/`). It turns the tool's motion into
+  edits of the same shapes the tool's model is built from.
+- Cuts that only grow keep their newest piece open and re-cut just that as it grows. The
+  chisel's 10 mm lengths of run and the saw's 1 mm slices of kerf are then left behind, so
+  an update touches only what moved and a whole cut is a handful of edits.
+- A sanding pass changes everywhere at once, so it replaces itself.
+- Overlapping pieces overlap generously. Inside a union of cuts the field is only a bound,
+  and a thin overlap leaves a seam whose value is smaller than the hit epsilon: the
+  raymarcher would draw it as a wall.
+- The body keeps its edits in an `EditSession` (`native/src/core/edit/`), with the stroke in
+  progress, unlimited undo, and the octree and ADF updated incrementally. Cells that
+  pruning shows no changed edit reaches keep their bricks.
+- `SdfBody` applies the edits on a worker thread, folding together moves that arrive while
+  an update runs, so a slow update never builds a backlog. It then uploads only the brick
+  layers that changed.
+
+`sdf_bench tools` times each drag step on the workshop board (4 shared cores):
+
+| Tool at work | Per update | Edits for the whole cut |
+| --- | --- | --- |
+| chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 21 ms | 8 |
+| saw, 12 mm deep in 30 strokes | 54 ms | 10 |
+| sanding block, rubbed over 120 x 56 mm to 2.5 mm deep | 216 ms | 1 |
+
+A sanding update re-samples everything the block has covered, as well as the previous
+pass. That is several thousand bricks for a large patch.
+
 ## Layout
 
 | Path | What it is |
@@ -15,11 +80,13 @@ mode. The full design is in the approved plan; this README covers what exists to
 | `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds; the material table. |
 | `native/src/core/compile/` | The octree: per-cell pruned edit lists ("tapes") that keep per-query cost independent of edit count. |
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
-| `native/src/core/eval/` | The CPU reference renderer: ground truth for every later GPU path. |
+| `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
+| `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, and strokes that turn a tool's motion into edits. |
+| `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live. |
 | `native/tests/` | Property tests for the core and golden-image tests. No Godot needed. |
-| `game/` | The Godot 4.7 project. `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
+| `game/` | The Godot 4.7 project. `game/workshop/` is the workshop (the main scene); `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
 | `extern/godot-cpp/` | godot-cpp 10.0.0 (submodule), built against the Godot 4.7 API. |
 | `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner), `test_godot.sh`, `parity.sh`. |
 
