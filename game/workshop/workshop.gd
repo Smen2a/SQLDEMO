@@ -1,11 +1,12 @@
 extends Node3D
 
-## The workshop: a board on a bench and three hand tools, every one an SDF body. Pick a
-## tool (click it on the bench, or 1 / 2 / 3), point at the board to see where it will go,
+## The workshop: a board on a bench and four hand tools, every one an SDF body. Pick a
+## tool (click it on the bench, or 1 to 4), point at the board to see where it will go,
 ## then hold the left button and drag to work it:
-##   chisel         pares along the drag, at the depth set in the panel
-##   saw            stroke it back and forth along its line: the kerf deepens as it goes
-##   sanding block  takes the surface down wherever it rubs
+##   chisel          pares along the drag, at the depth set in the panel
+##   saw             stroke it back and forth along its line: the kerf deepens as it goes
+##   sanding block   takes the surface down wherever it rubs, flat
+##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
 ## Q / E turn the tool, Esc drops the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and
 ## redo. Right-drag orbits the camera, middle-drag pans, the wheel zooms.
 ##
@@ -17,18 +18,21 @@ const HOVER_LIFT := 15.0 # mm the tool floats above where it will engage
 const OrbitCamera := preload("res://workshop/orbit_camera.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 
-const TOOL_NAMES: Array[String] = ["chisel", "saw", "sanding_block"]
+const TOOL_NAMES: Array[String] = ["chisel", "saw", "sanding_block", "sanding_sponge"]
 const TOOL_COLOURS := {
 	"chisel": Color(1.0, 0.82, 0.25),
 	"saw": Color(0.4, 0.85, 1.0),
 	"sanding_block": Color(0.6, 1.0, 0.45),
+	"sanding_sponge": Color(1.0, 0.55, 0.8),
 }
+const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
 ## Per tool: chisel width and depth (mm); saw feed (mm deeper per mm of stroke); grit.
 var settings := {
 	"chisel": {"width": 12.0, "depth": 1.0},
 	"saw": {"feed": 0.03},
 	"sanding_block": {"grit": 120},
+	"sanding_sponge": {"grit": 120},
 }
 var wood := "board" ## board, board_oak or board_walnut
 
@@ -216,7 +220,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
-			KEY_1, KEY_2, KEY_3:
+			KEY_1, KEY_2, KEY_3, KEY_4:
 				select_tool(TOOL_NAMES[key.keycode - KEY_1])
 			KEY_Q:
 				yaw += deg_to_rad(15.0)
@@ -262,8 +266,8 @@ func _hover_pose() -> Transform3D:
 
 
 ## The tool's facing on a surface, turned by `yaw`: the chisel pushes away from the viewer;
-## the saw and the block lie across the view, so the saw is seen side on and stroked left
-## and right.
+## the saw, the block and the sponge lie across the view, so the saw is seen side on and
+## stroked left and right.
 func _along(normal: Vector3) -> Vector3:
 	var base := -camera.global_basis.z if current == "chisel" else camera.global_basis.x
 	var along := base - normal * base.dot(normal)
@@ -288,7 +292,7 @@ func _tool_under(position: Vector2, nearest: float) -> String:
 
 
 ## The footprint of the tool in hand where it would engage: the chisel's edge and push
-## direction, the saw's line, the sanding block's face.
+## direction, the saw's line, the sanding block's face, the sponge's reach.
 func _draw_outline() -> void:
 	var mesh: ImmediateMesh = _outline.mesh
 	mesh.clear_surfaces()
@@ -317,6 +321,11 @@ func _draw_outline() -> void:
 			for i in 4:
 				segments.append(c[i])
 				segments.append(c[(i + 1) % 4])
+		"sanding_sponge":
+			var r := SPONGE_REACH * MM
+			for i in 24:
+				segments.append(p + (a * cos(TAU * i / 24.0) + s * sin(TAU * i / 24.0)) * r)
+				segments.append(p + (a * cos(TAU * (i + 1) / 24.0) + s * sin(TAU * (i + 1) / 24.0)) * r)
 	for v in segments:
 		mesh.surface_add_vertex(v)
 	mesh.surface_end()
@@ -341,8 +350,8 @@ func _frame(origin: Vector3, z_axis: Vector3, x_axis: Vector3) -> Transform3D:
 
 
 func _place_rests() -> void:
-	# In front of the board, lying as they would: the chisel with its blade flat, the saw
-	# on its side, the block on its paper.
+	# Round the board, lying as they would: the chisel with its blade flat, the saw on its
+	# side, the block on its paper, the sponge on a face.
 	var chisel := _frame(Vector3(-0.07, 0.0115, 0.1), Vector3.UP, Vector3.LEFT)
 	chisel.basis = chisel.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
 	_rest["chisel"] = chisel
@@ -350,6 +359,7 @@ func _place_rests() -> void:
 			Vector3(0.0, 0.011, -0.12))
 	_rest["saw"] = saw
 	_rest["sanding_block"] = _frame(Vector3(0.1, 0.0, 0.1), Vector3.UP, Vector3.RIGHT)
+	_rest["sanding_sponge"] = _frame(Vector3(0.165, 0.0, -0.005), Vector3.UP, Vector3.FORWARD)
 
 
 func _build_world() -> void:

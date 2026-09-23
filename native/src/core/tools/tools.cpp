@@ -1,9 +1,11 @@
 #include "tools/tools.h"
 
 #include "body/materials.h"
+#include "tools/smoothing.h"
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 
 namespace sdf::tools {
 
@@ -221,6 +223,19 @@ Edit SandingBlock::pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const
 	return cut(slab, Blend::Smooth, r);
 }
 
+// --- sanding sponge --------------------------------------------------------------------
+
+Body SandingSponge::model() const {
+	Body b;
+	b.base = Primitive::box({0.0f, 0.0f, thickness * 0.5f}, {length * 0.5f, breadth * 0.5f, thickness * 0.5f}, 7.0f);
+	b.base_material = mat::Abrasive;
+	return b;
+}
+
+float SandingSponge::rate() const {
+	return 0.8f / float(std::max(grit, 24));
+}
+
 // --- strokes ---------------------------------------------------------------------------
 
 namespace {
@@ -407,7 +422,83 @@ private:
 	bool cut_ = false;
 };
 
+class HandSandingStroke : public Stroke {
+public:
+	HandSandingStroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along, float spacing)
+		: sponge_(sponge), plane_(Frame::at(contact, normal, along)), at_(contact), from_(contact), spacing_(spacing) {}
+
+	StrokeUpdate move_to(vec3 point) override {
+		at_ = point - plane_.z * gl::dot(point - plane_.origin, plane_.z);
+		std::lock_guard<std::mutex> lock(mutex_);
+		path_.push_back(at_);
+		return {};
+	}
+
+	std::vector<Edit> edits() const override { return {}; }
+
+	Frame pose() const override {
+		Frame f = plane_;
+		f.origin = at_;
+		return f;
+	}
+
+	bool deferred() const override { return true; }
+
+	StrokeUpdate work(const Body &body, const Octree &octree) override {
+		std::vector<vec3> path;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			path.swap(path_);
+		}
+		if (!grid_) {
+			SmoothingGrid::Params params;
+			params.spacing = spacing_;
+			grid_ = std::make_unique<SmoothingGrid>(body, octree, params);
+		}
+		// Pressed along its path a quarter of its reach at a time (its pressure falls off
+		// smoothly over the reach): each point it passes gets the flow its travel there earns.
+		for (const vec3 &to : path) {
+			const vec3 d = to - from_;
+			const float length = gl::length(d);
+			const int steps = std::max(1, int(std::ceil(length / (0.25f * sponge_.reach))));
+			for (int k = 0; k < steps && length > 0.0f; ++k) {
+				grid_->press(from_ + d * ((float(k) + 0.5f) / float(steps)), sponge_.reach,
+						sponge_.rate() * length / float(steps));
+			}
+			from_ = to;
+		}
+		const Aabb changed = grid_->update();
+		if (changed.empty()) {
+			return {};
+		}
+		StrokeUpdate u;
+		u.drop = layered_ ? 1 : 0;
+		u.edits.push_back(Edit::smoothing(grid_->layer()));
+		if (layered_) {
+			u.changed = changed;
+		}
+		layered_ = true;
+		return u;
+	}
+
+private:
+	SandingSponge sponge_;
+	Frame plane_;
+	vec3 at_;      // where the sponge is (the thread moving it)
+	vec3 from_;    // where its recorded path has been worked up to (the thread working)
+	float spacing_;
+	std::mutex mutex_;
+	std::vector<vec3> path_; // recorded, not yet worked
+	std::unique_ptr<SmoothingGrid> grid_;
+	bool layered_ = false;   // whether the stroke has made its layer edit yet
+};
+
 } // namespace
+
+std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,
+		float spacing) {
+	return std::make_unique<HandSandingStroke>(sponge, contact, normal, along, spacing);
+}
 
 std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 normal, vec3 facing, float depth) {
 	return std::make_unique<ChiselStroke>(chisel, contact, normal, facing, depth);

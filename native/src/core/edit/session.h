@@ -34,7 +34,10 @@ public:
 	// Appends `edits` to the stroke in progress: only cells they reach are re-sampled.
 	bool extend_stroke(const std::vector<Edit> &edits);
 	// Drops the stroke's last `drop` edits (at most all of them), then appends `edits`.
-	bool revise_stroke(std::size_t drop, const std::vector<Edit> &edits);
+	// With `changed` (not empty) and as many edits as it drops, the new edits replace the
+	// old ones in place, promising they are the same field outside `changed`: only there
+	// are the octree and ADF brought along (a smoothing layer growing under a moving tool).
+	bool revise_stroke(std::size_t drop, const std::vector<Edit> &edits, const Aabb &changed = {});
 	void commit();  // the stroke in progress, if it has edits, becomes an undo step
 	void cancel();  // drops the stroke in progress
 	bool undo();    // removes the last step (dropping any stroke in progress first)
@@ -52,6 +55,8 @@ public:
 private:
 	// Keeps the first `keep` edits and appends `add`, bringing the octree and ADF along.
 	void apply(std::size_t keep, const std::vector<Edit> &add);
+	// Replaces the edits from `first` on with `with` (as many), which differ only in `changed`.
+	void replace(std::size_t first, const std::vector<Edit> &with, const Aabb &changed);
 
 	Body body_;
 	Octree octree_;

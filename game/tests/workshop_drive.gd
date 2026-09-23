@@ -1,8 +1,9 @@
 extends "res://tests/harness.gd"
 
 ## Uses the workshop as a person would, through its own pointer methods: pares with the
-## chisel, saws a kerf, sands a patch, then undoes the sanding. Prints what each did and,
-## when rendering, saves out/workshop_<tool>.png after each (--out=<dir>).
+## chisel, saws a kerf, sands a patch with the block, rounds an arris over with the sponge,
+## then undoes the sponge's work. Prints what each did and, when rendering, saves
+## out/workshop_<tool>.png after each (--out=<dir>).
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -46,6 +47,14 @@ func _ready() -> void:
 	var sand_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits
 	await _shot(out, "sand")
 
+	# Sanding sponge: rubbed along the board's front top arris, back and forth.
+	var arris: Array[Vector3] = []
+	for i in 8:
+		arris.append(Vector3(0.035 if i % 2 == 0 else -0.035, 0.025, 0.05))
+	await _stroke("sanding_sponge", Vector3(-0.035, 0.025, 0.05), arris, 4)
+	var sponge_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits - sand_edits
+	await _shot(out, "sponge")
+
 	# The board with all three cuts, every tool back on the bench.
 	workshop.select_tool("")
 	workshop.camera.distance = 0.26
@@ -58,12 +67,13 @@ func _ready() -> void:
 	workshop.board.flush()
 	var after_undo: int = workshop.board.get_stats().edits
 	var stats: Dictionary = workshop.board.get_stats()
-	print("workshop drive: chisel %d edits, saw %d, sanding %d; after undo %d edits in %d strokes; last update %.0f ms, upload %.0f ms" % [
-			chisel_edits, saw_edits, sand_edits, after_undo, stats.steps, stats.update_ms, stats.upload_ms])
+	print("workshop drive: chisel %d edits, saw %d, sanding block %d, sponge %d; after undo %d edits in %d strokes; last update %.0f ms, upload %.0f ms" % [
+			chisel_edits, saw_edits, sand_edits, sponge_edits, after_undo, stats.steps, stats.update_ms, stats.upload_ms])
 	# Strokes are previewed and committed merged: the chisel's ramp, run and lift-out, the
-	# saw's kerf, the block's pass.
-	if chisel_edits != 3 or saw_edits != 1 or sand_edits != 1 or after_undo != chisel_edits + saw_edits:
-		push_error("workshop drive: a tool made no cut or not its merged one, or undo did not take the sanding back")
+	# saw's kerf, the block's pass. The sponge's work is one smoothing layer.
+	if chisel_edits != 3 or saw_edits != 1 or sand_edits != 1 or sponge_edits != 1 or \
+			after_undo != chisel_edits + saw_edits + sand_edits:
+		push_error("workshop drive: a tool made no cut or not its merged one, or undo did not take the sponge's work back")
 	get_tree().quit()
 
 

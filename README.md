@@ -9,13 +9,14 @@ mode. The full design is in the approved plan; this README covers what exists to
 ## The workshop
 
 Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). A board lies on a
-bench with three hand tools beside it: a chisel, a back saw and a sanding block. Every one
-is an SDF body, built by the engine in steel, brass, ash, walnut, cork and abrasive paper.
+bench with four hand tools beside it: a chisel, a back saw, a sanding block and a sanding
+sponge. Every one is an SDF body, built by the engine in steel, brass, ash, walnut, cork
+and abrasive.
 
-1. **Pick up a tool.** Click it on the bench, or press 1 / 2 / 3.
+1. **Pick up a tool.** Click it on the bench, or press 1 to 4.
 2. **Point at the board.** The tool floats where it will engage, and an outline marks what
    it will touch: the chisel's edge and its push direction, the saw's line, the block's
-   face.
+   face, the sponge's reach.
 3. **Hold the left button and drag.** The cut follows live:
    - **Chisel:** pares along the drag, at the width and depth set in the panel. It ramps
      in at its approach angle and lifts out when you let go. It cannot un-cut: pulling
@@ -25,6 +26,9 @@ is an SDF body, built by the engine in steel, brass, ash, walnut, cork and abras
    - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits.
      Being a flat block, it flattens: high spots and edges go first, and the edges of the
      patch feather out.
+   - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It rounds over
+     the arrises and ridges within its reach (10 mm) and leaves faces and hollows alone.
+     Rub along an edge to ease it; the longer you rub, the rounder it gets.
 
 Other controls:
 - Q / E turn the tool; Esc drops the stroke in progress.
@@ -42,6 +46,7 @@ Other controls:
 | --- | --- |
 | ![The chisel hovering over an ash board where it will engage, with the saw and the sanding block on the bench](docs/images/workshop_chisel.png) | ![The chisel at work, its edge riding in the groove it has pared](docs/images/workshop_chisel_working.png) |
 | ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) | ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) |
+| ![The sanding sponge rubbed along the board's front top arris](docs/images/workshop_sponge_working.png) | |
 
 (Rendered here on software OpenGL, at about a frame a second; the status line reads the
 GPU time on real hardware.)
@@ -89,10 +94,59 @@ GPU time on real hardware.)
 | chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 29 updates of 19 ms (0.56 s in all), 8 edits | 56 ms once, 3 edits |
 | saw, 12 mm deep in 30 strokes | 30 updates of 56 ms (1.7 s), 10 edits | 97 ms once, 1 edit |
 | sanding block, rubbed over the board | 25 updates of 145 ms (3.6 s), 1 edit | 136 ms once, 1 edit |
+| sanding sponge along an arris, 3 passes of 60 mm | 30 updates of 51 ms (flow 21, octree and ADF 30), 1 layer | (not previewed) |
 
 Applied as it moves, the cut lags the tool by an update, and a sanding update re-samples
 everything the block has covered, as well as the previous pass. Previewed, the cut is
 there in the same frame, and the CPU works once per stroke.
+
+### Sanding as smoothing: a layer, not cuts
+
+A cut is a shape; what a sponge or a sheet of sandpaper in the hand does is closer to
+smoothing the surface it is rubbed over. So the sponge does not make edits of shapes at
+all. It makes one *smoothing layer* (`native/src/core/body/layer.h`,
+`native/src/core/tools/smoothing.h`): the field near the surface, re-sampled on a sparse
+grid (0.25 mm) and evolved by curvature flow.
+- **Curvature flow.** Where the sponge bears, every point moves inward at a speed set by
+  the surface's curvature there, convex parts only: dphi/dt = |grad phi| max(kappa, 0).
+  - An arris rounds over, with a radius growing as the square root of the rubbing.
+  - Ridges left by other tools soften, while faces and hollows stay put.
+  - Each update runs a few explicit steps on the grid near the sponge, in parallel.
+- **The layer replaces the field instead of offsetting it.** Inside a sharp arris the field
+  itself has a crease (along the bisector: F = -min(x, y)). Adding any smooth offset to F
+  would keep that crease, as a ridge along the middle of every sanded edge.
+  - So the layer stores the smoothed field phi and a weight w, both reconstructed as
+    quadratic B-splines (C1, so normals stay smooth), and gives (1 - w) F + w phi.
+  - Where w is 1, none of F's creases remain.
+  - B-splines reproduce planes exactly, so flat faces under the sponge do not move by a
+    micron.
+- **It is one edit, `Op::Layer`, in the edit list like any other:**
+  - undo takes it away;
+  - later cuts apply over it;
+  - a later sponge stroke smooths those.
+  - Octree pruning drops it wherever its weight is 0, and bounds it by its samples
+    elsewhere.
+  - The ADF samples it into bricks like everything else. It never gives it an exact cell,
+    because only the CPU holds the grid (the `EXACT` live source draws bodies without their
+    layers).
+- **Its gradient stays bounded (1.41 plus about 0.15), so rays keep taking safe steps.**
+  - Level sets outside the surface move nearly with the surface beneath them (velocity
+    extension, capped so the explicit steps stay stable).
+  - Inside, each level moves by its own curvature, so levels only spread apart.
+  - The bound is measured only down to 0.9 mm below the surface: rays approach from
+    outside, and deeper only the field's sign matters.
+- **The sponge is applied as it goes.** The shader cannot draw a layer, so there is no
+  preview. The worker runs the flow and re-samples only the region whose samples changed
+  (`EditSession::revise_stroke` with a changed box). Moving the sponge only records its
+  path.
+
+| | |
+| --- | --- |
+| ![A walnut block with a chisel groove: its front top arris sanded round in the middle and still sharp at both ends, and the groove's edges softened](docs/images/sanded.png) | ![The same in the normals view: the sanded arris turns smoothly from the top face to the front, the ends stay sharp](docs/images/sanded_normals.png) |
+
+The "sanded" demo (`sdf_render sanded`, `load_demo("sanded")`): a sharp walnut block
+with a chisel groove, sanded by two sponge strokes, one layer each. It is part of the
+GPU/CPU parity set.
 
 ## Layout
 
@@ -100,11 +154,11 @@ there in the same frame, and the CPU works once per stroke.
 | --- | --- |
 | `native/src/core/shared/*.glsl` | The SDF formulas — primitives, tool cross-sections, swept strokes, blend modes, materials. Written in a subset that compiles **both as C++ and as Godot shader code**, so the CPU evaluator and the GPU raymarcher run the same maths. Edit these only. |
 | `native/src/core/glsl_compat.h` | Just enough GLSL (`vec3`, `mix`, `clamp`, …) in C++ to compile the shared files. |
-| `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds; the material table. |
+| `native/src/core/body/` | `Body`, `Edit`, `Primitive`: the per-part source of truth, bounds and Lipschitz bounds; smoothing layers (`layer.h`); the material table. |
 | `native/src/core/compile/` | The octree: per-cell pruned edit lists ("tapes") that keep per-query cost independent of edit count. |
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
-| `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, and strokes that turn a tool's motion into edits. |
+| `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live. |
@@ -257,16 +311,16 @@ from the same camera, against two CPU renders:
 - the CPU tracing the same source (the ADF), the same algorithm, so any mismatch is a
   shader bug.
 
-Normals check geometry and unlit albedo checks materials. The 25 cases are the 8 blend
-modes, 6 material scenes, the carved panel, the fluted ball and a 300-stroke session, at
-1280x720.
+Normals check geometry and unlit albedo checks materials. The 27 cases are the 8 blend
+modes, 6 material scenes, the carved panel, the fluted ball, a 300-stroke session and the
+sanded block (smoothing layers), at 1280x720.
 - **Against the ground truth:** the mean channel difference is at most 0.34 / 255, and at
   most 0.16% of pixels differ by more than 24 / 255. Those are single pixels on silhouettes
   and creases, where a pixel centre falls on one side of the edge or the other.
 - **Against the CPU ADF:** at most 0.007% of pixels differ.
 
 The exact Live path (`PARITY_ARGS=--live-source=exact`) matched the ground truth within
-0.23 / 255 and 0.05%. Results are identical with the node scaled to a metre world
+0.23 / 255 and 0.05%. It skips the sanded block: it draws bodies without their layers. Results are identical with the node scaled to a metre world
 (scale 0.001).
 
 What was checked in Godot (Compatibility renderer, the only one without a GPU):

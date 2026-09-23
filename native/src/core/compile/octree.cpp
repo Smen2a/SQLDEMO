@@ -1,5 +1,7 @@
 #include "compile/octree.h"
 
+#include "body/layer.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -102,6 +104,7 @@ Interval apply_interval(const Edit &e, Interval d, Interval ev) {
 			return imin(d, imax({d.lo - e.r, d.hi - e.r}, {ae.lo - e.r2, ae.hi - e.r2}));
 		}
 		case Op::Paint:
+		case Op::Layer: // handled by prune() itself
 			return d;
 	}
 	return d;
@@ -123,20 +126,30 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 	// the cell's half-diagonal. Computed once, used by both passes.
 	std::vector<char> touches(n, 0);
 	std::vector<Interval> range(n);
+	// Layers (Op::Layer): what their weight and field can be here; one that cannot weigh
+	// anything here is the identity, and drops out.
+	std::vector<Layer::Range> layer(n);
 	for (std::size_t i = 0; i < n; ++i) {
 		const std::uint32_t index = parent.tape[i] & ~kResetBit;
 		const Edit &e = body.edits()[index];
 		touches[i] = e.op == Op::Intersect || (parent.tape[i] & kResetBit) ||
 				box_overlaps_cube(body.edit_box(index).expanded(body.edit_influence(index)), lo, size);
-		if (touches[i]) {
+		if (touches[i] && e.op == Op::Layer) {
+			layer[i] = e.layer->range(lo, size);
+			touches[i] = layer[i].w_hi > 0.0f;
+		} else if (touches[i]) {
 			const float ec = e.prim.eval(centre), es = e.prim.lipschitz() * radius;
 			range[i] = {ec - es, ec + es};
 		}
 	}
 	// A value-dependent edit (blend, guide op) only reads the field near its own
 	// primitive's surface; if that surface is provably further than its reach from this
-	// cell, it behaves exactly like its hard form here.
+	// cell, it behaves exactly like its hard form here. A layer reads it wherever it weighs
+	// less than 1.
 	auto reads_values_here = [&](std::size_t i, const Edit &e) {
+		if (e.op == Op::Layer) {
+			return layer[i].w_lo < 1.0f;
+		}
 		const float reach = e.value_reach() + margin;
 		return e.value_reach() > 0.0f && range[i].lo < reach && range[i].hi > -reach;
 	};
@@ -212,6 +225,9 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 			if (e.op != Op::Intersect && !box_overlaps_cube(body.edit_box(index).expanded(reach), lo, size)) {
 				continue;
 			}
+			if (e.op == Op::Layer && !touches[i]) {
+				continue; // weighs nothing here
+			}
 			if (!touches[i]) {
 				const float ec = e.prim.eval(centre), es = e.prim.lipschitz() * radius;
 				range[i] = {ec - es, ec + es};
@@ -243,8 +259,17 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 			material_touched = false;
 		}
 		out.tape.push_back(index | (reset ? kResetBit : 0u));
-		lip = std::max(lip, e.lipschitz());
 		out.feature = std::min(out.feature, e.feature_size());
+		if (e.op == Op::Layer) {
+			// (1 - w~) d + w~ phi~: between the two, or phi~ alone where w~ is 1 throughout.
+			// Its gradient: (1 - w~) grad d + w~ grad phi~ + (phi~ - d) grad w~.
+			const Layer::Range &r = layer[i];
+			d = r.w_lo >= 1.0f ? Interval{r.phi_lo, r.phi_hi}
+							   : Interval{std::min(d.lo, r.phi_lo), std::max(d.hi, r.phi_hi)};
+			lip = std::max(lip, e.layer->gradient()) + e.layer->ramp();
+			continue;
+		}
+		lip = std::max(lip, e.lipschitz());
 		d = apply_interval(e, d, range[i]);
 		if (e.op == Op::Union && reset) {
 			material_touched = e.material != body.base_material;
@@ -445,6 +470,10 @@ Sample Octree::eval_tape(const Body &body, bool base, const std::uint32_t *tape,
 		const Edit &e = body.edits()[entry & ~kResetBit];
 		if (entry & kResetBit) {
 			d = reset_value(e.op);
+		}
+		if (e.op == Op::Layer) {
+			d = e.layer->apply(p, d);
+			continue;
 		}
 		const vec4 r = gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape),
 				float(e.material));

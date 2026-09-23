@@ -1,6 +1,7 @@
 #pragma once
 
 #include "body/body.h"
+#include "compile/octree.h"
 
 #include <memory>
 #include <vector>
@@ -77,11 +78,29 @@ struct SandingBlock {
 	Edit pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const;
 };
 
+// A sanding sponge: a block of foam coated in abrasive, rubbed by hand. Unlike the sanding
+// block it is soft: it wraps over edges and into shallow hollows, so rather than flattening
+// it smooths, rounding arrises over and softening ridges left by other tools. Its work is a
+// smoothing layer (tools/smoothing.h, body/layer.h) built by curvature flow, not cuts.
+struct SandingSponge {
+	float length = 100.0f;
+	float breadth = 68.0f;
+	float thickness = 25.0f;
+	int grit = 120;
+	float reach = 10.0f; // how far round the point it is pressed at it bears on the work
+
+	Body model() const;
+	// Curvature flow (mm^2) per millimetre of travel at full pressure: coarser grits cut faster.
+	float rate() const;
+};
+
 // What a stroke asks of the edit session after the tool moves: drop its last `drop` edits,
-// then append `edits`.
+// then append `edits`. With `changed` set (and as many edits as it drops), the new edits
+// replace the old ones and differ from them only there.
 struct StrokeUpdate {
 	std::size_t drop = 0;
 	std::vector<Edit> edits;
+	Aabb changed;
 	bool empty() const { return drop == 0 && edits.empty(); }
 };
 
@@ -96,6 +115,11 @@ struct StrokeUpdate {
 //   the tool moves (the Live shader's overlay) and what is committed when it lifts off:
 //   fewer, longer edits, applied once.
 // Either way every edit is a cut (Op::Subtract): a stroke only takes material away.
+//
+// A *deferred* stroke's updates take real work (the sanding sponge runs a flow over a grid):
+// move_to() only records the motion, and work() turns it into an update, possibly on
+// another thread than move_to() and pose() run on. Its work is a layer, not cuts, and it
+// has no merged form to preview.
 class Stroke {
 public:
 	virtual ~Stroke() = default;
@@ -107,6 +131,16 @@ public:
 	virtual std::vector<Edit> finish() { return {}; }
 	// Where the tool's model is now: its frame, as the models are built.
 	virtual Frame pose() const = 0;
+
+	virtual bool deferred() const { return false; }
+	// The motion recorded since the last call, as an update for the edit session holding
+	// `body` (with this stroke's earlier updates applied; the first call sees the body as it
+	// was before the stroke).
+	virtual StrokeUpdate work(const Body &body, const Octree &octree) {
+		(void)body;
+		(void)octree;
+		return {};
+	}
 };
 
 // A chisel set on the surface at `contact`, facing `facing` until the push shows its
@@ -119,5 +153,9 @@ std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, ve
 // A sanding block pressed flat at `contact` (its length along `along`), rubbed about the
 // plane there: it takes removal_per_mm() off per millimetre travelled, over what it covered.
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, vec3 contact, vec3 normal, vec3 along);
+// A sanding sponge pressed at `contact` and rubbed about the plane there (deferred): the
+// work smooths whatever lies within its reach of the path, in proportion to the travel.
+std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,
+		float spacing = 0.25f);
 
 } // namespace sdf::tools

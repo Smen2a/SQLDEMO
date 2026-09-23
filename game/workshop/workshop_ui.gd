@@ -3,7 +3,8 @@ extends CanvasLayer
 ## The workshop's controls: tools, their settings, the wood, undo / redo / reset, and a
 ## status line (edits, how long the last edit took to apply and upload, GPU frame time).
 
-const TOOL_LABELS := {"chisel": "1  Chisel", "saw": "2  Saw", "sanding_block": "3  Sanding block"}
+const TOOL_LABELS := {"chisel": "1  Chisel", "saw": "2  Saw", "sanding_block": "3  Sanding block",
+		"sanding_sponge": "4  Sanding sponge"}
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   Q / E: turn it   Esc: drop the stroke   " + \
 		"Ctrl+Z / Ctrl+Shift+Z: undo, redo   Right-drag: orbit   Middle-drag: pan   Wheel: zoom"
@@ -48,7 +49,11 @@ func _ready() -> void:
 	left.add_child(block)
 	_choice(block, "Grit", ["80", "120", "240"], 1,
 			func(i): workshop.set_setting("sanding_block", "grit", [80, 120, 240][i]))
-	_settings_boxes = {"chisel": chisel, "saw": saw, "sanding_block": block}
+	var sponge := VBoxContainer.new()
+	left.add_child(sponge)
+	_choice(sponge, "Grit", ["60", "120", "220"], 1,
+			func(i): workshop.set_setting("sanding_sponge", "grit", [60, 120, 220][i]))
+	_settings_boxes = {"chisel": chisel, "saw": saw, "sanding_block": block, "sanding_sponge": sponge}
 
 	# The board, top right.
 	var right := _panel(root, Vector2.ZERO)

@@ -3,9 +3,12 @@
 #include "ops.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace sdf {
+
+class Layer;
 
 using gl::vec2;
 using gl::vec3;
@@ -44,6 +47,7 @@ enum class Op : int {
 	Groove = gl::SDF_OP_GROOVE,
 	Tongue = gl::SDF_OP_TONGUE,
 	Paint = gl::SDF_OP_PAINT,
+	Layer = gl::SDF_OP_LAYER, // a sampled smoothing layer (see body/layer.h)
 };
 
 struct Aabb {
@@ -107,6 +111,12 @@ struct Edit {
 	float r2 = 0.0f;
 	EdgeProfile shape = EdgeProfile::ArcConcave;
 	std::uint16_t material = 0;
+	// Op::Layer: the layer it applies (its primitive is then just the layer's box, for
+	// culling). Shared, and immutable once built.
+	std::shared_ptr<const Layer> layer;
+
+	// Applies `layer` over the field before it.
+	static Edit smoothing(std::shared_ptr<const Layer> layer);
 
 	// Distance beyond the primitive's bounds within which this edit can change the field.
 	float influence() const;

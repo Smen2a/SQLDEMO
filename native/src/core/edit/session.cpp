@@ -62,13 +62,17 @@ bool EditSession::extend_stroke(const std::vector<Edit> &edits) {
 	return revise_stroke(0, edits);
 }
 
-bool EditSession::revise_stroke(std::size_t drop, const std::vector<Edit> &edits) {
+bool EditSession::revise_stroke(std::size_t drop, const std::vector<Edit> &edits, const Aabb &changed) {
 	for (const Edit &e : edits) {
 		if (!Body::accepts(e)) {
 			return false;
 		}
 	}
 	drop = std::min(drop, stroke_);
+	if (!changed.empty() && drop > 0 && drop == edits.size()) {
+		replace(body_.edits().size() - drop, edits, changed);
+		return true;
+	}
 	apply(body_.edits().size() - drop, edits);
 	stroke_ = stroke_ - drop + edits.size();
 	return true;
@@ -111,6 +115,23 @@ bool EditSession::redo() {
 	apply(body_.edits().size(), step);
 	steps_.push_back(step.size());
 	return true;
+}
+
+void EditSession::replace(std::size_t first, const std::vector<Edit> &with, const Aabb &changed) {
+	const auto start = std::chrono::steady_clock::now();
+	for (std::size_t i = 0; i < with.size(); ++i) {
+		body_.replace(first + i, with[i]);
+	}
+	// Leaves elsewhere keep tapes naming these edits by index, which is still right: the
+	// field there is the same.
+	octree_.update_region(body_, changed.expanded(octree_.value_margin()));
+	last_.octree_ms = ms_since(start);
+	const auto adf_start = std::chrono::steady_clock::now();
+	if (with_adf_) {
+		adf_.update(body_, octree_, Adf::Change{changed, std::uint32_t(first), changed});
+	}
+	last_.adf_ms = ms_since(adf_start);
+	last_.rebuilt_bricks = adf_.stats().rebuilt_bricks;
 }
 
 void EditSession::apply(std::size_t keep, const std::vector<Edit> &add) {

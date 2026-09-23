@@ -49,10 +49,11 @@ public:
 	~SdfBody() override;
 
 	// Builds a demo body by name (see sdf::demo::named_demo): "carved_panel", "blend_<i>",
-	// "material_<i>", "sphere", "session", "board", "board_oak", "board_walnut".
+	// "material_<i>", "sphere", "session", "board", "board_oak", "board_walnut", "sanded".
 	bool load_demo(const godot::String &name);
-	// Builds a tool's model: "chisel" (settings: width), "saw" or "sanding_block" (grit).
-	// Tools are drawn from their exact tapes (live_source EXACT) and cast shadows.
+	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
+	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
+	// cast shadows.
 	bool load_tool(const godot::String &name, const godot::Dictionary &settings);
 	// The camera that frames the last demo, in body space: {eye, target, up, fov}.
 	godot::Dictionary get_demo_camera() const;
@@ -66,7 +67,9 @@ public:
 
 	// Engages a tool at `contact` (world space, on this body's surface) with the surface
 	// `normal` there and the tool facing `along`. tool: "chisel" (settings: width, depth mm),
-	// "saw" (feed: mm deeper per mm of stroke) or "sanding_block" (grit).
+	// "saw" (feed: mm deeper per mm of stroke), "sanding_block" (grit) or "sanding_sponge"
+	// (grit). The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on
+	// the worker thread too, and applied as it goes: it has no preview.
 	bool begin_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
 			const godot::Vector3 &along, const godot::Dictionary &settings);
 	// The tool moved to `point` (world space, on the plane it was engaged on).
@@ -117,10 +120,11 @@ protected:
 private:
 	// An edit-session command, queued on the main thread and applied on a worker.
 	struct Command {
-		enum Kind { STROKE, COMMIT, CANCEL, UNDO, REDO } kind;
+		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO } kind;
 		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
 		std::vector<Edit> edits; // then append these
 		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
+		std::shared_ptr<tools::Stroke> stroke = nullptr; // WORK: a deferred stroke's recorded motion to work
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
@@ -154,7 +158,7 @@ private:
 	int live_source_ = LIVE_ADF;
 	bool exact_cells_ = true;
 
-	std::unique_ptr<tools::Stroke> stroke_; // the tool in use, if any
+	std::shared_ptr<tools::Stroke> stroke_; // the tool in use, if any (queued work may share it)
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed
 	std::vector<Command> queue_;            // not yet applied

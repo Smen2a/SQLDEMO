@@ -30,6 +30,7 @@ const int SDF_OP_ENGRAVE = 3;  // V-groove of depth r where the guide's surface 
 const int SDF_OP_GROOVE = 4;   // square groove, depth r, half-width r2, along the guide
 const int SDF_OP_TONGUE = 5;   // square tongue, height r, half-width r2, along the guide
 const int SDF_OP_PAINT = 6;    // material only: inside the guide, over a transition of width r
+const int SDF_OP_LAYER = 7;    // a sampled smoothing layer (C++ only: Layer::apply); the identity here
 
 const float SDF_MIN_RADIUS = 1.0e-6;
 
@@ -159,6 +160,9 @@ SDF_FN vec4 sdf_apply_edit(float d, vec3 mat, float e, int op, int mode, float r
 	}
 	if (op == SDF_OP_TONGUE) {
 		return vec4(min(d, max(d - r, abs(e) - r2)), mat);
+	}
+	if (op == SDF_OP_LAYER) {
+		return vec4(d, mat);
 	}
 	float w = e < 0.0 ? 1.0 : 0.0;
 	if (r > SDF_MIN_RADIUS) {

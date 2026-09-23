@@ -1,5 +1,7 @@
 #include "body/body.h"
 
+#include "body/layer.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -287,6 +289,15 @@ float Primitive::lipschitz() const {
 	return stretch < 0.9f ? 1.0f / (1.0f - stretch) : 10.0f;
 }
 
+Edit Edit::smoothing(std::shared_ptr<const Layer> layer) {
+	Edit e;
+	const Aabb box = layer->box().empty() ? Aabb{vec3(0.0f), vec3(0.0f)} : layer->box();
+	e.prim = Primitive::box(box.centre(), box.size() * 0.5f);
+	e.op = Op::Layer;
+	e.layer = std::move(layer);
+	return e;
+}
+
 float Edit::influence() const {
 	switch (op) {
 		case Op::Union:
@@ -300,6 +311,8 @@ float Edit::influence() const {
 			return r2;
 		case Op::Tongue:
 			return std::max(r, r2);
+		case Op::Layer:
+			return 0.0f; // nothing beyond its box
 	}
 	return 0.0f;
 }
@@ -317,6 +330,10 @@ float Edit::value_reach() const {
 			return std::max(r, r2);
 		case Op::Paint:
 			return 0.0f;
+		case Op::Layer:
+			// It mixes the field before it with its own where w~ < 1; the sign there can only
+			// depend on the field's value within the layer's largest offset of the surface.
+			return layer->max_offset();
 	}
 	return 0.0f;
 }
@@ -329,6 +346,9 @@ Aabb Edit::bounds() const {
 }
 
 float Edit::feature_size() const {
+	if (op == Op::Layer) {
+		return 4.0f * layer->spacing(); // its samples' scale; not its box's
+	}
 	float size = prim.feature_size();
 	if (blend != Blend::Hard && (op == Op::Union || op == Op::Subtract || op == Op::Intersect)) {
 		size = std::min(size, 2.0f * std::min(r, r2 > 0.0f ? r2 : r));
@@ -339,6 +359,10 @@ float Edit::feature_size() const {
 }
 
 float Edit::lipschitz() const {
+	if (op == Op::Layer) {
+		// Over a field with bound 1; in general max(L, gradient) + ramp (see Octree::prune).
+		return std::max(1.0f, layer->gradient()) + layer->ramp();
+	}
 	float op_l = 1.0f;
 	switch (op) {
 		case Op::Union:
@@ -382,6 +406,9 @@ float box_distance(const Aabb &b, vec3 p) {
 }
 
 vec4 apply(const Edit &e, float d, vec3 mat, vec3 p) {
+	if (e.op == Op::Layer) {
+		return vec4(e.layer->apply(p, d), mat.x, mat.y, mat.z);
+	}
 	return gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape),
 			float(e.material));
 }
@@ -433,7 +460,7 @@ Aabb Body::bounds() const {
 float Body::lipschitz() const {
 	float l = base.lipschitz();
 	for (const Edit &e : edits_) {
-		l = std::max(l, e.lipschitz());
+		l = e.op == Op::Layer ? std::max(l, e.layer->gradient()) + e.layer->ramp() : std::max(l, e.lipschitz());
 	}
 	return l;
 }

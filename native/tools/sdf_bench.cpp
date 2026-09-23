@@ -13,6 +13,7 @@
 //   sdf_bench tools
 
 #include "adf/adf.h"
+#include "body/layer.h"
 #include "compile/octree.h"
 #include "demo/gallery.h"
 #include "edit/session.h"
@@ -384,9 +385,40 @@ int tools_bench() {
 					"re-sampled; %zu edits\n",
 				1e3 * (now() - t0), s.last().octree_ms, s.last().rebuilt_bricks, merged.size());
 	}
+	{
+		// The sanding sponge's work is a smoothing layer, applied as it goes (no preview): each
+		// update runs the curvature flow and re-samples where it changed.
+		const vec3 bisector = gl::normalize(vec3(0, -1, 1));
+		auto sponge = tools::hand_sanding_stroke(tools::SandingSponge{}, {-30, -50, top}, bisector, {1, 0, 0});
+		double work = 0, apply = 0, worst = 0, bricks = 0;
+		int updates = 0;
+		for (int k = 0; k < 90; ++k) {
+			const int leg = k / 30, step = k % 30 + 1;
+			sponge->move_to({leg % 2 == 0 ? -30.0f + 2.0f * float(step) : 30.0f - 2.0f * float(step), -50, top});
+			if (k % 3 != 2) {
+				continue;
+			}
+			const double t0 = now();
+			const tools::StrokeUpdate u = sponge->work(s.body(), s.octree());
+			const double t1 = now();
+			s.revise_stroke(u.drop, u.edits, u.changed);
+			const double t2 = now();
+			work += 1e3 * (t1 - t0);
+			apply += 1e3 * (t2 - t1);
+			worst = std::max(worst, 1e3 * (t2 - t0));
+			bricks += double(s.last().rebuilt_bricks);
+			++updates;
+		}
+		s.commit();
+		const Layer &layer = *s.body().edits().back().layer;
+		std::printf("sanding sponge along an arris, 3 passes of 60 mm\n  applied as it moves: %2d updates, %5.1f ms mean "
+					"(flow %.1f, octree and ADF %.1f), %5.1f worst, %4.0f bricks re-sampled; 1 layer of %zu blocks, %.1f MB\n",
+				updates, (work + apply) / updates, work / updates, apply / updates, worst, bricks / updates, layer.blocks(),
+				double(layer.bytes()) / 1048576.0);
+	}
 	const double t0 = now();
 	s.undo();
-	std::printf("undo (the sanding): %.1f ms\n", 1e3 * (now() - t0));
+	std::printf("undo (the sponge's layer): %.1f ms\n", 1e3 * (now() - t0));
 	return 0;
 }
 

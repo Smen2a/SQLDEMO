@@ -109,6 +109,15 @@ struct Refiner {
 		return Octree::eval_tape(body, cell.base, cell.tape.data(), cell.tape.size(), p);
 	}
 
+	bool holds_layer(const Octree::Leaf &cell) const {
+		for (std::uint32_t entry : cell.tape) {
+			if (body.edits()[entry & ~Octree::kResetBit].op == Op::Layer) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void copy(Local &local, int from, int to) const {
 		const Adf::Node n = (*old.nodes)[std::size_t(from)];
 		local.nodes[std::size_t(to)] = n;
@@ -199,7 +208,10 @@ struct Refiner {
 		// exact checks all of them, as its worst difference is its error band; others stop
 		// at the first failure.
 		const bool can_split = voxel * 0.5f >= params.min_voxel;
-		const bool may_be_exact = (size <= params.exact_cell || !can_split) && int(cell.tape.size()) <= params.exact_tape_limit;
+		// The Live shader cannot evaluate smoothing layers (they are sampled grids, which only
+		// the CPU holds): a cell where one weighs in refines its bricks instead.
+		const bool may_be_exact = (size <= params.exact_cell || !can_split) &&
+				int(cell.tape.size()) <= params.exact_tape_limit && !holds_layer(cell);
 		const float stop = may_be_exact ? std::numeric_limits<float>::max() : params.tolerance;
 		float worst = 0.0f;
 		for (int z = 0; z < kCells && worst <= stop; ++z) {

@@ -39,8 +39,9 @@ Body board(std::uint16_t material);
 // A demo body and a camera that frames it, by name, shared by the tools and the Godot node:
 // "carved_panel", "blend_<i>" and "material_<i>" (gallery tiles), "sphere" (a walnut ball
 // fluted with round-edged gouge cuts), "session" (an oak panel under 300 random strokes)
-// and "board", "board_oak", "board_walnut" (blanks for the workshop). Returns false for an
-// unknown name.
+// and "board", "board_oak", "board_walnut" (blanks for the workshop), and "sanded" (a
+// sharp walnut block with a chisel groove, part of an arris and the groove's edges rounded
+// over by a sanding sponge: smoothing layers). Returns false for an unknown name.
 bool named_demo(const std::string &name, Body &body, Camera &camera);
 // Random curved strokes (V-tool, gouge and flat in turn) into the top face of body's base.
 // Some may be too tight for their tool, which Body::add rejects.

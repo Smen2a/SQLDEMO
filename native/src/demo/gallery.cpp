@@ -1,5 +1,8 @@
 #include "demo/gallery.h"
 
+#include "compile/octree.h"
+#include "tools/tools.h"
+
 #include <cmath>
 #include <cstdlib>
 #include <random>
@@ -245,7 +248,41 @@ Body board(std::uint16_t material) {
 	return b;
 }
 
+Body sanded_block() {
+	// Sharp-edged walnut with a chisel groove along its top, run off both ends.
+	Body b = block(mat::Walnut, {30, 20, 10});
+	for (const Edit &e : tools::Chisel{6.0f}.paring({-34, 4, 10}, {34, 4, 10}, {0, 0, 1}, 1.2f)) {
+		b.add(e);
+	}
+	// A sanding sponge rubbed back and forth over the middle of the front top arris, then
+	// along the groove: each stroke one smoothing layer over what was there.
+	auto rub = [&](vec3 from, vec3 normal, float half, int passes) {
+		Octree octree;
+		octree.build(b);
+		auto stroke = tools::hand_sanding_stroke(tools::SandingSponge{}, from, normal, {1, 0, 0});
+		for (int pass = 0; pass < passes; ++pass) {
+			for (int k = 1; k <= 20; ++k) {
+				const float t = float(k) / 20.0f;
+				stroke->move_to(from + vec3((pass % 2 == 0 ? t : 1.0f - t) * 2.0f * half, 0, 0));
+			}
+		}
+		for (const Edit &e : stroke->work(b, octree).edits) {
+			b.add(e);
+		}
+	};
+	rub({-10, -20, 10}, gl::normalize(vec3(0, -1, 1)), 10.0f, 16);
+	rub({-12, 4, 10}, {0, 0, 1}, 12.0f, 10);
+	return b;
+}
+
 bool named_demo(const std::string &name, Body &body, Camera &camera) {
+	if (name == "sanded") {
+		body = sanded_block();
+		camera.eye = {-38, -62, 44};
+		camera.target = {-2, -8, 4};
+		camera.fov_deg = 32;
+		return true;
+	}
 	if (name == "board" || name == "board_oak" || name == "board_walnut") {
 		body = board(name == "board_oak" ? mat::Oak : name == "board_walnut" ? mat::Walnut : mat::Ash);
 		camera.eye = {60, -170, 140};

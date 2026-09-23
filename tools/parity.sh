@@ -21,6 +21,11 @@ mkdir -p "$OUT"
 CASES=("$@")
 if [[ ${#CASES[@]} -eq 0 ]]; then
 	CASES=(carved_panel:normals carved_panel:albedo sphere:normals sphere:albedo session:normals)
+	# The exact Live path draws bodies without their smoothing layers (a sampled grid only
+	# the CPU holds; the ADF carries them), so the sanded block is for the ADF.
+	if [[ "${PARITY_ARGS:-}" != *"--live-source=exact"* ]]; then
+		CASES+=(sanded:normals sanded:albedo)
+	fi
 	for i in 0 1 2 3 4 5 6 7; do CASES+=("blend_$i:normals"); done
 	for i in 0 1 2 3 4 5; do CASES+=("material_$i:normals" "material_$i:albedo"); done
 fi

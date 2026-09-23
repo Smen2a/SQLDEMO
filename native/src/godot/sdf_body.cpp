@@ -25,7 +25,7 @@ constexpr int kTextureWidth = 1024;
 constexpr int kNodeTexels = 2;
 constexpr int kEditTexels = 6;
 // An edit's kinds share one float in the shader: prim | op << 3 | blend << 6 | profile << 9.
-static_assert(int(Prim::SweepBezier) < 8 && int(Op::Paint) < 8 && int(Blend::Profile) < 8 &&
+static_assert(int(Prim::SweepBezier) < 8 && int(Op::Layer) < 8 && int(Blend::Profile) < 8 &&
 				int(EdgeProfile::Ogee) < 4,
 		"edit kinds outgrew their bits in sdf_live.gdshaderinc");
 constexpr int kMaterialTexels = 4;
@@ -188,6 +188,8 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 		tools::SandingBlock block;
 		block.grit = int(settings.get("grit", 120));
 		model = block.model();
+	} else if (name == "sanding_sponge") {
+		model = tools::SandingSponge{}.model();
 	} else {
 		UtilityFunctions::push_error("SdfBody: unknown tool ", name);
 		return false;
@@ -294,17 +296,6 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 	if (stroke_) {
 		end_stroke();
 	}
-	previewing_ = stroke_preview_;
-	std::size_t pending = 0;
-	for (const std::vector<Edit> &edits : committing_) {
-		pending += edits.size();
-	}
-	if (previewing_ && pending + 4 > std::size_t(kOverlayMax)) {
-		// No room in the overlay for another stroke (a stroke merges to at most 3 edits) until
-		// the strokes before it are applied. Only a burst of strokes during slow updates
-		// gets here.
-		flush();
-	}
 	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal)), a = to_body_direction(along);
 	if (tool == "chisel") {
 		tools::Chisel chisel;
@@ -323,9 +314,25 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		tools::SandingBlock block;
 		block.grit = int(settings.get("grit", 120));
 		stroke_ = tools::sanding_stroke(block, p, n, a);
+	} else if (tool == "sanding_sponge") {
+		tools::SandingSponge sponge;
+		sponge.grit = int(settings.get("grit", 120));
+		stroke_ = tools::hand_sanding_stroke(sponge, p, n, a);
 	} else {
 		UtilityFunctions::push_error("SdfBody: unknown tool ", tool);
 		return false;
+	}
+	// A deferred stroke's work is a layer, which the shader cannot draw: it is applied as it goes.
+	previewing_ = stroke_preview_ && !stroke_->deferred();
+	std::size_t pending = 0;
+	for (const std::vector<Edit> &edits : committing_) {
+		pending += edits.size();
+	}
+	if (previewing_ && pending + 4 > std::size_t(kOverlayMax)) {
+		// No room in the overlay for another stroke (a stroke merges to at most 3 edits) until
+		// the strokes before it are applied. Only a burst of strokes during slow updates
+		// gets here.
+		flush();
 	}
 	return true;
 }
@@ -335,6 +342,10 @@ void SdfBody::move_stroke(const Vector3 &point) {
 		return;
 	}
 	tools::StrokeUpdate u = stroke_->move_to(to_body(point));
+	if (stroke_->deferred()) {
+		queue({Command::WORK, 0, {}, false, stroke_});
+		return;
+	}
 	if (u.empty()) {
 		return;
 	}
@@ -367,6 +378,9 @@ void SdfBody::end_stroke() {
 		return;
 	}
 	std::vector<Command> commands;
+	if (stroke_->deferred()) {
+		commands.push_back({Command::WORK, 0, {}, false, stroke_}); // whatever motion is left
+	}
 	std::vector<Edit> finish = stroke_->finish();
 	if (!finish.empty()) {
 		commands.push_back({Command::STROKE, 0, std::move(finish)});
@@ -428,6 +442,10 @@ void SdfBody::start_job() {
 	// one's appends first.
 	std::vector<Command> batch;
 	for (Command &c : queue_) {
+		if (c.kind == Command::WORK && !batch.empty() && batch.back().kind == Command::WORK &&
+				batch.back().stroke == c.stroke) {
+			continue; // one call works all the motion recorded so far
+		}
 		if (c.kind == Command::STROKE && !batch.empty() && batch.back().kind == Command::STROKE) {
 			Command &a = batch.back();
 			if (c.drop <= a.edits.size()) {
@@ -455,6 +473,13 @@ void SdfBody::start_job() {
 				case Command::STROKE:
 					session_.revise_stroke(c.drop, c.edits);
 					break;
+				case Command::WORK: {
+					const tools::StrokeUpdate u = c.stroke->work(session_.body(), session_.octree());
+					if (!u.empty()) {
+						session_.revise_stroke(u.drop, u.edits, u.changed);
+					}
+					break;
+				}
 				case Command::COMMIT:
 					session_.commit();
 					break;
