@@ -9,7 +9,8 @@ extends Node3D
 ##
 ## User args (after `--`): --scenario=<name> to run one, --frames=<n> measured frames per
 ## scenario (default 240), --view=steps to show step-count heat maps, --shots=<dir> to save
-## a screenshot of each scenario.
+## a screenshot of each scenario. To see where the time goes: --shadows=off (no shadow
+## passes), --ao=off (no SDF ambient occlusion).
 ##
 ## Gate targets at 1920x1080: a bench-filling body <= ~6 ms GPU, three Live bodies <= ~8 ms.
 
@@ -47,7 +48,7 @@ func _ready() -> void:
 	world.environment = env
 	add_child(world)
 	var sun := DirectionalLight3D.new()
-	sun.shadow_enabled = true
+	sun.shadow_enabled = _arg("--shadows", "on") == "on"
 	sun.directional_shadow_max_distance = 600.0
 	add_child(sun)
 	sun.look_at_from_position(Vector3.ZERO, -Vector3(-0.55, -0.40, 0.73), Vector3(0, 0, 1))
@@ -92,6 +93,7 @@ func _run(name: String, s: Array, frames: int) -> Array:
 		if layout[2] > 0:
 			body.add_random_strokes(layout[2], 7)
 		body.debug_view = view
+		body.material_override.set_shader_parameter("sdf_ambient_occlusion", _arg("--ao", "on") == "on")
 		_bodies.append(body)
 	_camera.look_at_from_position(s[2], s[3], Vector3(0, 0, 1))
 
