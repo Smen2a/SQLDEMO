@@ -89,10 +89,18 @@ public:
 	};
 
 	void build(const Body &body, const Octree &octree, const AdfParams &params = {});
-	// Re-samples every cell overlapping `region`, keeping the rest (bricks included). Call it
-	// after the octree has taken the new edits, with the region where the field changed:
-	// see dirty_region(). When edits were only appended, cells in the region that pruning
-	// shows no new edit reaches are kept too. (Undo: pass the removed edits' region.)
+
+	// What changed in the body since the ADF was last built or updated.
+	struct Change {
+		Aabb region;                    // where the field may differ: every added and removed edit's dirty_region()
+		std::uint32_t first_changed = 0; // edits from here on are new; those before it are untouched
+		Aabb removed;                   // where removed (or replaced) edits reached
+	};
+	// Re-samples the cells in `change.region` that a changed edit reaches, keeping the rest
+	// (bricks included): cells whose pruned tape holds no edit from first_changed on are
+	// kept unless a removed edit reached them. Call it after the octree has been updated.
+	void update(const Body &body, const Octree &octree, const Change &change);
+	// The same after appending edits only (from the edit count at the last build or update).
 	void update(const Body &body, const Octree &octree, const Aabb &region);
 	// Where edit `index` can have changed the octree's sampled field.
 	static Aabb dirty_region(const Body &body, const Octree &octree, std::size_t index);
@@ -161,7 +169,7 @@ public:
 	Stats stats() const;
 
 private:
-	void rebuild(const Body &body, const Octree &octree, const Aabb &region, bool reuse);
+	void rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse);
 	void build_grid();
 
 	AdfParams params_;

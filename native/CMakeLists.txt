@@ -28,8 +28,11 @@ add_library(sdf_core STATIC
 	src/core/body/body.cpp
 	src/core/body/materials.cpp
 	src/core/compile/octree.cpp
+	src/core/edit/session.cpp
 	src/core/eval/image.cpp
+	src/core/eval/query.cpp
 	src/core/eval/reference_renderer.cpp
+	src/core/tools/tools.cpp
 )
 target_include_directories(sdf_core PUBLIC src/core)
 set_target_properties(sdf_core PROPERTIES POSITION_INDEPENDENT_CODE ON) # linked into the GDExtension
@@ -66,6 +69,8 @@ if(ZLIB_FOUND)
 		tests/test_golden.cpp
 		tests/test_octree.cpp
 		tests/test_adf.cpp
+		tests/test_tools.cpp
+		tests/test_session.cpp
 	)
 	target_link_libraries(sdf_tests PRIVATE sdf_core sdf_demo sdf_io)
 	target_compile_definitions(sdf_tests PRIVATE SDF_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")

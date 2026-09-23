@@ -62,6 +62,13 @@ MaterialTable MaterialTable::standard() {
 	t.add(metal("brass", {0.80f, 0.63f, 0.28f}, 0.18f, 0.55f, 40.0f));
 	t.add(metal("steel", {0.56f, 0.58f, 0.60f}, 0.12f, 0.45f, 60.0f));
 	t.add(stone("granite", {0.55f, 0.53f, 0.50f}, {0.26f, 0.25f, 0.24f}, 6.0f, 0.55f));
+	// Speckled like stone, at the scale of cork granules and abrasive grit.
+	Material cork = stone("cork", {0.66f, 0.50f, 0.34f}, {0.42f, 0.30f, 0.19f}, 0.6f, 0.35f);
+	cork.specular = 0.02f;
+	t.add(cork);
+	Material abrasive = stone("abrasive", {0.36f, 0.20f, 0.13f}, {0.12f, 0.08f, 0.06f}, 0.12f, 0.45f);
+	abrasive.specular = 0.03f;
+	t.add(abrasive);
 	return t;
 }
 

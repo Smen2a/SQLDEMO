@@ -7,16 +7,23 @@
 // scenarios (game/bench/live_bench.gd) at 1280x720. The shader is fetch bound, so this
 // ranks optimizations before a GPU run; keep it in step with sdf_live.gdshaderinc.
 //   sdf_bench count
+// Live tool use on the workshop board: the time each drag step takes to update the octree
+// and ADF, as the Godot workshop applies them.
+//   sdf_bench tools
 
 #include "adf/adf.h"
 #include "compile/octree.h"
 #include "demo/gallery.h"
+#include "edit/session.h"
+#include "tools/tools.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <memory>
 #include <random>
 #include <string>
 
@@ -319,7 +326,63 @@ int count_bench() {
 
 } // namespace
 
+int tools_bench() {
+	EditSession s;
+	s.reset(demo::board(mat::Ash));
+	std::printf("board: %zu bricks, built in %.0f ms\n", s.adf().stats().bricks, s.last().octree_ms + s.last().adf_ms);
+	const float top = 12.5f;
+	const vec3 up(0, 0, 1);
+	struct Use {
+		const char *name;
+		std::unique_ptr<tools::Stroke> stroke;
+		std::function<vec3(int step)> motion; // the tool's position on the work plane
+	};
+	Use uses[] = {
+			{"chisel 12 mm, 1.5 mm deep, pushed 60 mm", tools::chisel_stroke(tools::Chisel{}, {-50, -20, top}, up, {1, 0, 0}, 1.5f),
+					[&](int k) { return vec3(-50.0f + 2.0f * float(k + 1), -20, top); }},
+			{"saw, 12 mm deep in 30 strokes", tools::saw_stroke(tools::Saw{}, {30, 0, top}, up, {0, 1, 0}, 0.02f),
+					[&](int k) { return vec3(30, k % 2 ? -10.0f : 10.0f, top); }},
+			{"sanding block rubbed over the board", tools::sanding_stroke(tools::SandingBlock{}, {20, 10, top}, up, {1, 0, 0}),
+					[&](int k) { return vec3(20.0f + 25.0f * std::sin(0.7f * float(k)), 10.0f + 8.0f * std::cos(0.3f * float(k)), top); }},
+	};
+	for (Use &use : uses) {
+		double total = 0, worst = 0, octree = 0, bricks = 0;
+		int updates = 0;
+		const int steps = 30;
+		for (int k = 0; k < steps; ++k) {
+			const tools::StrokeUpdate u = use.stroke->move_to(use.motion(k));
+			if (u.empty()) {
+				continue;
+			}
+			const double t0 = now();
+			if (u.replace) {
+				s.set_stroke(u.edits);
+			} else {
+				s.extend_stroke(u.edits);
+			}
+			const double ms = 1e3 * (now() - t0);
+			total += ms;
+			worst = std::max(worst, ms);
+			octree += s.last().octree_ms;
+			bricks += double(s.last().rebuilt_bricks);
+			++updates;
+		}
+		s.extend_stroke(use.stroke->finish());
+		s.commit();
+		std::printf("%-40s %2d updates: %5.1f ms mean (octree %.1f), %5.1f worst, %4.0f bricks re-sampled; %zu edits so far\n",
+				use.name, updates, updates ? total / updates : 0.0, updates ? octree / updates : 0.0, worst,
+				updates ? bricks / updates : 0.0, s.body().edits().size());
+	}
+	const double t0 = now();
+	s.undo();
+	std::printf("undo (the sanding): %.1f ms\n", 1e3 * (now() - t0));
+	return 0;
+}
+
 int main(int argc, char **argv) {
+	if (argc > 1 && std::string(argv[1]) == "tools") {
+		return tools_bench();
+	}
 	if (argc > 1 && std::string(argv[1]) == "adf") {
 		return adf_bench();
 	}

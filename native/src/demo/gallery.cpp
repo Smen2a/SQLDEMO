@@ -237,7 +237,22 @@ Camera carved_panel_camera() {
 	return c;
 }
 
+Body board(std::uint16_t material) {
+	// A flat-sawn board, 160 x 100 x 25 mm, arrises eased by a millimetre.
+	Body b = block(material, {80, 50, 12.5f}, 1.0f);
+	b.grain_origin = {0, 10, -60};
+	b.grain_axis = gl::normalize(vec3(1, 0.04f, 0.08f));
+	return b;
+}
+
 bool named_demo(const std::string &name, Body &body, Camera &camera) {
+	if (name == "board" || name == "board_oak" || name == "board_walnut") {
+		body = board(name == "board_oak" ? mat::Oak : name == "board_walnut" ? mat::Walnut : mat::Ash);
+		camera.eye = {60, -170, 140};
+		camera.target = {0, 0, 0};
+		camera.fov_deg = 38;
+		return true;
+	}
 	if (name == "carved_panel") {
 		body = carved_panel_body();
 		camera = carved_panel_camera();

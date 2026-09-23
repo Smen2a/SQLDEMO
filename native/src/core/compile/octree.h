@@ -55,6 +55,10 @@ public:
 	void build(const Body &body, const OctreeParams &params = {});
 	// Updates the cells touched by edit `index`, which must be the body's newest edit.
 	void add_edit(const Body &body, std::uint32_t index);
+	// Re-prunes every leaf overlapping `region` from the body's whole edit list: after edits
+	// were removed or replaced, with the region they (and their replacements) reached,
+	// expanded by value_margin(). Leaves keep any splits.
+	void update_region(const Body &body, const Aabb &region) { rebuild_region(body, region); }
 
 	Sample sample(const Body &body, vec3 p) const;
 	float distance(const Body &body, vec3 p) const { return sample(body, p).d; }

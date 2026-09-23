@@ -33,14 +33,14 @@ int index(int x, int y, int z) {
 }
 
 // The previous tree, when updating: cells outside `region` are copied from it, and so are
-// cells inside it that no new edit reaches, when the change only appended edits.
+// cells inside it that no changed edit reaches (see Adf::Change).
 struct Old {
 	const std::vector<Adf::Node> *nodes = nullptr;
 	const std::vector<Adf::ExactCell> *exact = nullptr;
 	const std::vector<std::uint32_t> *tape = nullptr;
 	Aabb region;
-	bool appended = false;       // edits were only added since the old tree was built
-	std::uint32_t first_new = 0; // index of the first of them
+	std::uint32_t first_changed = 0;
+	Aabb removed;
 };
 
 // Node of `nodes` covering exactly the cube (lo, size), or -1.
@@ -133,11 +133,11 @@ struct Refiner {
 		// Only the edits that can shape this cube: a few, even where the octree cell's tape is
 		// long, and none at all where the cube is provably empty or solid.
 		const Octree::Leaf cell = octree.prune_within(body, parent, lo, size);
-		if (old_node >= 0 && old.appended &&
+		if (old_node >= 0 && !overlaps(old.removed, lo, size) &&
 				std::none_of(cell.tape.begin(), cell.tape.end(),
-						[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_new; })) {
-			// Pruning dropped every new edit here: each provably changes nothing in this cube
-			// (a long stroke's bounding box holds far more cells than its groove reaches).
+						[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_changed; })) {
+			// Pruning dropped every changed edit here: each provably changes nothing in this
+			// cube (a long stroke's bounding box holds far more cells than its groove reaches).
 			copy(local, old_node, node);
 			return;
 		}
@@ -290,14 +290,20 @@ struct Refiner {
 
 void Adf::build(const Body &body, const Octree &octree, const AdfParams &params) {
 	params_ = params;
-	rebuild(body, octree, Aabb::infinite(), false);
+	rebuild(body, octree, Change{Aabb::infinite(), 0, Aabb::infinite()}, false);
 }
 
-void Adf::update(const Body &body, const Octree &octree, const Aabb &region) {
+void Adf::update(const Body &body, const Octree &octree, const Change &change) {
 	const Octree::Node &root = octree.nodes()[0];
 	const bool same_root = !nodes_.empty() && nodes_[0].size == root.size && nodes_[0].lo.x == root.lo.x &&
 			nodes_[0].lo.y == root.lo.y && nodes_[0].lo.z == root.lo.z;
-	rebuild(body, octree, same_root ? region : Aabb::infinite(), same_root);
+	rebuild(body, octree, same_root ? change : Change{Aabb::infinite(), 0, Aabb::infinite()}, same_root);
+}
+
+void Adf::update(const Body &body, const Octree &octree, const Aabb &region) {
+	const std::size_t count = body.edits().size();
+	// Edits removed through this form: anything in the region may have changed.
+	update(body, octree, Change{region, std::uint32_t(std::min(count, edits_)), count < edits_ ? region : Aabb{}});
 }
 
 Aabb Adf::dirty_region(const Body &body, const Octree &, std::size_t index) {
@@ -311,7 +317,8 @@ Aabb Adf::dirty_region(const Body &body, const Octree &, std::size_t index) {
 	return body.edit_box(index).expanded(body.edit_influence(index));
 }
 
-void Adf::rebuild(const Body &body, const Octree &octree, const Aabb &region, bool reuse) {
+void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse) {
+	const Aabb &region = change.region;
 	const auto start = std::chrono::steady_clock::now();
 	// Cells outside the region keep their bricks. Their samples far from the surface may
 	// now overestimate the distance to a new surface outside the cell, but steps stop at the
@@ -332,8 +339,7 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Aabb &region, bo
 	nodes_.reserve(old_nodes.size() + 64);
 	exact_cells_.clear();
 	exact_tape_.clear();
-	const bool appended = reuse && body.edits().size() >= edits_;
-	const Old old{&old_nodes, &old_exact, &old_tape, region, appended, std::uint32_t(appended ? edits_ : 0)};
+	const Old old{&old_nodes, &old_exact, &old_tape, region, change.first_changed, change.removed};
 	edits_ = body.edits().size();
 	auto add_exact = [&](const ExactCell &cell, const std::uint32_t *entries) {
 		exact_cells_.push_back({std::uint32_t(exact_tape_.size()), cell.count, cell.base, cell.error});

@@ -31,7 +31,8 @@ public:
 	// `grain_axis` through `grain_origin`.
 	vec3 albedo(float id, vec3 p, vec3 grain_origin, vec3 grain_axis) const;
 
-	// Ash, oak, walnut, putty, brass, steel, granite — in the order of the ids below.
+	// Ash, oak, walnut, putty, brass, steel, granite, cork, abrasive paper — in the order of
+	// the ids below.
 	static MaterialTable standard();
 
 private:
@@ -39,7 +40,7 @@ private:
 };
 
 namespace mat {
-enum : std::uint16_t { Ash = 0, Oak, Walnut, Putty, Brass, Steel, Granite };
+enum : std::uint16_t { Ash = 0, Oak, Walnut, Putty, Brass, Steel, Granite, Cork, Abrasive };
 }
 
 Material wood(const std::string &name, vec3 earlywood, vec3 latewood, float ring_spacing_mm, float figure,
