@@ -32,6 +32,11 @@ int index(int x, int y, int z) {
 	return x + kN * (y + kN * z);
 }
 
+// The material a sample shows: the one that dominates its mix.
+std::int32_t dominant(const Sample &s) {
+	return std::int32_t(s.t < 0.5f ? s.m0 : s.m1);
+}
+
 // The previous tree, when updating: cells outside `region` are copied from it, and so are
 // cells inside it that no changed edit reaches (see Adf::Change).
 struct Old {
@@ -153,8 +158,10 @@ struct Refiner {
 		}
 		if (cell.state != Octree::State::Surface) {
 			Adf::Node &n = local.nodes[std::size_t(node)];
+			const Sample centre = at(cell, lo + vec3(size * 0.5f));
 			n.brick = cell.state == Octree::State::Empty ? Adf::kEmpty : Adf::kSolid;
-			n.value = at(cell, lo + vec3(size * 0.5f)).d;
+			n.material = dominant(centre);
+			n.value = centre.d;
 			return;
 		}
 
@@ -180,8 +187,10 @@ struct Refiner {
 		if (!(neg && pos) && min_abs > cell.lipschitz * voxel * kSqrt3) {
 			// The surface does not pass through this cell.
 			Adf::Node &n = local.nodes[std::size_t(node)];
+			const Sample centre = at(cell, lo + vec3(size * 0.5f));
 			n.brick = pos ? Adf::kEmpty : Adf::kSolid;
-			n.value = at(cell, lo + vec3(size * 0.5f)).d;
+			n.material = dominant(centre);
+			n.value = centre.d;
 			return;
 		}
 
@@ -391,14 +400,14 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 		copy_subtree(from, node);
 		return true;
 	};
-	auto leaf_without_brick = [&](int node, vec3 lo, float size, float d) {
+	auto leaf_without_brick = [&](int node, vec3 lo, float size, const Sample &centre) {
 		Node &n = nodes_[std::size_t(node)];
 		n.lo = lo;
 		n.size = size;
 		n.child = -1;
-		n.brick = d >= 0.0f ? kEmpty : kSolid;
-		n.material = 0;
-		n.value = d;
+		n.brick = centre.d >= 0.0f ? kEmpty : kSolid;
+		n.material = dominant(centre);
+		n.value = centre.d;
 	};
 	std::function<void(int, vec3, float, float, int)> subdivide = [&](int node, vec3 lo, float size, float lip,
 																		int tape_node) {
@@ -407,9 +416,9 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 		if (try_reuse(node, lo, size)) {
 			return;
 		}
-		const float d = octree.sample(body, lo + vec3(size * 0.5f)).d;
-		if (std::fabs(d) > lip * size * kSqrt3 * 0.5f) {
-			leaf_without_brick(node, lo, size, d);
+		const Sample centre = octree.sample(body, lo + vec3(size * 0.5f));
+		if (std::fabs(centre.d) > lip * size * kSqrt3 * 0.5f) {
+			leaf_without_brick(node, lo, size, centre);
 			return;
 		}
 		if (size / float(kCells) > params_.max_voxel) {
@@ -441,7 +450,7 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 		}
 		const Octree::Leaf &leaf = octree.leaves()[std::size_t(t.leaf)];
 		if (leaf.state != Octree::State::Surface) {
-			leaf_without_brick(node, t.lo, t.size, octree.sample(body, t.lo + vec3(t.size * 0.5f)).d);
+			leaf_without_brick(node, t.lo, t.size, octree.sample(body, t.lo + vec3(t.size * 0.5f)));
 			return;
 		}
 		subdivide(node, t.lo, t.size, leaf.lipschitz, tape_node);

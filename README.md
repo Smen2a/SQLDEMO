@@ -32,8 +32,11 @@ Other controls:
 - Right-drag orbits, middle-drag pans, the wheel zooms.
 - The panel switches the wood (ash, oak, walnut), starts a new board, and lets the board
   cast shadows.
-- The status line shows how long the last edit took to apply and upload, and the GPU
-  frame time.
+- *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
+  and the board applies it once, when you let go. Turned off, every move is applied as it
+  happens, for comparison.
+- The status line shows how long the last edit took to apply and upload, how many edits
+  the shader is previewing, and the GPU frame time.
 
 | | |
 | --- | --- |
@@ -45,31 +48,51 @@ GPU time on real hardware.)
 
 **How it works:**
 - A tool in use is a *stroke* (`native/src/core/tools/`). It turns the tool's motion into
-  edits of the same shapes the tool's model is built from.
-- Cuts that only grow keep their newest piece open and re-cut just that as it grows. The
-  chisel's 10 mm lengths of run and the saw's 1 mm slices of kerf are then left behind, so
-  an update touches only what moved and a whole cut is a handful of edits.
-- A sanding pass changes everywhere at once, so it replaces itself.
-- Overlapping pieces overlap generously. Inside a union of cuts the field is only a bound,
-  and a thin overlap leaves a seam whose value is smaller than the hit epsilon: the
-  raymarcher would draw it as a wall.
-- The body keeps its edits in an `EditSession` (`native/src/core/edit/`), with the stroke in
-  progress, unlimited undo, and the octree and ADF updated incrementally. Cells that
-  pruning shows no changed edit reaches keep their bricks.
-- `SdfBody` applies the edits on a worker thread, folding together moves that arrive while
-  an update runs, so a slow update never builds a backlog. It then uploads only the brick
-  layers that changed.
+  edits of the same shapes the tool's model is built from, and gives the cut so far merged
+  into as few edits as it takes: the chisel's ramp and flat run, the saw's kerf, the
+  block's pass.
+- **While the tool moves, the shader draws the stroke.** `SdfBody` hands the merged edits
+  to the Live shader as uniforms (the *overlay*, up to 16 edits), and the shader cuts them
+  into the field wherever it samples it: the march, the settling steps, the normals and
+  the ambient occlusion. Moving a tool costs no CPU work at all, and the cut keeps up with
+  the frame rate.
+  - Tools only cut, and a cut only ever raises the field, so empty cells stay empty and are
+    still skipped whole.
+  - A cut applied on top of the field is exactly the body with that edit appended. Where it
+    opens up a solid cell, which has no brick, the shader uses the cell's stored material.
+  - Normals difference the cut as closely as an exact cell's tape, so its edges stay crisp.
+    Bricks keep their taps half a voxel apart, because hardware filtering resolves only
+    1/256 of a voxel.
+- **When the tool lifts off, the stroke is applied once:** the merged edits, plus the
+  chisel's lift-out, go to the body's `EditSession` (`native/src/core/edit/`). That session
+  keeps unlimited undo and updates the octree and ADF incrementally; cells that pruning
+  shows no changed edit reaches keep their bricks.
+  - `SdfBody` applies it on a worker thread, then uploads only the brick layers that
+    changed.
+  - The stroke leaves the overlay in the same frame as that upload, so nothing pops.
+  - Commands that arrive while an update runs are folded together, so a slow update never
+    builds a backlog.
+  - `game/tests/stroke_preview` renders each tool's preview and its commit and diffs them.
+    The mean difference is under 0.1 / 255, and 0.013% of pixels or fewer differ
+    noticeably.
+- **With the preview off,** each move is applied as it happens. Cuts that only grow keep
+  their newest piece open and re-cut just that as it grows. The chisel's 10 mm lengths of
+  run and the saw's 1 mm slices of kerf are then left behind, so an update touches only
+  what moved. Those pieces overlap generously: inside a union of cuts the field is only a
+  bound, and a thin overlap leaves a seam whose value is smaller than the hit epsilon,
+  which the raymarcher would draw as a wall. The merged edits have no such seams.
 
-`sdf_bench tools` times each drag step on the workshop board (4 shared cores):
+`sdf_bench tools` times both ways on the workshop board (4 shared cores):
 
-| Tool at work | Per update | Edits for the whole cut |
+| Tool at work | Applied as it moves | Previewed, applied on release |
 | --- | --- | --- |
-| chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 21 ms | 8 |
-| saw, 12 mm deep in 30 strokes | 54 ms | 10 |
-| sanding block, rubbed over 120 x 56 mm to 2.5 mm deep | 216 ms | 1 |
+| chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 29 updates of 19 ms (0.56 s in all), 8 edits | 56 ms once, 3 edits |
+| saw, 12 mm deep in 30 strokes | 30 updates of 56 ms (1.7 s), 10 edits | 97 ms once, 1 edit |
+| sanding block, rubbed over the board | 25 updates of 145 ms (3.6 s), 1 edit | 136 ms once, 1 edit |
 
-A sanding update re-samples everything the block has covered, as well as the previous
-pass. That is several thousand bricks for a large patch.
+Applied as it moves, the cut lags the tool by an update, and a sanding update re-samples
+everything the block has covered, as well as the previous pass. Previewed, the cut is
+there in the same frame, and the CPU works once per stroke.
 
 ## Layout
 
@@ -321,8 +344,9 @@ native/build/sdf_tests            # property tests (exactness, compact support, 
 native/build/sdf_gallery out 2 2  # re-render the gallery images at 2x, 2x2 supersampled
 
 GODOT=/path/to/godot tools/test_godot.sh   # shader compile checks, the extension, live
-                                           # renders and GPU/CPU parity (needs xvfb-run
-                                           # and Mesa; a few minutes on llvmpipe)
+                                           # renders, the workshop, stroke previews and
+                                           # GPU/CPU parity (needs xvfb-run and Mesa;
+                                           # several minutes on llvmpipe)
 native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, any view
 ```
 

@@ -253,3 +253,77 @@ TEST(tool_strokes_cut_what_their_tools_cut) {
 	const Heights h(board_with(sanded));
 	CHECK_NEAR(h.at(0.0f, 0.0f), top - tools::SandingBlock{}.removal_per_mm() * 70.0f, 2e-3);
 }
+
+// A stroke's merged form (what a preview draws and a commit applies) cuts what its pieces
+// cut, in a few edits: the chisel's ramp and flat run, the saw's kerf, the block's pass.
+TEST(tool_strokes_merge_into_the_same_cut) {
+	const float top = 12.5f;
+	const vec3 up(0, 0, 1);
+	struct Result {
+		std::vector<Edit> pieces, merged;
+	};
+	auto run = [](tools::Stroke &stroke, const std::vector<vec3> &path) {
+		Result r;
+		for (const vec3 &p : path) {
+			const tools::StrokeUpdate u = stroke.move_to(p);
+			r.pieces.resize(r.pieces.size() - std::min(u.drop, r.pieces.size()));
+			r.pieces.insert(r.pieces.end(), u.edits.begin(), u.edits.end());
+		}
+		r.merged = stroke.edits();
+		for (const Edit &e : stroke.finish()) {
+			r.pieces.push_back(e);
+			r.merged.push_back(e);
+		}
+		for (const Edit &e : r.merged) {
+			CHECK(e.op == Op::Subtract);
+		}
+		return r;
+	};
+
+	// Chisel: a long push, pulled back on the way.
+	auto push = tools::chisel_stroke(tools::Chisel{}, {-60, 0, top}, up, {1, 0, 0}, 1.0f);
+	std::vector<vec3> steps;
+	for (float x = -58.0f; x <= 40.0f; x += 0.7f) {
+		steps.push_back({x, x > 0.0f && x < 5.0f ? 0.4f : 0.0f, top});
+	}
+	steps.push_back({-10, 0, top});
+	const Result pared = run(*push, steps);
+	CHECK(pared.merged.size() == 3); // ramp, run, lift-out
+	CHECK(pared.pieces.size() > pared.merged.size());
+	const Heights by_pieces(board_with(pared.pieces)), merged(board_with(pared.merged));
+	for (float x = -64.0f; x <= 46.0f; x += 1.3f) {
+		for (float y : {-7.0f, -5.5f, 0.0f, 5.5f, 7.0f}) {
+			CHECK_NEAR(merged.at(x, y), by_pieces.at(x, y), 1e-3);
+		}
+	}
+	// One run has no seams: halfway down it, the nearest surface is the floor.
+	float clearance = 1.0f;
+	for (float x = -55.0f; x <= 37.0f; x += 0.01f) {
+		clearance = std::min(clearance, merged.body.sample_exhaustive({x, 0.0f, top - 0.5f}).d);
+	}
+	CHECK_NEAR(clearance, 0.5, 1e-3);
+
+	// Saw: slices, or one kerf.
+	auto sawing = tools::saw_stroke(tools::Saw{}, {0, 0, top}, up, {0, 1, 0}, 0.02f);
+	std::vector<vec3> strokes{{0, 0, top}};
+	for (int k = 0; k < 20; ++k) {
+		strokes.push_back({0, k % 2 ? -10.0f : 10.0f, top});
+	}
+	const Result sawn = run(*sawing, strokes);
+	CHECK(sawn.merged.size() == 1);
+	const Heights slices(board_with(sawn.pieces)), kerf(board_with(sawn.merged));
+	for (float y = -40.0f; y <= 40.0f; y += 10.0f) {
+		for (float x : {-0.6f, -0.2f, 0.0f, 0.3f, 0.6f}) {
+			CHECK_NEAR(kerf.at(x, y), slices.at(x, y), 1e-3);
+		}
+	}
+
+	// Sanding: one pass either way.
+	auto rub = tools::sanding_stroke(tools::SandingBlock{}, {0, 0, top}, up, {1, 0, 0});
+	const Result sanded = run(*rub, {{10, 0, top}, {-10, 0, top}, {10, 3, top}, {-10, 0, top}});
+	CHECK(sanded.merged.size() == 1 && sanded.pieces.size() == 1);
+	const Heights a(board_with(sanded.pieces)), b(board_with(sanded.merged));
+	for (float x = -50.0f; x <= 50.0f; x += 5.0f) {
+		CHECK_NEAR(b.at(x, 1.0f), a.at(x, 1.0f), 1e-4);
+	}
+}

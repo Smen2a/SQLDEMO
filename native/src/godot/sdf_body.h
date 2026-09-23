@@ -12,7 +12,9 @@
 #include <godot_cpp/classes/shader_material.hpp>
 #include <godot_cpp/classes/texture2d_array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/packed_vector4_array.hpp>
 
+#include <deque>
 #include <future>
 #include <memory>
 #include <vector>
@@ -26,9 +28,13 @@ namespace sdf::godot_bind {
 // metre-scaled world) to place it.
 //
 // Live editing: a tool stroke (begin_stroke / move_stroke / end_stroke) turns the tool's
-// motion into edits at once, and the body applies them on a worker thread, one batch at a
-// time, uploading when each batch is done (signal `edited`). Moves that arrive while a
-// batch runs are folded together, so a slow update never builds a backlog.
+// motion into edits. With stroke_preview on (the default) the shader draws them on top of
+// the body while the tool moves (sdf_live.gdshaderinc's overlay), which costs no CPU work,
+// and the stroke is applied once, merged, when the tool lifts off. Otherwise each move's
+// edits are applied as they come. Either way the body applies edits on a worker thread,
+// one batch at a time, uploading when each batch is done (signal `edited`); commands that
+// arrive while a batch runs are folded together, so a slow update never builds a backlog.
+// A previewed stroke stays in the overlay until the upload that carries it.
 class SdfBody : public godot::MeshInstance3D {
 	GDCLASS(SdfBody, godot::MeshInstance3D)
 
@@ -79,6 +85,10 @@ public:
 	bool can_redo() const { return stats_.get("can_redo", false); }
 	// Whether edits are still being applied (a batch running or queued).
 	bool is_busy() const { return job_.valid() || !queue_.empty(); }
+	// Whether strokes are drawn by the shader while the tool moves and applied when it lifts
+	// off (on), or applied as the tool moves (off). Takes effect from the next stroke.
+	void set_stroke_preview(bool enabled) { stroke_preview_ = enabled; }
+	bool get_stroke_preview() const { return stroke_preview_; }
 	// Waits for every queued edit to be applied and uploaded (for tests).
 	void flush();
 
@@ -110,10 +120,16 @@ private:
 		enum Kind { STROKE, COMMIT, CANCEL, UNDO, REDO } kind;
 		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
 		std::vector<Edit> edits; // then append these
+		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
 	void queue(Command c);
+	void queue_all(std::vector<Command> commands); // in one batch
+	// The overlay: previewed strokes not yet uploaded, then the stroke in progress (if
+	// previewed), packed for the shader.
+	void update_overlay();
+	void apply_overlay(const godot::Ref<godot::ShaderMaterial> &material) const;
 	void start_job();                              // applies the queue on a worker
 	void finish_job();                             // waits for the worker, then uploads
 	void upload_all();
@@ -139,9 +155,17 @@ private:
 	bool exact_cells_ = true;
 
 	std::unique_ptr<tools::Stroke> stroke_; // the tool in use, if any
+	bool stroke_preview_ = true;
+	bool previewing_ = false;               // whether stroke_ is previewed
 	std::vector<Command> queue_;            // not yet applied
 	std::future<void> job_;                 // the batch being applied, if any
 	std::vector<std::uint32_t> job_bricks_, job_materials_; // slots the batch rewrote
+	std::deque<std::vector<Edit>> committing_; // previewed strokes queued or being applied, oldest first
+	std::size_t job_previews_ = 0;             // how many of them the batch applies
+	godot::PackedVector4Array overlay_;        // what the shader's overlay uniforms hold
+	int overlay_count_ = 0;
+	sdf::Aabb overlay_box_;
+	float overlay_lipschitz_ = 1.0f;
 	double job_ms_ = 0, upload_ms_ = 0;
 	godot::Dictionary stats_;
 	godot::Dictionary last_hit_;

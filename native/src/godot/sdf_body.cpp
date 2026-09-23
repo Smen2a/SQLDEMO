@@ -29,6 +29,13 @@ static_assert(int(Prim::SweepBezier) < 8 && int(Op::Paint) < 8 && int(Blend::Pro
 				int(EdgeProfile::Ogee) < 4,
 		"edit kinds outgrew their bits in sdf_live.gdshaderinc");
 constexpr int kMaterialTexels = 4;
+// The shader's overlay (sdf_live.gdshaderinc): SDF_OVERLAY_MAX edits of SDF_OVERLAY_TEXELS.
+constexpr int kOverlayMax = 16;
+constexpr int kOverlayTexels = 8;
+// How far past its bounds an overlay edit is still applied: it can change the field's
+// value (never its sign) inside the body there, which settling and normal taps within a
+// millimetre of the surface read.
+constexpr float kOverlayMargin = 1.0f;
 
 Vector3 to_godot(vec3 v) {
 	return Vector3(v.x, v.y, v.z);
@@ -160,6 +167,7 @@ bool SdfBody::load_demo(const String &name) {
 	}
 	flush();
 	stroke_.reset();
+	update_overlay();
 	demo_camera_ = camera;
 	const auto start = std::chrono::steady_clock::now();
 	session_.reset(body, {}, live_source_ == LIVE_ADF);
@@ -186,6 +194,7 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	}
 	flush();
 	stroke_.reset();
+	update_overlay();
 	// A tool has a handful of edits: its exact tapes are short, and it needs no ADF.
 	live_source_ = LIVE_EXACT;
 	update_shaders();
@@ -209,6 +218,7 @@ Dictionary SdfBody::get_demo_camera() const {
 void SdfBody::add_random_strokes(int count, int seed) {
 	flush();
 	stroke_.reset();
+	update_overlay();
 	const auto start = std::chrono::steady_clock::now();
 	std::vector<Edit> strokes;
 	for (const Edit &e : demo::random_strokes(session_.body(), count, std::uint32_t(seed))) {
@@ -284,6 +294,17 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 	if (stroke_) {
 		end_stroke();
 	}
+	previewing_ = stroke_preview_;
+	std::size_t pending = 0;
+	for (const std::vector<Edit> &edits : committing_) {
+		pending += edits.size();
+	}
+	if (previewing_ && pending + 4 > std::size_t(kOverlayMax)) {
+		// No room in the overlay for another stroke (a stroke merges to at most 3 edits) until
+		// the strokes before it are applied. Only a burst of strokes during slow updates
+		// gets here.
+		flush();
+	}
 	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal)), a = to_body_direction(along);
 	if (tool == "chisel") {
 		tools::Chisel chisel;
@@ -314,7 +335,12 @@ void SdfBody::move_stroke(const Vector3 &point) {
 		return;
 	}
 	tools::StrokeUpdate u = stroke_->move_to(to_body(point));
-	if (!u.empty()) {
+	if (u.empty()) {
+		return;
+	}
+	if (previewing_) {
+		update_overlay();
+	} else {
 		queue({Command::STROKE, u.drop, std::move(u.edits)});
 	}
 }
@@ -323,18 +349,42 @@ void SdfBody::end_stroke() {
 	if (!stroke_) {
 		return;
 	}
+	if (previewing_) {
+		// The whole stroke, merged, in one batch; it stays in the overlay until that lands.
+		std::vector<Edit> edits = stroke_->edits();
+		for (const Edit &e : stroke_->finish()) {
+			edits.push_back(e);
+		}
+		stroke_.reset();
+		if (!edits.empty()) {
+			committing_.push_back(edits);
+			std::vector<Command> commands;
+			commands.push_back({Command::STROKE, 0, std::move(edits)});
+			commands.push_back({Command::COMMIT, 0, {}, true});
+			queue_all(std::move(commands));
+		}
+		update_overlay();
+		return;
+	}
+	std::vector<Command> commands;
 	std::vector<Edit> finish = stroke_->finish();
 	if (!finish.empty()) {
-		queue({Command::STROKE, 0, std::move(finish)});
+		commands.push_back({Command::STROKE, 0, std::move(finish)});
 	}
-	queue({Command::COMMIT, 0, {}});
+	commands.push_back({Command::COMMIT, 0, {}});
+	queue_all(std::move(commands));
 	stroke_.reset();
 }
 
 void SdfBody::cancel_stroke() {
-	if (stroke_) {
+	if (!stroke_) {
+		return;
+	}
+	stroke_.reset();
+	if (previewing_) {
+		update_overlay(); // the body never saw it
+	} else {
 		queue({Command::CANCEL, 0, {}});
-		stroke_.reset();
 	}
 }
 
@@ -364,6 +414,15 @@ void SdfBody::queue(Command c) {
 	}
 }
 
+void SdfBody::queue_all(std::vector<Command> commands) {
+	for (Command &c : commands) {
+		queue_.push_back(std::move(c));
+	}
+	if (!job_.valid()) {
+		start_job();
+	}
+}
+
 void SdfBody::start_job() {
 	// Fold runs of stroke updates into one: what a later update drops comes off the earlier
 	// one's appends first.
@@ -385,6 +444,10 @@ void SdfBody::start_job() {
 	queue_.clear();
 	job_bricks_.clear();
 	job_materials_.clear();
+	job_previews_ = 0;
+	for (const Command &c : batch) {
+		job_previews_ += c.previewed;
+	}
 	job_ = std::async(std::launch::async, [this, batch = std::move(batch)]() {
 		const auto start = std::chrono::steady_clock::now();
 		for (const Command &c : batch) {
@@ -420,10 +483,66 @@ void SdfBody::finish_job() {
 	upload_textures();
 	upload_adf(false, job_bricks_, job_materials_);
 	update_material();
+	// The previewed strokes this batch applied are in the textures now: out of the overlay,
+	// in the same frame.
+	for (; job_previews_ > 0 && !committing_.empty(); --job_previews_) {
+		committing_.pop_front();
+	}
+	update_overlay();
 	upload_ms_ = ms_since(start);
 	last_update_ms_ = job_ms_;
 	refresh_stats();
 	emit_signal("edited", stats_);
+}
+
+void SdfBody::update_overlay() {
+	std::vector<Edit> edits;
+	for (const std::vector<Edit> &stroke : committing_) {
+		edits.insert(edits.end(), stroke.begin(), stroke.end());
+	}
+	if (stroke_ && previewing_) {
+		for (const Edit &e : stroke_->edits()) {
+			edits.push_back(e);
+		}
+	}
+	overlay_.resize(kOverlayMax * kOverlayTexels);
+	overlay_.fill(Vector4());
+	overlay_count_ = 0;
+	overlay_box_ = Aabb();
+	overlay_lipschitz_ = 1.0f;
+	for (const Edit &e : edits) {
+		// The body would refuse what it does not accept, and the shader only cuts.
+		if (overlay_count_ == kOverlayMax || !Body::accepts(e) || e.op != Op::Subtract) {
+			continue;
+		}
+		const Aabb box = e.bounds().expanded(kOverlayMargin);
+		const int o = overlay_count_ * kOverlayTexels;
+		const int code = int(e.prim.type) | int(e.op) << 3 | int(e.blend) << 6 | int(e.shape) << 9;
+		overlay_.set(o, Vector4(float(code), e.r, e.r2, float(e.material)));
+		for (int i = 0; i < 5; ++i) {
+			overlay_.set(o + 1 + i, to_godot(e.prim.p[i]));
+		}
+		overlay_.set(o + 6, Vector4(box.lo.x, box.lo.y, box.lo.z, 0.0f));
+		overlay_.set(o + 7, Vector4(box.hi.x, box.hi.y, box.hi.z, 0.0f));
+		overlay_box_.include(box);
+		overlay_lipschitz_ = std::max(overlay_lipschitz_, e.lipschitz());
+		++overlay_count_;
+	}
+	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
+		apply_overlay(m);
+	}
+	stats_["overlay_edits"] = overlay_count_;
+}
+
+void SdfBody::apply_overlay(const Ref<ShaderMaterial> &material) const {
+	material->set_shader_parameter("sdf_overlay_count", overlay_count_);
+	if (overlay_count_ == 0) {
+		return;
+	}
+	material->set_shader_parameter("sdf_overlay", overlay_);
+	material->set_shader_parameter("sdf_overlay_lo", to_godot(overlay_box_.lo));
+	material->set_shader_parameter("sdf_overlay_hi", to_godot(overlay_box_.hi));
+	material->set_shader_parameter("sdf_overlay_lipschitz", overlay_lipschitz_);
 }
 
 void SdfBody::flush() {
@@ -652,6 +771,7 @@ void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	material->set_shader_parameter("sdf_grain_axis", to_godot(body.grain_axis));
 	material->set_shader_parameter("sdf_debug_view", debug_view_);
 	material->set_shader_parameter("sdf_exact_cells", exact_cells_);
+	apply_overlay(material);
 }
 
 void SdfBody::set_debug_view(int view) {
@@ -677,6 +797,7 @@ void SdfBody::refresh_stats() {
 	d["adf_finest_voxel"] = a.finest_voxel;
 	d["update_ms"] = last_update_ms_;
 	d["upload_ms"] = upload_ms_;
+	d["overlay_edits"] = overlay_count_; // edits the shader draws on top (previewed strokes)
 	stats_ = d;
 }
 
@@ -704,6 +825,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("can_redo"), &SdfBody::can_redo);
 	ClassDB::bind_method(D_METHOD("is_busy"), &SdfBody::is_busy);
 	ClassDB::bind_method(D_METHOD("flush"), &SdfBody::flush);
+	ClassDB::bind_method(D_METHOD("set_stroke_preview", "enabled"), &SdfBody::set_stroke_preview);
+	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
 	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
 	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
 	ClassDB::bind_method(D_METHOD("set_live_source", "source"), &SdfBody::set_live_source);
@@ -720,6 +843,7 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "live_source", PROPERTY_HINT_ENUM, "ADF,Exact"), "set_live_source",
 			"get_live_source");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "exact_cells"), "set_exact_cells", "get_exact_cells");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "stroke_preview"), "set_stroke_preview", "get_stroke_preview");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);

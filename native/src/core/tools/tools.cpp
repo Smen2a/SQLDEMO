@@ -273,6 +273,13 @@ public:
 		return u;
 	}
 
+	std::vector<Edit> edits() const override {
+		if (!moving_) {
+			return {};
+		}
+		return chisel_.paring(start_, start_ + dir_ * reached_, n_, depth_);
+	}
+
 	std::vector<Edit> finish() override {
 		if (!moving_) {
 			return {};
@@ -321,6 +328,13 @@ public:
 		return u;
 	}
 
+	std::vector<Edit> edits() const override {
+		if (cut_ <= 0.0f) {
+			return {};
+		}
+		return {saw_.kerf_cut(frame_.origin, frame_.x, frame_.z, cut_)};
+	}
+
 	Frame pose() const override {
 		Frame f = frame_;
 		f.origin = frame_.point({position_, 0.0f, -cut_});
@@ -363,6 +377,13 @@ public:
 			cut_hi_ = hi_;
 		}
 		return u;
+	}
+
+	std::vector<Edit> edits() const override {
+		if (!cut_) {
+			return {};
+		}
+		return {block_.pass(plane_, cut_lo_, cut_hi_, cut_depth_)};
 	}
 
 	Frame pose() const override {

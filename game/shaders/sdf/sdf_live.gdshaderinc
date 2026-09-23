@@ -21,6 +21,9 @@
 // it is called, and it dwarfs the rest of the shader, so it is called from as few places
 // as possible: the march, the settling steps, and (ADF) one pass for all four normal taps.
 //
+// A stroke in progress is drawn on top of either backend (the overlay, below), so a tool
+// can move without the field being rebuilt under it.
+//
 // Data textures (1024 texels wide, written by native/src/godot/sdf_body.cpp):
 //   sdf_nodes      RGBA32F, 2 texels per octree node: (first child or -1, tape offset,
 //                  tape length, flags) with flags = (state + 1) + 3 * (base primitive in
@@ -292,7 +295,8 @@ vec4 sdf_adf_eval(vec3 p, vec3 lo, float size, vec4 a, vec4 n0) {
 		return sdf_eval_tape(p, n0);
 	}
 	if (kind < 0) {
-		return vec4(a.w, 0.0, 0.0, 0.0);
+		// Empty or solid: the centre value, and material (only an overlay cut shows it).
+		return vec4(a.w, a.z, a.z, 0.0);
 	}
 	vec3 u = (p - lo) / size * SDF_BRICK_CELLS;
 	float d = sdf_brick_value(kind, u);
@@ -310,6 +314,78 @@ vec4 sdf_adf_eval(vec3 p, vec3 lo, float size, vec4 a, vec4 n0) {
 }
 
 #endif
+
+// --- strokes in progress (the overlay) ---------------------------------------------------
+// SdfBody previews a tool stroke by handing its edits to the shader, which applies them on
+// top of the body's field wherever it samples it: moving a tool costs no octree or ADF
+// update. The edits reach the body (and the textures above) once, when the tool lifts off,
+// and leave the overlay when that upload lands. Overlay edits only cut (Op::Subtract, any
+// blend), which only ever raises the field: empty cells stay empty, and a cut applied here
+// is exactly the body with that edit appended (to within the ADF's tolerance, which the
+// cut then sees as the old surface's).
+// SDF_OVERLAY_TEXELS vec4 per edit: its sdf_edits texels, then the box outside which it
+// cannot move the surface (lo, hi): its bounds, a millimetre larger for settling and normal
+// taps just inside the surface.
+
+const int SDF_OVERLAY_MAX = 16;
+const int SDF_OVERLAY_TEXELS = 8;
+uniform int sdf_overlay_count = 0;
+uniform vec4 sdf_overlay[128]; // SDF_OVERLAY_MAX * SDF_OVERLAY_TEXELS
+uniform vec3 sdf_overlay_lo;   // the union of the edits' boxes
+uniform vec3 sdf_overlay_hi;
+uniform float sdf_overlay_lipschitz = 1.0;
+
+bool sdf_in_box(vec3 p, vec3 lo, vec3 hi) {
+	return all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi));
+}
+
+bool sdf_overlay_near(vec3 p) {
+	return sdf_overlay_count > 0 && sdf_in_box(p, sdf_overlay_lo, sdf_overlay_hi);
+}
+
+// The field s at p (distance, material state) with the overlay's cuts made.
+vec4 sdf_overlay_apply(vec3 p, vec4 s) {
+	if (!sdf_overlay_near(p)) {
+		return s;
+	}
+	int count = min(sdf_overlay_count, SDF_OVERLAY_MAX);
+	for (int k = 0; k < count; k++) {
+		int o = k * SDF_OVERLAY_TEXELS;
+		if (!sdf_in_box(p, sdf_overlay[o + 6].xyz, sdf_overlay[o + 7].xyz)) {
+			continue;
+		}
+		vec4 head = sdf_overlay[o];
+		int packed = int(head.x);
+		float pd = sdf_primitive(p, packed & 7, sdf_overlay[o + 1], sdf_overlay[o + 2], sdf_overlay[o + 3],
+				sdf_overlay[o + 4], sdf_overlay[o + 5]);
+		s = sdf_apply_edit(s.x, s.yzw, pd, (packed >> 3) & 7, (packed >> 6) & 7, head.y, head.z, (packed >> 9) & 3,
+				head.w);
+	}
+	return s;
+}
+
+// The distances d at four points with the overlay's cuts made, in one pass (normal taps).
+vec4 sdf_overlay_apply4(vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec4 d) {
+	vec3 q[4] = vec3[](p0, p1, p2, p3);
+	float r[4] = float[](d.x, d.y, d.z, d.w);
+	int count = min(sdf_overlay_count, SDF_OVERLAY_MAX);
+	for (int k = 0; k < count; k++) {
+		int o = k * SDF_OVERLAY_TEXELS;
+		vec3 lo = sdf_overlay[o + 6].xyz;
+		vec3 hi = sdf_overlay[o + 7].xyz;
+		vec4 head = sdf_overlay[o];
+		int packed = int(head.x);
+		for (int j = 0; j < 4; j++) {
+			if (sdf_in_box(q[j], lo, hi)) {
+				float pd = sdf_primitive(q[j], packed & 7, sdf_overlay[o + 1], sdf_overlay[o + 2], sdf_overlay[o + 3],
+						sdf_overlay[o + 4], sdf_overlay[o + 5]);
+				r[j] = sdf_apply_edit(r[j], vec3(0.0), pd, (packed >> 3) & 7, (packed >> 6) & 7, head.y, head.z,
+						(packed >> 9) & 3, head.w).x;
+			}
+		}
+	}
+	return vec4(r[0], r[1], r[2], r[3]);
+}
 
 // --- the field, whichever backend -------------------------------------------------------
 
@@ -358,10 +434,11 @@ vec4 sdf_sample_near(vec3 p, inout vec3 lo, inout float size, inout vec4 n0, ino
 		int state_unused;
 		sdf_enter_cell(p, lo, size, n0, a, lipschitz_unused, state_unused);
 	}
-	return sdf_cell_eval(p, lo, size, n0, a);
+	return sdf_overlay_apply(p, sdf_cell_eval(p, lo, size, n0, a));
 }
 
-// For ambient occlusion: bricks only (the ADF), within about a voxel of the field.
+// For ambient occlusion: bricks only (the ADF), within about a voxel of the field; with
+// the overlay's cuts.
 float sdf_sample_approx(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 #ifdef SDF_ADF
 	if (!sdf_in_cell(p, lo, size)) {
@@ -372,7 +449,7 @@ float sdf_sample_approx(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 		int state_unused;
 		sdf_enter_cell(p, lo, size, n0, a, lipschitz_unused, state_unused);
 	}
-	return sdf_adf_approx(p, lo, size, a);
+	return sdf_overlay_apply(p, vec4(sdf_adf_approx(p, lo, size, a))).x;
 #else
 	return sdf_sample_near(p, lo, size, n0, a).x;
 #endif
@@ -383,6 +460,10 @@ float sdf_sample_approx(vec3 p, vec3 lo, float size, vec4 n0, vec4 a) {
 // p's leaf, never descending again. Exact leaves difference their tape (exact that close
 // outside the leaf too) in one pass; brick leaves their brick, half a voxel apart, the
 // stencil shifted to stay inside the leaf.
+// Where the overlay cuts, the cut is differenced as closely as an exact leaf's tape, so its
+// edges stay crisp, against the leaf's field made linear from the taps above (in a solid
+// leaf the cut alone shapes the surface): a brick's own taps stay half a voxel apart, as
+// its hardware filter only resolves weights to 1/256 of a voxel.
 vec3 sdf_adf_normal(vec3 p, float eps, vec3 lo, float size, vec4 n0, vec4 a, vec3 fallback) {
 	vec3 k0 = vec3(1.0, -1.0, -1.0);
 	vec3 k1 = vec3(-1.0, -1.0, 1.0);
@@ -397,21 +478,33 @@ vec3 sdf_adf_normal(vec3 p, float eps, vec3 lo, float size, vec4 n0, vec4 a, vec
 		sdf_enter_cell(p, lo, size, n0, a, lipschitz_unused, state_unused);
 	}
 	int kind = int(a.y);
-	if (kind < 0) {
+	bool cut = sdf_overlay_near(p);
+	if (kind < 0 && !cut) {
 		return fallback;
 	}
-	vec4 d;
+	float fine = min(max(eps, 2.0e-3), SDF_EXACT_NORMAL_REACH);
+	vec3 c = p;
+	float h = fine;
+	vec4 d = vec4(a.w); // solid (empty leaves are never hit)
 	if (sdf_adf_exact(a)) {
-		float h = min(max(eps, 2.0e-3), SDF_EXACT_NORMAL_REACH);
 		d = sdf_eval_tape4(p + k0 * h, p + k1 * h, p + k2 * h, p + k3 * h, n0);
-	} else {
-		float h = min(max(eps, 0.5 * size / SDF_BRICK_CELLS), 0.25 * size);
-		vec3 c = clamp(p, lo + vec3(h), lo + vec3(size - h));
+	} else if (kind >= 0) {
+		h = min(max(eps, 0.5 * size / SDF_BRICK_CELLS), 0.25 * size);
+		c = clamp(p, lo + vec3(h), lo + vec3(size - h));
 		float scale = SDF_BRICK_CELLS / size;
 		d = vec4(sdf_brick_value(kind, (c + k0 * h - lo) * scale), sdf_brick_value(kind, (c + k1 * h - lo) * scale),
 				sdf_brick_value(kind, (c + k2 * h - lo) * scale), sdf_brick_value(kind, (c + k3 * h - lo) * scale));
 	}
 	vec3 g = k0 * d.x + k1 * d.y + k2 * d.z + k3 * d.w;
+	if (cut) {
+		// The leaf's field as linear about p (exactly its taps when they are the fine ones),
+		// then cut at the fine taps.
+		vec3 grad = g / (4.0 * h);
+		float at_p = 0.25 * (d.x + d.y + d.z + d.w) + dot(grad, p - c);
+		vec4 linear = vec4(at_p) + fine * vec4(dot(grad, k0), dot(grad, k1), dot(grad, k2), dot(grad, k3));
+		d = sdf_overlay_apply4(p + k0 * fine, p + k1 * fine, p + k2 * fine, p + k3 * fine, linear);
+		g = k0 * d.x + k1 * d.y + k2 * d.z + k3 * d.w;
+	}
 	return dot(g, g) > 1.0e-24 ? normalize(g) : fallback;
 }
 #else
@@ -546,12 +639,17 @@ void fragment() {
 			}
 		}
 #endif
-		s = state == SDF_STATE_SOLID ? vec4(-1.0, 0.0, 0.0, 0.0) : sdf_cell_eval(p, lo, size, n0, a);
+		// Solid cells are hits, unless the overlay cuts into them.
+		bool cut = sdf_overlay_near(p);
+		s = state == SDF_STATE_SOLID && !cut ? vec4(-1.0, 0.0, 0.0, 0.0)
+											 : sdf_overlay_apply(p, sdf_cell_eval(p, lo, size, n0, a));
 		if (s.x < eps) {
 			hit = true;
 			break;
 		}
-		t += min(max(s.x / lipschitz, eps * 0.5), exit + 1.0e-4);
+		// (A solid ADF leaf's `lipschitz` is its centre value: the overlay's bound applies.)
+		float bound = cut ? max(lipschitz, sdf_overlay_lipschitz) : lipschitz;
+		t += min(max(s.x / bound, eps * 0.5), exit + 1.0e-4);
 	}
 
 	if (sdf_debug_view == SDF_VIEW_STEPS) {

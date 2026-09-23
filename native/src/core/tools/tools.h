@@ -85,16 +85,24 @@ struct StrokeUpdate {
 	bool empty() const { return drop == 0 && edits.empty(); }
 };
 
-// A tool in use, from engaging it to lifting it off: it turns the tool's motion into edits.
-// Cuts that only ever grow (a chisel pushing on, a saw going deeper) keep their newest piece
-// open, re-cutting just that as it grows and freezing it at a set size, so an update
-// touches only the part that moved and a stroke stays a handful of edits. A sanding pass
-// changes throughout, so it replaces itself.
+// A tool in use, from engaging it to lifting it off: it turns the tool's motion into edits,
+// in two forms.
+// - Updates (move_to), for applying the stroke to a body as it goes: cuts that only ever
+//   grow (a chisel pushing on, a saw going deeper) keep their newest piece open, re-cutting
+//   just that as it grows and freezing it at a set size, so an update touches only the
+//   part that moved. A sanding pass changes throughout, so it replaces itself.
+// - The whole cut so far in as few edits as it takes (edits()): the chisel's ramp and one
+//   flat run, the saw's one kerf, the block's one pass. This is what a preview draws while
+//   the tool moves (the Live shader's overlay) and what is committed when it lifts off:
+//   fewer, longer edits, applied once.
+// Either way every edit is a cut (Op::Subtract): a stroke only takes material away.
 class Stroke {
 public:
 	virtual ~Stroke() = default;
 	// The tool moved to `point` on the work plane (body space).
 	virtual StrokeUpdate move_to(vec3 point) = 0;
+	// The cut so far, merged (see above).
+	virtual std::vector<Edit> edits() const = 0;
 	// Edits ending the stroke, appended before it is committed.
 	virtual std::vector<Edit> finish() { return {}; }
 	// Where the tool's model is now: its frame, as the models are built.

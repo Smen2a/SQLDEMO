@@ -70,7 +70,8 @@ public:
 		std::int32_t brick = kEmpty; // brick slot, or kEmpty / kSolid for a leaf without one
 		// Uniform material id (0 .. kExactBase - 1), or -(material brick slot + 1) where it
 		// varies, or kExactBase + exact cell index for an exact leaf (whose tape has the
-		// material).
+		// material). Empty and solid leaves: the material at the cell centre (what a cut
+		// into a solid cell shows before the ADF is updated: see the Live shader's overlay).
 		std::int32_t material = 0;
 		// Brick leaves: a bound on the gradient of the trilinear field (and, in exact leaves,
 		// of the tape's). Empty and solid leaves: the field at the cell centre (for ambient

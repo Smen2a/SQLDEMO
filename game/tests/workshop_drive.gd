@@ -60,8 +60,10 @@ func _ready() -> void:
 	var stats: Dictionary = workshop.board.get_stats()
 	print("workshop drive: chisel %d edits, saw %d, sanding %d; after undo %d edits in %d strokes; last update %.0f ms, upload %.0f ms" % [
 			chisel_edits, saw_edits, sand_edits, after_undo, stats.steps, stats.update_ms, stats.upload_ms])
-	if chisel_edits < 3 or saw_edits < 3 or sand_edits < 1 or after_undo != chisel_edits + saw_edits:
-		push_error("workshop drive: a tool made no cut, or undo did not take the sanding back")
+	# Strokes are previewed and committed merged: the chisel's ramp, run and lift-out, the
+	# saw's kerf, the block's pass.
+	if chisel_edits != 3 or saw_edits != 1 or sand_edits != 1 or after_undo != chisel_edits + saw_edits:
+		push_error("workshop drive: a tool made no cut or not its merged one, or undo did not take the sanding back")
 	get_tree().quit()
 
 

@@ -5,6 +5,7 @@
 #   - the Live path renders a shaded scene with shadows and mesh intersections
 #   - the workshop: each tool, driven through the scene's own pointer methods, cuts, and
 #     undo takes a stroke back
+#   - a stroke previewed by the shader looks the same once committed, for each tool
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 # Fails on any shader or script error. Needs xvfb-run and a software OpenGL driver; set
 # GODOT as for tools/run.sh.
@@ -40,5 +41,6 @@ check live_sphere "Screenshot saved" --render res://tests/live_view.tscn -- --de
 	--screenshot="$OUT/live_sphere.png"
 check live_panel "Screenshot saved" --render res://tests/live_view.tscn -- --screenshot="$OUT/live_panel.png"
 check workshop_drive "workshop drive: chisel" --render res://tests/workshop_drive.tscn -- --out="$OUT"
+check stroke_preview "stroke preview: every tool" --render res://tests/stroke_preview.tscn -- --out="$OUT/preview"
 "$ROOT/tools/parity.sh" || status=1
 exit $status

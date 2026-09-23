@@ -68,6 +68,14 @@ func _ready() -> void:
 	shadows.focus_mode = Control.FOCUS_NONE
 	shadows.toggled.connect(func(on): workshop.board.live_shadows = on)
 	right.add_child(shadows)
+	# On: the shader draws a stroke while the tool moves, and it is applied once on release.
+	# Off: every move is applied to the board as it happens (slower; for comparison).
+	var preview := CheckBox.new()
+	preview.text = "Preview strokes on the GPU"
+	preview.button_pressed = workshop.board.stroke_preview
+	preview.focus_mode = Control.FOCUS_NONE
+	preview.toggled.connect(func(on): workshop.board.stroke_preview = on)
+	right.add_child(preview)
 	_pin(right, Control.PRESET_TOP_RIGHT)
 
 	# Status and hints, bottom left.
@@ -98,9 +106,14 @@ func refresh() -> void:
 func update_status() -> void:
 	var stats: Dictionary = workshop.board.get_stats()
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid())
+	var state := ""
+	if workshop.board.is_busy():
+		state = "   (applying...)"
+	elif stats.get("overlay_edits", 0) > 0:
+		state = "   (previewing %d edits)" % stats.overlay_edits
 	_status.text = "%d edits in %d strokes   last edit applied in %.0f ms, uploaded in %.0f ms%s   GPU %.1f ms   %d fps" % [
 			stats.get("edits", 0), stats.get("steps", 0), stats.get("update_ms", 0.0), stats.get("upload_ms", 0.0),
-			"   (applying...)" if workshop.board.is_busy() else "", gpu, Engine.get_frames_per_second()]
+			state, gpu, Engine.get_frames_per_second()]
 
 
 func _panel(parent: Control, at: Vector2) -> VBoxContainer:

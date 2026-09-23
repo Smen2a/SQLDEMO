@@ -7,8 +7,9 @@
 // scenarios (game/bench/live_bench.gd) at 1280x720. The shader is fetch bound, so this
 // ranks optimizations before a GPU run; keep it in step with sdf_live.gdshaderinc.
 //   sdf_bench count
-// Live tool use on the workshop board: the time each drag step takes to update the octree
-// and ADF, as the Godot workshop applies them.
+// Live tool use on the workshop board, both ways SdfBody can take a stroke: applied as the
+// tool moves (each drag step's octree and ADF update), or previewed by the shader and
+// applied once, merged, on release (the commit's cost; moving costs nothing).
 //   sdf_bench tools
 
 #include "adf/adf.h"
@@ -346,6 +347,8 @@ int tools_bench() {
 					[&](int k) { return vec3(20.0f + 25.0f * std::sin(0.7f * float(k)), 10.0f + 8.0f * std::cos(0.3f * float(k)), top); }},
 	};
 	for (Use &use : uses) {
+		// Applied as it goes, on a copy of the board.
+		EditSession live = s;
 		double total = 0, worst = 0, octree = 0, bricks = 0;
 		int updates = 0;
 		const int steps = 30;
@@ -355,19 +358,31 @@ int tools_bench() {
 				continue;
 			}
 			const double t0 = now();
-			s.revise_stroke(u.drop, u.edits);
+			live.revise_stroke(u.drop, u.edits);
 			const double ms = 1e3 * (now() - t0);
 			total += ms;
 			worst = std::max(worst, ms);
-			octree += s.last().octree_ms;
-			bricks += double(s.last().rebuilt_bricks);
+			octree += live.last().octree_ms;
+			bricks += double(live.last().rebuilt_bricks);
 			++updates;
 		}
-		s.extend_stroke(use.stroke->finish());
+		live.extend_stroke(use.stroke->finish());
+		live.commit();
+		std::printf("%s\n  applied as it moves: %2d updates, %6.0f ms in all: %5.1f ms mean (octree %.1f), %5.1f worst, "
+					"%4.0f bricks re-sampled; %zu edits\n",
+				use.name, updates, total, updates ? total / updates : 0.0, updates ? octree / updates : 0.0, worst,
+				updates ? bricks / updates : 0.0, live.body().edits().size() - s.body().edits().size());
+		// Previewed, then committed merged.
+		std::vector<Edit> merged = use.stroke->edits();
+		for (const Edit &e : use.stroke->finish()) {
+			merged.push_back(e);
+		}
+		const double t0 = now();
+		s.set_stroke(merged);
 		s.commit();
-		std::printf("%-40s %2d updates: %5.1f ms mean (octree %.1f), %5.1f worst, %4.0f bricks re-sampled; %zu edits so far\n",
-				use.name, updates, updates ? total / updates : 0.0, updates ? octree / updates : 0.0, worst,
-				updates ? bricks / updates : 0.0, s.body().edits().size());
+		std::printf("  previewed:           no work while it moves; on release %5.1f ms (octree %.1f), %4zu bricks "
+					"re-sampled; %zu edits\n",
+				1e3 * (now() - t0), s.last().octree_ms, s.last().rebuilt_bricks, merged.size());
 	}
 	const double t0 = now();
 	s.undo();
