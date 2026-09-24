@@ -19,6 +19,7 @@ struct Material {
 	vec4 k[5];
 	float specular = 0.05f; // strength of the key-light highlight
 	float shininess = 24.0f;
+	float density = 1.0f;   // g/cm^3 (mg/mm^3), for the mass of pieces
 };
 
 class MaterialTable {

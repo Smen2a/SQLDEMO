@@ -49,6 +49,9 @@ public:
 	void cancel();  // drops the stroke in progress
 	bool undo();    // removes the last step (dropping any stroke in progress first)
 	bool redo();
+	// Undoes the last step without keeping it for redo (a split taken back: the half-space
+	// that made this body a piece goes, and cannot come back by itself).
+	bool drop_last_step();
 	bool can_undo() const { return !steps_.empty(); }
 	bool can_redo() const { return !redo_.empty(); }
 	std::size_t stroke_edits() const { return stroke_; }

@@ -2,8 +2,10 @@
 
 #include "body/body.h"
 #include "compile/octree.h"
+#include "pieces/pieces.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 // Hand tools: each one's model (a Body, drawn like any part) and the cuts it makes, from
@@ -131,6 +133,11 @@ public:
 	virtual std::vector<Edit> finish() { return {}; }
 	// Where the tool's model is now: its frame, as the models are built.
 	virtual Frame pose() const = 0;
+
+	// A plane the stroke has cut clean through the work, if it has (the middle of a saw's
+	// kerf once the saw is through): the body may now lie in two pieces, one each side
+	// (see pieces/pieces.h: plane_clear).
+	virtual std::optional<Plane> separation() const { return std::nullopt; }
 
 	virtual bool deferred() const { return false; }
 	// The motion recorded since the last call, as an update for the edit session holding

@@ -55,20 +55,25 @@ Material plain(const std::string &name, vec3 colour) {
 
 MaterialTable MaterialTable::standard() {
 	MaterialTable t;
-	t.add(wood("ash", {0.86f, 0.77f, 0.61f}, {0.70f, 0.56f, 0.39f}, 3.2f, 0.35f, 0.22f));
-	t.add(wood("oak", {0.78f, 0.63f, 0.43f}, {0.58f, 0.43f, 0.27f}, 2.4f, 0.25f, 0.30f));
-	t.add(wood("walnut", {0.44f, 0.31f, 0.21f}, {0.28f, 0.18f, 0.12f}, 2.8f, 0.30f, 0.25f));
-	t.add(plain("putty", {0.86f, 0.84f, 0.79f}));
-	t.add(metal("brass", {0.80f, 0.63f, 0.28f}, 0.18f, 0.55f, 40.0f));
-	t.add(metal("steel", {0.56f, 0.58f, 0.60f}, 0.12f, 0.45f, 60.0f));
-	t.add(stone("granite", {0.55f, 0.53f, 0.50f}, {0.26f, 0.25f, 0.24f}, 6.0f, 0.55f));
+	// Densities in g/cm^3: seasoned timber, cast and wrought metal, stone.
+	auto with_density = [](Material m, float density) {
+		m.density = density;
+		return m;
+	};
+	t.add(with_density(wood("ash", {0.86f, 0.77f, 0.61f}, {0.70f, 0.56f, 0.39f}, 3.2f, 0.35f, 0.22f), 0.67f));
+	t.add(with_density(wood("oak", {0.78f, 0.63f, 0.43f}, {0.58f, 0.43f, 0.27f}, 2.4f, 0.25f, 0.30f), 0.75f));
+	t.add(with_density(wood("walnut", {0.44f, 0.31f, 0.21f}, {0.28f, 0.18f, 0.12f}, 2.8f, 0.30f, 0.25f), 0.64f));
+	t.add(with_density(plain("putty", {0.86f, 0.84f, 0.79f}), 1.7f));
+	t.add(with_density(metal("brass", {0.80f, 0.63f, 0.28f}, 0.18f, 0.55f, 40.0f), 8.5f));
+	t.add(with_density(metal("steel", {0.56f, 0.58f, 0.60f}, 0.12f, 0.45f, 60.0f), 7.85f));
+	t.add(with_density(stone("granite", {0.55f, 0.53f, 0.50f}, {0.26f, 0.25f, 0.24f}, 6.0f, 0.55f), 2.7f));
 	// Speckled like stone, at the scale of cork granules and abrasive grit.
 	Material cork = stone("cork", {0.66f, 0.50f, 0.34f}, {0.42f, 0.30f, 0.19f}, 0.6f, 0.35f);
 	cork.specular = 0.02f;
-	t.add(cork);
+	t.add(with_density(cork, 0.24f));
 	Material abrasive = stone("abrasive", {0.36f, 0.20f, 0.13f}, {0.12f, 0.08f, 0.06f}, 0.12f, 0.45f);
 	abrasive.specular = 0.03f;
-	t.add(abrasive);
+	t.add(with_density(abrasive, 2.0f));
 	return t;
 }
 

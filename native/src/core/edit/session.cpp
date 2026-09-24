@@ -122,6 +122,14 @@ bool EditSession::undo() {
 	return true;
 }
 
+bool EditSession::drop_last_step() {
+	if (!undo()) {
+		return false;
+	}
+	redo_.pop_back();
+	return true;
+}
+
 bool EditSession::redo() {
 	cancel();
 	if (redo_.empty()) {
