@@ -87,18 +87,55 @@ GPU time on real hardware.)
   bound, and a thin overlap leaves a seam whose value is smaller than the hit epsilon,
   which the raymarcher would draw as a wall. The merged edits have no such seams.
 
-`sdf_bench tools` times both ways on the workshop board (4 shared cores):
+`sdf_bench tools` times both ways on the workshop board (4 shared cores), and the
+refinement that follows once the tool is idle (see below):
 
-| Tool at work | Applied as it moves | Previewed, applied on release |
-| --- | --- | --- |
-| chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 29 updates of 19 ms (0.56 s in all), 8 edits | 56 ms once, 3 edits |
-| saw, 12 mm deep in 30 strokes | 30 updates of 56 ms (1.7 s), 10 edits | 97 ms once, 1 edit |
-| sanding block, rubbed over the board | 25 updates of 145 ms (3.6 s), 1 edit | 136 ms once, 1 edit |
-| sanding sponge along an arris, 3 passes of 60 mm | 30 updates of 51 ms (flow 21, octree and ADF 30), 1 layer | (not previewed) |
+| Tool at work | Applied as it moves | Previewed, applied on release | Refined when idle |
+| --- | --- | --- | --- |
+| chisel, 12 mm wide, 1.5 mm deep, pushed 60 mm | 29 updates of 1.9 ms (55 ms in all), 8 edits | 3.0 ms once, 3 edits | 55 ms |
+| saw, 12 mm deep in 30 strokes | 30 updates of 3.4 ms (0.10 s), 10 edits | 4.8 ms once, 1 edit | 63 ms |
+| sanding block, rubbed over the board | 25 updates of 8.2 ms (0.21 s), 1 edit | 8.8 ms once, 1 edit | 93 ms |
+| sanding sponge along an arris, 3 passes of 60 mm | 30 updates of 23 ms (flow 12, octree and ADF 11), 1 layer | (not previewed) | |
 
-Applied as it moves, the cut lags the tool by an update, and a sanding update re-samples
-everything the block has covered, as well as the previous pass. Previewed, the cut is
-there in the same frame, and the CPU works once per stroke.
+Before the changes below, the same commits took 57, 70 and 95 ms, and a sponge update
+48 ms. Applied as it moves, the cut lags the tool by an update. Previewed, the cut is there
+in the same frame, and the CPU works once per stroke.
+
+### Edits in milliseconds
+
+Applying a cut costs little in itself. What cost the time was refining the creases a cut
+makes (its rim, and its floor meeting its walls) down to 1 mm exact cells, eight children
+at a time, re-sampling a thousand bricks or more.
+- **Coarse first, refined when idle.** An edit stops refining creases at the largest bricks
+  (`AdfParams::update_exact_cell`, 7 mm): they become exact cells at once. Exact cells
+  evaluate their own tapes, so the surface is the same. Only drawing costs more there
+  until `Adf::refine()` takes them down to 1 mm. `SdfBody` refines on its worker once the
+  body is idle (no tool engaged, nothing queued: `refine_when_idle`); a new stroke simply
+  waits for it. An edit that reaches creases refined earlier redoes them from their big
+  cube, so cutting across old work costs no more than cutting a face.
+- **Cuts fold into the old bricks.** When an edit only appends cuts (Subtract or
+  Intersect), each brick it reaches applies them to the samples it already holds: one
+  primitive per sample instead of the cell's whole tape. The usual checks at voxel centres
+  catch whatever the cut does between samples (a new crease, a kerf thinner than a voxel)
+  and send that cell down the full path. Bricks the cut leaves as they were keep their
+  slots and are not uploaded again; the rest are rewritten in place.
+- **Half the precision.** Bricks are refined to 10 µm (was 5 µm), and never finer than
+  40 µm between samples (was 20 µm). The board takes 7,288 bricks instead of 13,320.
+- **Smaller uploads.** Brick layers are 512² (512 bricks), so an edit re-sends a quarter
+  as much per layer it touches.
+- **Bricks on the GPU.** Where the renderer has a `RenderingDevice` (Forward+, Mobile),
+  bricks are sampled by a compute shader (`native/src/godot/gpu_sampler.cpp`). It is built
+  from the same primitive and blend includes as the Live shader, with a tape interpreter
+  reading storage buffers. The ADF refines a level at a time, so each level's bricks are
+  one dispatch: 512 corners and 343 voxel centres each. The CPU keeps only the decisions
+  (split, exact cell, brick). Bricks whose tapes hold a smoothing layer (a grid only the
+  CPU has) are sampled on the CPU alongside. `SdfBody.gpu_bricks` (on by default) turns it
+  off; under Compatibility the CPU samples everything, as before.
+  - `game/tests/gpu_bricks` (Forward+) checks that GPU-sampled bricks agree with
+    CPU-sampled ones within 0.02 mm near the surface, after a build, after edits and once
+    refined; on Mesa's lavapipe they agree within 0.0065 mm. It also prints build and
+    refinement times, CPU against GPU. Only a real GPU makes those meaningful: lavapipe is
+    the CPU again.
 
 ### Sanding as smoothing: a layer, not cuts
 
@@ -259,10 +296,11 @@ the touched cells and bricks and uploads only what changed; nothing is meshed.
 every frame, for edits that never change. So each edit is evaluated once per affected
 voxel instead, when it is made:
 - The octree continues into bricks of 8³ half-float distance samples along the surface.
-- Each cell is refined until trilinear reconstruction is within 5 µm of the exact field
+- Each cell is refined until trilinear reconstruction is within 10 µm of the exact field
   near the surface. Planes are exact under trilinear filtering, so flat and gently curved
   faces get coarse bricks (up to 1 mm between samples).
-- Creases would need ever finer bricks, so a crease cell ≤ 1 mm becomes an *exact* cell. Rays
+- Creases would need ever finer bricks, so a crease cell ≤ 1 mm becomes an *exact* cell
+  (≤ 7 mm right after an edit, until it is refined: see "Edits in milliseconds"). Rays
   march on its brick while they are further from the surface than the brick's error band,
   then evaluate its own tape: the octree tape pruned again to that small cell, which leaves
   only the 2–3 edits forming the crease. Hits, normals and materials there are exact. The
@@ -274,22 +312,23 @@ voxel instead, when it is made:
 - Normals come from the hit's own leaf: four taps on its brick, or one pass over its tape
   for all four taps in an exact cell. The tape interpreter is inlined wherever the shader
   calls it, so it is called from three places only.
-- Bricks live in a `Texture2DArray` and are read with hardware filtering. An edit
+- Bricks live in a `Texture2DArray` (512² layers of 512 bricks) and are read with hardware
+  filtering. An edit
   re-samples the cells it reaches, reuses the rest (slots and all) and uploads only the
   layers that changed. "Reaches" is decided by pruning, not by the edit's bounding box: a
   long curved stroke's box holds several times more cells than its groove touches.
 - The exact field stays the truth: bricks are a display cache, like a baked mesh.
   `live_source = EXACT` raymarches the tapes alone, for comparison.
 
-`sdf_bench adf` (4 shared cores; per stroke before the pruning test in parentheses, same
-machine):
+`sdf_bench adf` (4 shared cores; per stroke before W4, at 5 µm and refined in full at
+once, in parentheses):
 
 | Body | Edits | Build | Memory | Exact cells | Per stroke |
 | --- | --- | --- | --- | --- | --- |
-| carved panel | 52 | 0.63 s | 16.5 MB | 4,904 | 28 ms (44) |
-| fluted ball | 6 | 0.11 s | 5.5 MB | 0 | 6 ms (7) |
-| random session | 227 | 3.0 s | 29 MB | 14,892 | 51 ms (108) |
-| random session | 1,495 | 18 s | 51 MB | 25,260 | 182 ms (586) |
+| carved panel | 52 | 0.55 s | 16 MB | 4,616 | 6.9 ms (28) |
+| fluted ball | 6 | 0.05 s | 3.0 MB | 0 | 2.2 ms (6) |
+| random session | 227 | 2.5 s | 29 MB | 14,025 | 23 ms (51) |
+| random session | 1,495 | 15 s | 50 MB | 22,516 | 60 ms (182) |
 
 Nearly all of that is evaluating primitives at brick samples (callgrind: 80%), a quarter
 of it in the Bézier strokes' cubic solve.
@@ -400,7 +439,10 @@ native/build/sdf_gallery out 2 2  # re-render the gallery images at 2x, 2x2 supe
 GODOT=/path/to/godot tools/test_godot.sh   # shader compile checks, the extension, live
                                            # renders, the workshop, stroke previews and
                                            # GPU/CPU parity (needs xvfb-run and Mesa;
-                                           # several minutes on llvmpipe)
+                                           # several minutes on llvmpipe); with a Vulkan
+                                           # driver, also GPU brick sampling (Forward+)
+GODOT=/path/to/godot tools/run.sh --vulkan res://tests/gpu_bricks.tscn   # GPU vs CPU bricks,
+                                           # with build and refinement times
 native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, any view
 ```
 

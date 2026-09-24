@@ -4,6 +4,7 @@
 #include "body/materials.h"
 #include "edit/session.h"
 #include "eval/reference_renderer.h"
+#include "godot/gpu_sampler.h"
 #include "tools/tools.h"
 
 #include <godot_cpp/classes/image_texture.hpp>
@@ -99,6 +100,14 @@ public:
 	// nothing queued. Refining changes no surface, only makes it cheaper to draw.
 	void set_refine_when_idle(bool enabled) { refine_when_idle_ = enabled; }
 	bool get_refine_when_idle() const { return refine_when_idle_; }
+	// Whether ADF bricks are sampled on the GPU (a compute shader, see gpu_sampler.h) where
+	// the renderer has a RenderingDevice (Forward+, Mobile); the CPU samples them otherwise.
+	void set_gpu_bricks(bool enabled);
+	bool get_gpu_bricks() const { return gpu_bricks_; }
+	// For tests: the ADF against one built afresh on the CPU for the same body, at up to
+	// `points` random points within 0.2 mm of the surface where both hold bricks: {sampler,
+	// compared, max_difference, max_difference_exact (from the exact field), ...}.
+	godot::Dictionary compare_bricks_with_cpu(int points);
 
 	void set_debug_view(int view);
 	int get_debug_view() const { return debug_view_; }
@@ -167,6 +176,11 @@ private:
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed
 	bool refine_when_idle_ = true;
+	bool gpu_bricks_ = true;
+	std::shared_ptr<GpuSampler> gpu_; // while the session samples on it
+	double job_gpu_ms_ = 0;
+	std::size_t job_gpu_jobs_ = 0, gpu_jobs_total_ = 0;
+	void collect_gpu_stats(); // the GPU sampler's work since the last call (shared by bodies)
 	bool job_refines_ = false;              // the running batch only refines (the body is unchanged)
 	std::vector<Command> queue_;            // not yet applied
 	std::future<void> job_;                 // the batch being applied, if any

@@ -143,6 +143,87 @@ void SdfBody::set_live_source(int source) {
 	}
 }
 
+void SdfBody::set_gpu_bricks(bool enabled) {
+	flush();
+	gpu_bricks_ = enabled;
+	gpu_ = gpu_bricks_ && live_source_ == LIVE_ADF ? GpuSampler::shared() : nullptr;
+	session_.set_adf_sampler(gpu_);
+	refresh_stats();
+}
+
+void SdfBody::collect_gpu_stats() {
+	if (!gpu_) {
+		return;
+	}
+	const GpuSampler::Stats g = gpu_->take_stats();
+	job_gpu_ms_ = g.gpu_ms;
+	job_gpu_jobs_ = g.gpu_jobs;
+	gpu_jobs_total_ += g.gpu_jobs;
+}
+
+Dictionary SdfBody::compare_bricks_with_cpu(int points) {
+	flush();
+	collect_gpu_stats();
+	Dictionary out;
+	out["sampler"] = gpu_ ? "gpu" : "cpu";
+	out["gpu_bricks_sampled"] = int64_t(gpu_jobs_total_); // by the GPU for this body so far
+	if (!session_.has_adf()) {
+		return out;
+	}
+	const Adf &adf = session_.adf();
+	Adf cpu;
+	cpu.build(session_.body(), session_.octree(), adf.params());
+	std::vector<int> leaves;
+	for (std::size_t i = 0; i < adf.nodes().size(); ++i) {
+		if (adf.nodes()[i].brick >= 0) {
+			leaves.push_back(int(i));
+		}
+	}
+	std::uint32_t state = 12345u;
+	auto next = [&]() {
+		state = state * 1664525u + 1013904223u;
+		return float(state >> 8) / float(1u << 24);
+	};
+	// Points near the surface (what rays see): random points in brick leaves, stepped onto
+	// the surface along the field's gradient, then moved off it by up to 0.2 mm.
+	const Body &body = session_.body();
+	const Octree &octree = session_.octree();
+	int compared = 0;
+	float worst = 0.0f, worst_exact = 0.0f;
+	for (int k = 0; k < points && !leaves.empty(); ++k) {
+		const Adf::Node &n = adf.nodes()[std::size_t(leaves[std::size_t(next() * float(leaves.size())) % leaves.size()])];
+		vec3 p = n.lo + vec3(next(), next(), next()) * n.size;
+		vec3 g(0.0f);
+		for (int step = 0; step < 6; ++step) {
+			const float d = octree.distance(body, p), h = 1e-3f;
+			g = vec3(octree.distance(body, p + vec3(h, 0, 0)) - octree.distance(body, p - vec3(h, 0, 0)),
+					octree.distance(body, p + vec3(0, h, 0)) - octree.distance(body, p - vec3(0, h, 0)),
+					octree.distance(body, p + vec3(0, 0, h)) - octree.distance(body, p - vec3(0, 0, h)));
+			const float length = gl::length(g);
+			if (!(length > 1e-9f)) {
+				break;
+			}
+			g = g / length;
+			p = p - g * d;
+		}
+		p = p + g * ((next() * 2.0f - 1.0f) * 0.2f);
+		const int a = adf.leaf(p), b = cpu.leaf(p);
+		if (a < 0 || b < 0 || adf.nodes()[std::size_t(a)].brick < 0 || cpu.nodes()[std::size_t(b)].brick < 0) {
+			continue;
+		}
+		const float d = adf.distance(body, octree, p);
+		worst = std::max(worst, std::fabs(d - cpu.distance(body, octree, p)));
+		worst_exact = std::max(worst_exact, std::fabs(d - octree.distance(body, p)));
+		++compared;
+	}
+	out["compared"] = compared;
+	out["max_difference"] = worst;             // from the CPU-built ADF
+	out["max_difference_exact"] = worst_exact; // from the exact field
+	out["bricks"] = int64_t(adf.stats().bricks);
+	out["cpu_bricks"] = int64_t(cpu.stats().bricks);
+	return out;
+}
+
 void SdfBody::set_exact_cells(bool enabled) {
 	exact_cells_ = enabled;
 	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
@@ -169,9 +250,13 @@ bool SdfBody::load_demo(const String &name) {
 	stroke_.reset();
 	update_overlay();
 	demo_camera_ = camera;
+	gpu_ = gpu_bricks_ ? GpuSampler::shared() : nullptr;
+	session_.set_adf_sampler(gpu_);
 	const auto start = std::chrono::steady_clock::now();
 	session_.reset(body, {}, live_source_ == LIVE_ADF);
 	last_update_ms_ = ms_since(start);
+	gpu_jobs_total_ = 0;
+	collect_gpu_stats();
 	rebuild();
 	return true;
 }
@@ -199,6 +284,8 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	update_overlay();
 	// A tool has a handful of edits: its exact tapes are short, and it needs no ADF.
 	live_source_ = LIVE_EXACT;
+	gpu_ = nullptr;
+	session_.set_adf_sampler(nullptr);
 	update_shaders();
 	const auto start = std::chrono::steady_clock::now();
 	session_.reset(model, {}, false);
@@ -230,6 +317,7 @@ void SdfBody::add_random_strokes(int count, int seed) {
 	}
 	session_.set_stroke(strokes);
 	session_.commit();
+	collect_gpu_stats();
 	upload_textures();
 	upload_adf(false, session_.adf().dirty_bricks(), session_.adf().dirty_materials());
 	update_material();
@@ -504,6 +592,7 @@ void SdfBody::start_job() {
 			job_materials_.insert(job_materials_.end(), adf.dirty_materials().begin(), adf.dirty_materials().end());
 		}
 		job_ms_ = ms_since(start);
+		collect_gpu_stats();
 	});
 }
 
@@ -838,6 +927,9 @@ void SdfBody::refresh_stats() {
 	d["update_ms"] = last_update_ms_;
 	d["refine_ms"] = refine_ms_; // the last refinement of coarse cells, in the background
 	d["refine_pending"] = session_.needs_refine();
+	d["sampler"] = gpu_ ? "gpu" : "cpu"; // where ADF bricks are sampled
+	d["gpu_ms"] = job_gpu_ms_;           // the last batch's time on the GPU sampler (with transfers)
+	d["gpu_bricks"] = int64_t(job_gpu_jobs_);
 	d["upload_ms"] = upload_ms_;
 	d["overlay_edits"] = overlay_count_; // edits the shader draws on top (previewed strokes)
 	stats_ = d;
@@ -869,6 +961,9 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("flush"), &SdfBody::flush);
 	ClassDB::bind_method(D_METHOD("set_stroke_preview", "enabled"), &SdfBody::set_stroke_preview);
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
+	ClassDB::bind_method(D_METHOD("set_gpu_bricks", "enabled"), &SdfBody::set_gpu_bricks);
+	ClassDB::bind_method(D_METHOD("get_gpu_bricks"), &SdfBody::get_gpu_bricks);
+	ClassDB::bind_method(D_METHOD("compare_bricks_with_cpu", "points"), &SdfBody::compare_bricks_with_cpu);
 	ClassDB::bind_method(D_METHOD("set_refine_when_idle", "enabled"), &SdfBody::set_refine_when_idle);
 	ClassDB::bind_method(D_METHOD("get_refine_when_idle"), &SdfBody::get_refine_when_idle);
 	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
@@ -889,6 +984,7 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "exact_cells"), "set_exact_cells", "get_exact_cells");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "stroke_preview"), "set_stroke_preview", "get_stroke_preview");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "refine_when_idle"), "set_refine_when_idle", "get_refine_when_idle");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gpu_bricks"), "set_gpu_bricks", "get_gpu_bricks");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);

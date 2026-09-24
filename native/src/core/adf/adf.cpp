@@ -237,8 +237,12 @@ struct Refiner {
 				copy(local, cube.old_node, cube.node);
 				continue;
 			}
-			if (cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child >= 0 &&
-					!(old.coarse && cube.size <= exact_cell * 1.001f)) {
+			// A coarse update redoes a split cube whole where it can become an exact cell (its
+			// splits were for creases, which refine() will redo); cubes whose tapes are too long
+			// for that, or hold a layer, would only split the same way again.
+			const bool collapse = old.coarse && cube.size <= exact_cell * 1.001f &&
+					int(cell.tape.size()) <= params.exact_tape_limit && !holds_layer(cell);
+			if (cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child >= 0 && !collapse) {
 				// Split before: stay split (at worst finer than now needed) and redo only the
 				// children the change reaches.
 				const int first = local.add_children(cube.node, cube.lo, cube.size);

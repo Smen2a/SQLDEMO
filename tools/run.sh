@@ -4,6 +4,9 @@
 #   tools/run.sh SCENE [-- user args]            headless: logic only, nothing is rendered
 #   tools/run.sh --render SCENE [-- user args]   renders into a virtual X display with
 #                                                software OpenGL (Mesa llvmpipe)
+#   tools/run.sh --vulkan SCENE [-- user args]   the same with Forward+ on Vulkan (without a
+#                                                GPU, Mesa's lavapipe: mesa-vulkan-drivers),
+#                                                which has a RenderingDevice (compute)
 #
 # SCENE is a res:// path, e.g. res://tests/shader_smoke.tscn. Anything after `--` reaches
 # the scene (see game/tests/harness.gd), e.g. -- --screenshot=out/frame.png
@@ -23,6 +26,9 @@ PROJECT="$ROOT/game"
 RENDER=0
 if [[ "${1:-}" == "--render" ]]; then
 	RENDER=1
+	shift
+elif [[ "${1:-}" == "--vulkan" ]]; then
+	RENDER=2
 	shift
 fi
 SCENE="${1:?usage: tools/run.sh [--render] res://path/to/scene.tscn [-- user args]}"
@@ -49,6 +55,10 @@ if [[ "$RENDER" == 1 ]]; then
 	# here Mesa's llvmpipe) is available; the project's own default is Forward+.
 	LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1920x1080x24" \
 		"$GODOT" --path "$PROJECT" --audio-driver Dummy --rendering-method gl_compatibility --rendering-driver opengl3 \
+		--resolution "${RESOLUTION:-1280x720}" "$SCENE" -- "$@"
+elif [[ "$RENDER" == 2 ]]; then
+	xvfb-run -a -s "-screen 0 1920x1080x24" \
+		"$GODOT" --path "$PROJECT" --audio-driver Dummy --rendering-method forward_plus --rendering-driver vulkan \
 		--resolution "${RESOLUTION:-1280x720}" "$SCENE" -- "$@"
 else
 	"$GODOT" --headless --audio-driver Dummy --path "$PROJECT" "$SCENE" -- "$@"

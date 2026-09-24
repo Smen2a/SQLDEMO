@@ -7,6 +7,9 @@
 #     undo takes a stroke back
 #   - a stroke previewed by the shader looks the same once committed, for each tool
 #   - GPU/CPU parity over every demo (tools/parity.sh)
+#   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF
+#     bricks sampled by the GPU sampler agree with CPU-sampled ones, and the workshop drive
+#     runs with it
 # Fails on any shader or script error. Needs xvfb-run and a software OpenGL driver; set
 # GODOT as for tools/run.sh.
 set -uo pipefail
@@ -42,5 +45,12 @@ check live_sphere "Screenshot saved" --render res://tests/live_view.tscn -- --de
 check live_panel "Screenshot saved" --render res://tests/live_view.tscn -- --screenshot="$OUT/live_panel.png"
 check workshop_drive "workshop drive: chisel" --render res://tests/workshop_drive.tscn -- --out="$OUT"
 check stroke_preview "stroke preview: every tool" --render res://tests/stroke_preview.tscn -- --out="$OUT/preview"
+if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
+	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
+	mkdir -p "$OUT/vulkan"
+	check workshop_drive_vulkan "workshop drive: chisel" --vulkan res://tests/workshop_drive.tscn -- --out="$OUT/vulkan"
+else
+	echo "skip  gpu_bricks, workshop_drive_vulkan: no Vulkan driver"
+fi
 "$ROOT/tools/parity.sh" || status=1
 exit $status

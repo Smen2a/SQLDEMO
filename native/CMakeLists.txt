@@ -92,6 +92,7 @@ if(SDF_BUILD_GODOT)
 	set(GODOTCPP_SYSTEM_HEADERS ON CACHE BOOL "" FORCE) # keep our warnings to our code
 	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../extern/godot-cpp ${CMAKE_BINARY_DIR}/godot-cpp EXCLUDE_FROM_ALL)
 	add_library(sdf_godot SHARED
+		src/godot/gpu_sampler.cpp
 		src/godot/register_types.cpp
 		src/godot/sdf_body.cpp
 	)

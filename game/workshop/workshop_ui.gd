@@ -112,13 +112,14 @@ func update_status() -> void:
 	var stats: Dictionary = workshop.board.get_stats()
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid())
 	var state := ""
-	if workshop.board.is_busy():
-		state = "   (applying...)"
-	elif stats.get("overlay_edits", 0) > 0:
+	if stats.get("overlay_edits", 0) > 0:
 		state = "   (previewing %d edits)" % stats.overlay_edits
-	_status.text = "%d edits in %d strokes   last edit applied in %.0f ms, uploaded in %.0f ms%s   GPU %.1f ms   %d fps" % [
-			stats.get("edits", 0), stats.get("steps", 0), stats.get("update_ms", 0.0), stats.get("upload_ms", 0.0),
-			state, gpu, Engine.get_frames_per_second()]
+	elif workshop.board.is_busy():
+		state = "   (refining...)" if stats.get("refine_pending", false) else "   (applying...)"
+	_status.text = "%d edits in %d strokes   last edit applied in %.0f ms (bricks on the %s), uploaded in %.0f ms%s   GPU %.1f ms   %d fps" % [
+			stats.get("edits", 0), stats.get("steps", 0), stats.get("update_ms", 0.0),
+			str(stats.get("sampler", "cpu")).to_upper(), stats.get("upload_ms", 0.0), state, gpu,
+			Engine.get_frames_per_second()]
 
 
 func _panel(parent: Control, at: Vector2) -> VBoxContainer:
