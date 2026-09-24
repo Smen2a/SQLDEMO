@@ -1,10 +1,10 @@
 #include "tools/smoothing.h"
 
+#include "util/parallel.h"
+
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
-#include <thread>
 #include <vector>
 
 namespace sdf::tools {
@@ -25,30 +25,10 @@ float box_distance(vec3 lo, vec3 hi, vec3 p) {
 }
 
 // f(0) .. f(n - 1) spread over the hardware's threads (this runs on the edit worker, which
-// is otherwise idle while it waits).
+// is otherwise idle while it waits), at least 8 items to a thread.
 template <class F>
 void parallel_for(std::size_t n, F &&f) {
-	const std::size_t threads = std::min<std::size_t>(std::max(1u, std::thread::hardware_concurrency()), (n + 7) / 8);
-	if (threads <= 1) {
-		for (std::size_t i = 0; i < n; ++i) {
-			f(i);
-		}
-		return;
-	}
-	std::atomic<std::size_t> next{0};
-	auto run = [&]() {
-		for (std::size_t i = next++; i < n; i = next++) {
-			f(i);
-		}
-	};
-	std::vector<std::thread> pool;
-	for (std::size_t t = 1; t < threads; ++t) {
-		pool.emplace_back(run);
-	}
-	run();
-	for (std::thread &t : pool) {
-		t.join();
-	}
+	sdf::parallel_for(n, f, 0, 8);
 }
 
 } // namespace

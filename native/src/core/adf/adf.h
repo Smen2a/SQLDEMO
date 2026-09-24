@@ -3,16 +3,20 @@
 #include "body/body.h"
 #include "compile/octree.h"
 
+#include <memory>
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace sdf {
 
+class AdfSampler;
+
 struct AdfParams {
 	float max_voxel = 1.0f;    // coarsest sample spacing (mm)
-	float min_voxel = 0.02f;   // finest
-	float tolerance = 0.005f;  // allowed |reconstruction - exact| near the surface (mm)
+	float min_voxel = 0.04f;   // finest
+	float tolerance = 0.01f;   // allowed |reconstruction - exact| near the surface (mm)
 	// Cells that miss the tolerance (creases, mostly) stop refining once they are this
 	// small and are evaluated exactly instead, if their tape is short enough to be cheap.
 	float exact_cell = 1.0f;
@@ -90,6 +94,9 @@ public:
 	};
 
 	void build(const Body &body, const Octree &octree, const AdfParams &params = {});
+	// Where builds and updates take their samples from (see AdfSampler): the CPU, spread over
+	// params.threads, when null (the default).
+	void set_sampler(std::shared_ptr<AdfSampler> sampler) { sampler_ = std::move(sampler); }
 
 	// What changed in the body since the ADF was last built or updated.
 	struct Change {
@@ -183,6 +190,7 @@ private:
 	std::vector<GridCell> grid_;
 	std::size_t live_bricks_ = 0, live_materials_ = 0, rebuilt_ = 0;
 	std::size_t edits_ = 0; // the body's edit count when last built or updated
+	std::shared_ptr<AdfSampler> sampler_;
 	double seconds_ = 0;
 };
 

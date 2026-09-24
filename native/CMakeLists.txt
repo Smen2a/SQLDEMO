@@ -25,6 +25,7 @@ endif()
 # Engine-agnostic core: no Godot headers anywhere under src/core.
 add_library(sdf_core STATIC
 	src/core/adf/adf.cpp
+	src/core/adf/sampler.cpp
 	src/core/body/body.cpp
 	src/core/body/layer.cpp
 	src/core/body/materials.cpp

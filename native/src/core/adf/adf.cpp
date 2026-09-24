@@ -1,11 +1,14 @@
 #include "adf/adf.h"
 
+#include "adf/sampler.h"
 #include "util/half.h"
+#include "util/parallel.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <thread>
@@ -99,6 +102,32 @@ struct Local {
 	}
 };
 
+// A cube waiting to be refined: local node `node` of a task, covering (lo, size). `parent`
+// is a tape valid over a cell containing it; `old_node` the old tree's node for the same
+// cube, or -1.
+struct Cube {
+	int node;
+	vec3 lo;
+	float size;
+	const Octree::Leaf *parent;
+	int old_node;
+};
+
+// One task's refinement in progress, a level at a time: its Local, the cubes of the level
+// to prepare, and those prepared that need their bricks sampled.
+struct Work {
+	Local local;
+	std::vector<Cube> frontier;
+	std::vector<Cube> sampling;
+	std::vector<const Octree::Leaf *> sampling_cells; // their pruned tapes
+	std::deque<Octree::Leaf> cells;                   // pruned tapes (children prune from them)
+	std::size_t first_job = 0;                        // sampling[0]'s index in the level's jobs
+};
+
+// Refines tasks a level at a time, so that a sampler can take a whole level's bricks in one
+// batch: prepare() settles every cube it can without samples and lists the rest, the sampler
+// samples them, and decide() makes each a leaf or splits it into the next level. A task's
+// Local is only ever touched by one thread at a time.
 struct Refiner {
 	const Body &body;
 	const Octree &octree;
@@ -137,69 +166,91 @@ struct Refiner {
 		}
 	}
 
-	// Builds local node `node` for the cube (lo, size), from `parent`: a tape valid over a
-	// cell containing the cube. `old_node` is the old tree's node for the same cube, or -1.
-	void refine(Local &local, int node, vec3 lo, float size, const Octree::Leaf &parent, int old_node) const {
-		if (old_node >= 0 && !overlaps(old.region, lo, size)) {
-			copy(local, old_node, node);
-			return;
-		}
-		// Only the edits that can shape this cube: a few, even where the octree cell's tape is
-		// long, and none at all where the cube is provably empty or solid.
-		const Octree::Leaf cell = octree.prune_within(body, parent, lo, size);
-		if (old_node >= 0 && !overlaps(old.removed, lo, size) &&
-				std::none_of(cell.tape.begin(), cell.tape.end(),
-						[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_changed; })) {
-			// Pruning dropped every changed edit here: each provably changes nothing in this
-			// cube (a long stroke's bounding box holds far more cells than its groove reaches).
-			copy(local, old_node, node);
-			return;
-		}
-		if (old_node >= 0 && (*old.nodes)[std::size_t(old_node)].child >= 0) {
-			// Split before: stay split (at worst finer than now needed) and redo only the
-			// children the change reaches.
-			const int first = local.add_children(node, lo, size);
-			const int old_first = (*old.nodes)[std::size_t(old_node)].child;
-			for (int c = 0; c < 8; ++c) {
-				refine(local, first + c, local.nodes[std::size_t(first + c)].lo, size * 0.5f, cell, old_first + c);
-			}
-			return;
-		}
-		if (cell.state != Octree::State::Surface) {
-			Adf::Node &n = local.nodes[std::size_t(node)];
-			const Sample centre = at(cell, lo + vec3(size * 0.5f));
-			n.brick = cell.state == Octree::State::Empty ? Adf::kEmpty : Adf::kSolid;
-			n.material = dominant(centre);
-			n.value = centre.d;
-			return;
-		}
+	void leaf_without_brick(Local &local, int node, Octree::State state, const Sample &centre) const {
+		Adf::Node &n = local.nodes[std::size_t(node)];
+		n.brick = state == Octree::State::Empty ? Adf::kEmpty : Adf::kSolid;
+		n.material = dominant(centre);
+		n.value = centre.d;
+	}
 
+	// Settles the frontier's cubes that need no brick samples (and, where an old split is
+	// kept, their children), leaving the rest in w.sampling.
+	void prepare(Work &w) const {
+		Local &local = w.local;
+		for (std::size_t k = 0; k < w.frontier.size(); ++k) {
+			const Cube cube = w.frontier[k];
+			if (cube.old_node >= 0 && !overlaps(old.region, cube.lo, cube.size)) {
+				copy(local, cube.old_node, cube.node);
+				continue;
+			}
+			// Only the edits that can shape this cube: a few, even where the octree cell's tape
+			// is long, and none at all where the cube is provably empty or solid.
+			const Octree::Leaf &cell = w.cells.emplace_back(octree.prune_within(body, *cube.parent, cube.lo, cube.size));
+			if (cube.old_node >= 0 && !overlaps(old.removed, cube.lo, cube.size) &&
+					std::none_of(cell.tape.begin(), cell.tape.end(),
+							[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_changed; })) {
+				// Pruning dropped every changed edit here: each provably changes nothing in this
+				// cube (a long stroke's bounding box holds far more cells than its groove reaches).
+				w.cells.pop_back();
+				copy(local, cube.old_node, cube.node);
+				continue;
+			}
+			if (cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child >= 0) {
+				// Split before: stay split (at worst finer than now needed) and redo only the
+				// children the change reaches.
+				const int first = local.add_children(cube.node, cube.lo, cube.size);
+				const int old_first = (*old.nodes)[std::size_t(cube.old_node)].child;
+				for (int c = 0; c < 8; ++c) {
+					w.frontier.push_back(
+							{first + c, local.nodes[std::size_t(first + c)].lo, cube.size * 0.5f, &cell, old_first + c});
+				}
+				continue;
+			}
+			if (cell.state != Octree::State::Surface) {
+				leaf_without_brick(local, cube.node, cell.state, at(cell, cube.lo + vec3(cube.size * 0.5f)));
+				w.cells.pop_back();
+				continue;
+			}
+			w.sampling.push_back(cube);
+			w.sampling_cells.push_back(&cell);
+		}
+		w.frontier.clear();
+	}
+
+	// Makes each sampled cube a leaf (with or without a brick, exact or not) or splits it,
+	// its children going to the next level's frontier. `corners` and `centres` are the
+	// level's samples (centres only if the sampler batches them).
+	void decide(Work &w, const Sample *corners, const float *centres) const {
+		for (std::size_t k = 0; k < w.sampling.size(); ++k) {
+			const std::size_t job = w.first_job + k;
+			decide(w, w.sampling[k], *w.sampling_cells[k], corners + job * AdfSampler::kCorners,
+					centres ? centres + job * AdfSampler::kCentres : nullptr);
+		}
+		w.sampling.clear();
+		w.sampling_cells.clear();
+	}
+
+	void decide(Work &w, const Cube &cube, const Octree::Leaf &cell, const Sample *s, const float *centres) const {
+		Local &local = w.local;
+		const int node = cube.node;
+		const vec3 lo = cube.lo;
+		const float size = cube.size;
 		const float voxel = size / float(kCells);
 		std::uint16_t half[Adf::kBrickSamples];
 		float v[Adf::kBrickSamples];
-		Sample s[Adf::kBrickSamples];
 		bool neg = false, pos = false;
 		float min_abs = std::numeric_limits<float>::max();
-		for (int z = 0; z < kN; ++z) {
-			for (int y = 0; y < kN; ++y) {
-				for (int x = 0; x < kN; ++x) {
-					const int i = index(x, y, z);
-					s[i] = at(cell, lo + vec3(float(x), float(y), float(z)) * voxel);
-					half[i] = float_to_half(s[i].d);
-					v[i] = half_to_float(half[i]);
-					neg = neg || v[i] < 0.0f;
-					pos = pos || v[i] >= 0.0f;
-					min_abs = std::min(min_abs, std::fabs(s[i].d));
-				}
-			}
+		for (int i = 0; i < Adf::kBrickSamples; ++i) {
+			half[i] = float_to_half(s[i].d);
+			v[i] = half_to_float(half[i]);
+			neg = neg || v[i] < 0.0f;
+			pos = pos || v[i] >= 0.0f;
+			min_abs = std::min(min_abs, std::fabs(s[i].d));
 		}
 		if (!(neg && pos) && min_abs > cell.lipschitz * voxel * kSqrt3) {
 			// The surface does not pass through this cell.
-			Adf::Node &n = local.nodes[std::size_t(node)];
-			const Sample centre = at(cell, lo + vec3(size * 0.5f));
-			n.brick = pos ? Adf::kEmpty : Adf::kSolid;
-			n.material = dominant(centre);
-			n.value = centre.d;
+			leaf_without_brick(local, node, pos ? Octree::State::Empty : Octree::State::Solid,
+					at(cell, lo + vec3(size * 0.5f)));
 			return;
 		}
 
@@ -228,7 +279,8 @@ struct Refiner {
 					if (!(lo_v < 0.0f && hi_v >= 0.0f) && near > voxel * cell.lipschitz) {
 						continue;
 					}
-					const float exact = at(cell, lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel).d;
+					const float exact = centres ? centres[x + kCells * (y + kCells * z)]
+												: at(cell, lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel).d;
 					worst = std::max(worst, std::fabs(sum * 0.125f - exact));
 				}
 			}
@@ -237,7 +289,7 @@ struct Refiner {
 		if (worst > params.tolerance && can_split && !exact) {
 			const int first = local.add_children(node, lo, size);
 			for (int c = 0; c < 8; ++c) {
-				refine(local, first + c, local.nodes[std::size_t(first + c)].lo, size * 0.5f, cell, -1);
+				w.frontier.push_back({first + c, local.nodes[std::size_t(first + c)].lo, size * 0.5f, &cell, -1});
 			}
 			return;
 		}
@@ -470,30 +522,53 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 	nodes_.resize(1);
 	mirror(0, 0);
 
-	// Sample and refine the brick-sized cells in parallel.
+	// Refine the brick-sized cells, a level at a time across a group of tasks, so the sampler
+	// takes each level's bricks in one batch. (Groups bound the samples held at once.)
 	std::vector<Local> locals(tasks.size());
-	std::atomic<std::size_t> next{0};
-	auto worker = [&]() {
-		for (std::size_t i = next++; i < tasks.size(); i = next++) {
-			const Task &task = tasks[i];
-			Local &local = locals[i];
+	const int threads = params_.threads > 0 ? params_.threads : int(std::max(1u, std::thread::hardware_concurrency()));
+	CpuSampler cpu(threads);
+	AdfSampler &sampler = sampler_ ? *sampler_ : cpu;
+	const bool batched = sampler.batches_centres();
+	const Refiner refiner{body, octree, params_, old};
+	constexpr std::size_t kGroup = 2048;
+	std::vector<AdfJob> jobs;
+	std::vector<Sample> corners;
+	std::vector<float> centres;
+	for (std::size_t group = 0; group < tasks.size(); group += kGroup) {
+		const std::size_t count = std::min(kGroup, tasks.size() - group);
+		std::vector<Work> works(count);
+		for (std::size_t i = 0; i < count; ++i) {
+			const Task &task = tasks[group + i];
+			Local &local = works[i].local;
 			local.nodes.resize(1);
 			local.kept_brick.assign(1, 0);
 			local.kept_material.assign(1, 0);
 			local.nodes[0].lo = task.lo;
 			local.nodes[0].size = task.size;
 			const Octree::Leaf &leaf = octree.leaves()[std::size_t(octree.nodes()[std::size_t(task.tape_node)].leaf)];
-			Refiner{body, octree, params_, old}.refine(local, 0, task.lo, task.size, leaf, task.old_node);
+			works[i].frontier.push_back({0, task.lo, task.size, &leaf, task.old_node});
 		}
-	};
-	const int threads = params_.threads > 0 ? params_.threads : int(std::max(1u, std::thread::hardware_concurrency()));
-	std::vector<std::thread> pool;
-	for (int i = 1; i < std::min<int>(threads, int(tasks.size())); ++i) {
-		pool.emplace_back(worker);
-	}
-	worker();
-	for (std::thread &t : pool) {
-		t.join();
+		for (;;) {
+			parallel_for(count, [&](std::size_t i) { refiner.prepare(works[i]); }, threads);
+			jobs.clear();
+			for (Work &w : works) {
+				w.first_job = jobs.size();
+				for (std::size_t k = 0; k < w.sampling.size(); ++k) {
+					jobs.push_back({w.sampling[k].lo, w.sampling[k].size / float(kCells), w.sampling_cells[k]});
+				}
+			}
+			if (jobs.empty()) {
+				break;
+			}
+			corners.resize(jobs.size() * AdfSampler::kCorners);
+			centres.resize(batched ? jobs.size() * AdfSampler::kCentres : 0);
+			sampler.sample(body, jobs, corners.data(), batched ? centres.data() : nullptr);
+			parallel_for(count, [&](std::size_t i) { refiner.decide(works[i], corners.data(), batched ? centres.data() : nullptr); },
+					threads);
+		}
+		for (std::size_t i = 0; i < count; ++i) {
+			locals[group + i] = std::move(works[i].local);
+		}
 	}
 
 	// Splice the subtrees in task order, filling freed slots first, so the result does not
