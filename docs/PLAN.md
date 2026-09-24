@@ -1,0 +1,227 @@
+# Object Builder SDF Engine: plan (revision 2)
+
+## Context
+The first plan grew into a 1,700-line log: the design, then every milestone's design and
+as-built notes. Several future steps overlap:
+- W3a (a saw cut that goes through separates the board), E5 (a failing assembly breaks
+  apart) and E6 (fracture) all turn one body into several.
+- W3b (shavings and dust) and the chips of E6 and E8 are all removed material made visible.
+- W2b and W3c are both a surface-finish layer.
+
+This revision merges those into shared capabilities and keeps finished work to one table.
+- The first plan's lasting design sections and its detailed E4 (bake) design are archived
+  verbatim in [archive/plan-v1.md](archive/plan-v1.md).
+- As-built details stay in the [README](../README.md) and the commit messages.
+- **Pieces** comes next.
+
+## Goals (unchanged)
+- An object builder. Players shape parts with processes that fit the material, then join
+  them into working objects. The acceptance scene is a pickaxe: a steel head, an ash handle
+  and a wedge.
+- Processes by material:
+  - wood is cut with sharp tools;
+  - metal is forged hot with blunt ones;
+  - stone is shaped by percussion.
+- Parts never blend. They join by interlock, compression or glue, and the joints'
+  strength is computed from the SDFs.
+- Unlimited undo, manifold export, desktop mouse and keyboard, Godot 4.7 with a C++
+  GDExtension. The SDF core is engine-agnostic.
+
+## Principles (how everything is built)
+1. **The SDF is the truth; everything else is a cache.** That covers ADF bricks, bakes and
+   physics shapes. Caches may lag; they are never the source.
+2. **One source for op formulas.** Shared C/GLSL includes (`native/src/core/shared`) serve
+   the CPU evaluator, the Live shader and the GPU brick sampler. Parity tests enforce it.
+3. **Edits cost nothing while the tool moves.**
+   - The shader draws the stroke (the overlay).
+   - On release it is committed once, on a worker.
+   - Creases land in coarse exact cells within milliseconds and are refined when idle.
+   - Bricks are sampled on the GPU where there is one.
+4. **Representation by process.**
+   - Cuts are analytic edits in the edit list.
+   - Smoothing is a sampled layer.
+   - Deformation (forging) is a sampled base grid.
+   - Separate parts are separate bodies.
+5. **Every step ends green, committed and pushed:**
+   - native tests (GCC and Clang);
+   - `tools/test_godot.sh`: Compatibility, plus Forward+ on Vulkan (Mesa's lavapipe without a GPU);
+   - GPU/CPU parity;
+   - benches (`sdf_bench`), with numbers in the README;
+   - a zip at each milestone.
+
+## Done
+| Milestone | Delivered |
+| --- | --- |
+| E0–E2 | Primitives, swept tool profiles, seven blend modes with material weights, evaluator, octree with interval pruning and incremental updates, CPU reference renderer, golden images |
+| E3, E3b–E3e | Godot Live raymarch; ADF display cache (8³ half-float bricks, exact crease cells with their own tapes, 64³ lookup grid, measured error bands); speckle fix; shadow casters; depth early-out |
+| W1 | The workshop: a board, chisel, saw and sanding block as SDF bodies; raycast; `EditSession` with undo and redo; edits on a worker |
+| W2a | Strokes drawn by the shader while the tool moves (no CPU), applied once on release, merged |
+| W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
+| W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
+
+**Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
+- the E3 gate bench;
+- `tools/run.sh --vulkan res://tests/gpu_bricks.tscn` (GPU vs CPU brick times);
+- per-pixel cost while crease cells are coarse.
+
+These decide O3 (a 3D brick atlas), the default `update_exact_cell`, and whether the Live
+path needs compute passes.
+
+## Roadmap
+| # | Capability | Replaces | Builds on |
+| --- | --- | --- | --- |
+| 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
+| 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
+| 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
+| 4 | **Bake**: meshes for distance display, physics and export | E4 | Pieces (shapes), finish (maps) |
+| 5 | **Assemblies**: joints, fit and strength, one rigid body | E5 | Pieces, Bake |
+| 6 | **Fracture**: breaking by material | E6 | Pieces, Debris |
+| 7 | **Forging**: hot metal deformed by blows | E7 | sampled base grid |
+| 8 | **Scale**: 2 m stone, 100k edits | E8, O3 | everything |
+
+## 1. Pieces — bodies that come apart (next)
+
+**Why one capability.** Sawing through, a failing joint and a fracture all end with one
+body becoming several that move on their own. Build it once:
+- detect that material separated;
+- split without waiting for a rebuild;
+- give each piece physics.
+
+Fracture (6) and assembly failure (5) later only supply the cutter.
+
+### P1 — planar separation (saw through)
+- **Core** (`native/src/core/pieces/pieces.{h,cpp}`, new):
+  - `bool plane_clear(body, octree, Plane, Aabb)`: an adaptive quadtree over the plane
+    within the body's bounds.
+    - A square is clear when F at its centre exceeds L × its half-diagonal (Lipschitz).
+    - Otherwise it splits, down to 0.05 mm.
+    - Any F ≤ 0 means material still crosses the plane.
+    - The pieces are apart when the whole plane is clear, since any path between the sides
+      crosses it.
+  - `Aabb clip_box(Aabb, Plane)`.
+  - `volume(adf, Plane side)`: solid leaves plus the inside samples of brick leaves.
+  - Reuse `Octree::sample`, the leaves' Lipschitz bounds (`Octree::Leaf::lipschitz`), and
+    `Adf` leaves.
+- **Trigger.**
+  - A new `Stroke::separation_plane()` (optional): `SawStroke` gives its kerf's centre plane,
+    normal = normalize(cross(along, normal)).
+  - After the commit that carries it, the worker runs `plane_clear` and SdfBody emits
+    `separated(point, normal)`.
+- **Split without rebuilding: `SdfBody.split(point, normal) -> SdfBody`.**
+  - This body keeps the −normal side; the new body shows the +normal side.
+  - Both draw the same textures under a clip half-space uniform (`sdf_clip`):
+    - the ray span is clamped to the half-space;
+    - d = max(d, plane) in the march, settling, normals and AO.
+    The plane lies in the kerf's air, so it adds no surface.
+  - Each piece appends an `Op::Intersect` half-space edit as an undo step, then rebuilds
+    its octree and ADF on its worker.
+  - Textures become copy-on-write: a shared flag makes the next upload create new textures.
+  - The new body gets a copy of the EditSession, and its proxy box is `clip_box` of the
+    bounds.
+  - Both pieces stay editable.
+- **Physics.**
+  - Each piece gets a `ConvexPolygonShape3D` from surface points on its side: voxel
+    centres of brick leaves with |d| < voxel/2, projected onto the surface, decimated to
+    256. Godot builds the hull.
+  - Mass = volume × the wood's density (a new `Material::density`).
+  - In the workshop, the bench top and floor become `StaticBody3D`.
+  - The smaller piece goes under a `RigidBody3D`: the SdfBody is its child, carrying the
+    0.001 scale. It gets a small push away from the plane.
+  - The kept piece stays static.
+- **Undo right after a split rejoins the pieces.**
+  - The offcut node is freed.
+  - The board drops its Intersect and its clip, through `EditSession::drop_last_step` (new:
+    an undo without a redo entry).
+
+### P2 — islands left by any cut
+- The chisel through a thin bridge, the saw at an angle, many cuts meeting: a split no
+  single plane describes.
+- **Connectivity of the inside:** union-find over ADF inside samples, with solid leaves as
+  single nodes.
+  - Adjacent inside samples a, b a step h apart join when |a| + |b| > L·h.
+  - Otherwise the exact field along the edge decides, which catches kerfs thinner than a
+    voxel.
+  - It runs on the worker after commits, only for components the commit's region touches.
+- **Cutting an island out:** an Intersect with a sampled mask. The layer machinery can hold
+  it: a sampled grid with bounds and pruning ranges. Its design is settled after P1, with
+  the measured cost of the connectivity pass.
+
+### Verification
+- **Native** (new `tests/test_pieces.cpp`):
+  - `plane_clear` is false with 0.5 mm of wood left and true once through;
+  - each piece's field (the body with its half-space) matches the body on its side;
+  - the volume estimate is within 2% of a box's;
+  - `drop_last_step` restores the edit list bit for bit.
+- **Godot** (Compatibility, and Forward+ via `--vulkan`): the workshop drive saws through.
+  - A `separated` signal arrives and two bodies exist.
+  - The offcut moves at least 5 mm under physics within 1 s.
+  - Undo rejoins them.
+  - A clip-drawn piece matches its own rebuilt ADF (image diff at the parity thresholds).
+- The existing suites stay green; `sdf_bench tools` reports the separation check's time.
+
+## 2. Debris
+- **One system for material that leaves the body:**
+  - **chisel shavings:** a curling ribbon as thick as the cut, whose grain comes from where
+    it sat in the wood;
+  - **dust:** saw, block and sponge, in proportion to what they remove, coloured by a new
+    `SdfBody.albedo_at`;
+  - **chips:** stone, for 8;
+  - **small pieces:** pieces from 1 or 6 below a volume threshold become debris, not
+    bodies.
+- It is cosmetic: `CPUParticles3D` and small mesh bodies, which work in every renderer.
+  The newest N are kept.
+
+## 3. Surface finish
+- **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:
+  - tool-mark amplitude;
+  - scratch amplitude;
+  - their direction;
+  - the pending bevel radius.
+
+  Tools splat it on the main thread, and it is uploaded whole.
+- **The Live shader** turns it into normals and roughness (anisotropic scratches, fading
+  marks), and a bevel look where a radius is pending.
+- **The sponge** only splats the grid while moving (about 1 ms). On release, one worker
+  job builds the smoothing layer from the recorded path. The pending bevel clears in the
+  frame the geometry lands, the way the overlay hands over (W2a).
+- Bakes (4) read the grid too.
+
+## 4. Bake
+- **Pipeline:**
+  - dual contouring from the octree field, manifold by construction;
+  - QEM decimation checked against the SDF;
+  - xatlas UVs;
+  - normal, albedo, AO and finish maps.
+- **Display:** a Baked display with Live↔Baked switching by screen-space error.
+- **Export:** OBJ and STL.
+- **Physics shapes** move from hulls (1) to convex decomposition.
+- **Shadows:** while a body is Live, its latest bake casts its shadows (a shadows-only
+  child).
+- Detailed design: archived plan v1, "E4 implementation plan".
+
+## 5. Assemblies
+- **Joints:** interlock, compression or wedge, and glue. Strength is sampled over the
+  contact.
+- **Also:**
+  - a fit heatmap;
+  - one `RigidBody3D` with compound shapes per assembly;
+  - overload loosens a joint, and failure splits the assembly into pieces (1).
+- Acceptance: the pickaxe.
+
+## 6. Fracture
+- Crack surfaces per material:
+  - wood splits along the grain;
+  - stone breaks in conchoidal chips;
+  - metal fails ductile.
+- The crack is the cutter for Pieces (P2's mask); fragments below the threshold are Debris.
+
+## 7. Forging
+- A sampled base grid under the edit list, a temperature field, and hammer blows as
+  deformation: advection, redistancing and volume correction.
+- Malleability comes from the material's forging window.
+
+## 8. Scale
+- A 2 m stone block with 100k percussive edits.
+- Consolidation of long edit runs into sampled bases, and a second lookup-grid level.
+- Dirty-chunk rebakes.
+- O3 (a 3D brick atlas) if the GPU numbers ask for it.
