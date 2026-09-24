@@ -483,6 +483,23 @@ Sample Octree::eval_tape(const Body &body, bool base, const std::uint32_t *tape,
 	return {d, mat.x, mat.y, mat.z};
 }
 
+float Octree::continue_tape(const Body &body, float d, const std::uint32_t *tape, std::size_t count, vec3 p) {
+	const vec3 mat(0.0f);
+	for (std::size_t i = 0; i < count; ++i) {
+		const std::uint32_t entry = tape[i];
+		const Edit &e = body.edits()[entry & ~kResetBit];
+		if (entry & kResetBit) {
+			d = reset_value(e.op);
+		}
+		if (e.op == Op::Layer) {
+			d = e.layer->apply(p, d);
+			continue;
+		}
+		d = gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape), float(e.material)).x;
+	}
+	return d;
+}
+
 Sample Octree::sample(const Body &body, vec3 p) const {
 	const int node = leaf_node(p);
 	if (node < 0) {

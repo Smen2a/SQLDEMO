@@ -264,7 +264,7 @@ Transform3D SdfBody::frame_to_world(const tools::Frame &f) const {
 }
 
 Dictionary SdfBody::raycast(const Vector3 &from, const Vector3 &direction, double max_distance) {
-	if (job_.valid()) {
+	if (job_.valid() && !job_refines_) {
 		// The body is being edited on the worker: answer from the last query.
 		Dictionary stale = last_hit_.duplicate();
 		if (!stale.is_empty()) {
@@ -463,8 +463,10 @@ void SdfBody::start_job() {
 	job_bricks_.clear();
 	job_materials_.clear();
 	job_previews_ = 0;
+	job_refines_ = true;
 	for (const Command &c : batch) {
 		job_previews_ += c.previewed;
+		job_refines_ = job_refines_ && c.kind == Command::REFINE;
 	}
 	job_ = std::async(std::launch::async, [this, batch = std::move(batch)]() {
 		const auto start = std::chrono::steady_clock::now();
@@ -492,6 +494,9 @@ void SdfBody::start_job() {
 				case Command::REDO:
 					session_.redo();
 					break;
+				case Command::REFINE:
+					session_.refine();
+					break;
 			}
 			// Every update's rewritten slots, not just the last one's, need uploading.
 			const Adf &adf = session_.adf();
@@ -515,6 +520,11 @@ void SdfBody::finish_job() {
 	}
 	update_overlay();
 	upload_ms_ = ms_since(start);
+	if (job_refines_) {
+		refine_ms_ = job_ms_;
+		refresh_stats();
+		return;
+	}
 	last_update_ms_ = job_ms_;
 	refresh_stats();
 	emit_signal("edited", stats_);
@@ -589,16 +599,21 @@ void SdfBody::_process(double) {
 	if (!job_.valid() && !queue_.empty()) {
 		start_job();
 	}
+	if (!job_.valid() && queue_.empty() && !stroke_ && refine_when_idle_ && session_.needs_refine()) {
+		queue({Command::REFINE, 0, {}});
+	}
 }
 
 // --- uploads -----------------------------------------------------------------------------
 
 namespace {
 
-constexpr int kLayerSize = 1024;
-constexpr int kBricksPerLayer = 2048; // 16 x 128 tiles of 64 x 8 texels
+// Small layers, so that an edit re-uploads little: a layer is re-sent whole when any of its
+// bricks changes. (Up to 131k bricks still fit in the 256 layers every renderer allows.)
+constexpr int kLayerSize = 512;
+constexpr int kBricksPerLayer = 512; // 8 x 64 tiles of 64 x 8 texels (SDF_BRICKS_PER_LAYER)
 
-// One 1024^2 layer of brick tiles: each brick's 8 z-slices of 8x8 samples side by side
+// One 512^2 layer of brick tiles: each brick's 8 z-slices of 8x8 samples side by side
 // (the layout sdf_live.gdshaderinc reads). `texel_bytes` per sample, copied from `data`.
 Ref<godot::Image> brick_layer(const std::uint8_t *data, std::size_t slots, int layer, int texel_bytes,
 		godot::Image::Format format) {
@@ -611,7 +626,7 @@ Ref<godot::Image> brick_layer(const std::uint8_t *data, std::size_t slots, int l
 		if (slot >= slots) {
 			break;
 		}
-		const int ox = (tile % 16) * 64, oy = (tile / 16) * 8;
+		const int ox = (tile % 8) * 64, oy = (tile / 8) * 8;
 		for (int z = 0; z < 8; ++z) {
 			for (int y = 0; y < 8; ++y) {
 				const std::uint8_t *row = data + (slot * Adf::kBrickSamples + std::size_t(z * 64 + y * 8)) * texel_bytes;
@@ -821,6 +836,8 @@ void SdfBody::refresh_stats() {
 	d["adf_mb"] = double(a.bytes) / 1048576.0;
 	d["adf_finest_voxel"] = a.finest_voxel;
 	d["update_ms"] = last_update_ms_;
+	d["refine_ms"] = refine_ms_; // the last refinement of coarse cells, in the background
+	d["refine_pending"] = session_.needs_refine();
 	d["upload_ms"] = upload_ms_;
 	d["overlay_edits"] = overlay_count_; // edits the shader draws on top (previewed strokes)
 	stats_ = d;
@@ -852,6 +869,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("flush"), &SdfBody::flush);
 	ClassDB::bind_method(D_METHOD("set_stroke_preview", "enabled"), &SdfBody::set_stroke_preview);
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
+	ClassDB::bind_method(D_METHOD("set_refine_when_idle", "enabled"), &SdfBody::set_refine_when_idle);
+	ClassDB::bind_method(D_METHOD("get_refine_when_idle"), &SdfBody::get_refine_when_idle);
 	ClassDB::bind_method(D_METHOD("set_live_shadows", "enabled"), &SdfBody::set_live_shadows);
 	ClassDB::bind_method(D_METHOD("get_live_shadows"), &SdfBody::get_live_shadows);
 	ClassDB::bind_method(D_METHOD("set_live_source", "source"), &SdfBody::set_live_source);
@@ -869,6 +888,7 @@ void SdfBody::_bind_methods() {
 			"get_live_source");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "exact_cells"), "set_exact_cells", "get_exact_cells");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "stroke_preview"), "set_stroke_preview", "get_stroke_preview");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "refine_when_idle"), "set_refine_when_idle", "get_refine_when_idle");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);

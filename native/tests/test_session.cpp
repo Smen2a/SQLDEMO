@@ -56,7 +56,9 @@ std::vector<Edit> random_stroke(t::Rng &rng) {
 }
 
 // The session's octree and ADF against ones built from scratch for its body, at points near
-// the surface (found by rays down onto the board).
+// the surface (found by rays down onto the board). ADFs are compared where both hold bricks:
+// empty and solid leaves only keep their centre value, and where the session's update left
+// a coarse exact leaf, the other may have decided a finer cell holds no surface.
 void check_against_fresh(const EditSession &s, t::Rng &rng, float &worst_octree, float &worst_adf) {
 	Octree fresh;
 	fresh.build(s.body());
@@ -69,6 +71,10 @@ void check_against_fresh(const EditSession &s, t::Rng &rng, float &worst_octree,
 		}
 		const vec3 p = hit->point + hit->normal * rng.uniform(-0.2f, 0.2f);
 		worst_octree = std::max(worst_octree, std::fabs(s.octree().distance(s.body(), p) - fresh.distance(s.body(), p)));
+		const int a = s.adf().leaf(p), b = fresh_adf.leaf(p);
+		if (a < 0 || b < 0 || s.adf().nodes()[std::size_t(a)].brick < 0 || fresh_adf.nodes()[std::size_t(b)].brick < 0) {
+			continue;
+		}
 		worst_adf = std::max(worst_adf, std::fabs(s.adf().distance(s.body(), s.octree(), p) - fresh_adf.distance(s.body(), fresh, p)));
 	}
 }

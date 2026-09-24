@@ -5,6 +5,7 @@
 #include "compile/octree.h"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace sdf {
@@ -28,6 +29,12 @@ public:
 	bool has_adf() const { return with_adf_; }
 	// Builds the ADF for the current body, or drops it, keeping the edit history.
 	void set_adf(bool with_adf);
+	// Where the ADF takes its samples from from now on (see Adf::set_sampler).
+	void set_adf_sampler(std::shared_ptr<AdfSampler> sampler);
+	// Edits leave the creases they make in coarse ADF cells, to land fast; refine() takes
+	// them down to the finest (Adf::refine), for cheaper drawing, when there is time.
+	bool needs_refine() const { return with_adf_ && adf_.needs_refine(); }
+	void refine();
 	// Replaces the stroke in progress with `edits`. Returns false and changes nothing if
 	// the body would reject any of them (Body::accepts).
 	bool set_stroke(const std::vector<Edit> &edits);
@@ -66,6 +73,7 @@ private:
 	std::size_t stroke_ = 0;              // edits in the stroke in progress (the last ones)
 	bool with_adf_ = true;
 	AdfParams params_;
+	std::shared_ptr<AdfSampler> sampler_;
 	Timing last_;
 };
 

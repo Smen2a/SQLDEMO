@@ -381,9 +381,16 @@ int tools_bench() {
 		const double t0 = now();
 		s.set_stroke(merged);
 		s.commit();
+		const double release = 1e3 * (now() - t0);
+		const Adf::Stats stats = s.adf().stats();
 		std::printf("  previewed:           no work while it moves; on release %5.1f ms (octree %.1f), %4zu bricks "
-					"re-sampled; %zu edits\n",
-				1e3 * (now() - t0), s.last().octree_ms, s.last().rebuilt_bricks, merged.size());
+					"rewritten (%zu of them cut into their old samples; %zu more cut and unchanged); %zu edits\n",
+				release, s.last().octree_ms, s.last().rebuilt_bricks, stats.folded_bricks, stats.unchanged_bricks,
+				merged.size());
+		// Then, once the tool is idle, its creases are refined from coarse exact cells.
+		const double r0 = now();
+		s.refine();
+		std::printf("  refined when idle:   %5.1f ms, %4zu bricks rewritten\n", 1e3 * (now() - r0), s.last().rebuilt_bricks);
 	}
 	{
 		// The sanding sponge's work is a smoothing layer, applied as it goes (no preview): each

@@ -1,8 +1,12 @@
 #include "test.h"
 
 #include "adf/adf.h"
+#include "adf/sampler.h"
+#include "body/materials.h"
 #include "compile/octree.h"
+#include "eval/query.h"
 #include "demo/gallery.h"
+#include "tools/tools.h"
 #include "util/half.h"
 
 #include <algorithm>
@@ -163,6 +167,142 @@ TEST(adf_is_independent_of_thread_count) {
 		same = x.child == y.child && x.brick == y.brick && x.material == y.material && x.value == y.value;
 	}
 	CHECK(same);
+}
+
+// A sampler that batches voxel centres, as the GPU's does, builds exactly the tree the lazy
+// CPU sampler builds: the refiner's decisions see the same values either way.
+TEST(adf_batched_sampling_builds_the_same_tree) {
+	Body body;
+	Camera camera;
+	demo::named_demo("carved_panel", body, camera);
+	Octree octree;
+	octree.build(body);
+	Adf lazy, batched;
+	batched.set_sampler(std::make_shared<BatchingCpuSampler>());
+	lazy.build(body, octree);
+	batched.build(body, octree);
+	auto same = [&]() {
+		if (lazy.nodes().size() != batched.nodes().size() || lazy.brick_values() != batched.brick_values() ||
+				lazy.material_values() != batched.material_values() || lazy.exact_tape() != batched.exact_tape() ||
+				lazy.exact_cells().size() != batched.exact_cells().size()) {
+			return false;
+		}
+		for (std::size_t i = 0; i < lazy.nodes().size(); ++i) {
+			const Adf::Node &x = lazy.nodes()[i], &y = batched.nodes()[i];
+			if (x.child != y.child || x.brick != y.brick || x.material != y.material || x.value != y.value) {
+				return false;
+			}
+		}
+		for (std::size_t i = 0; i < lazy.exact_cells().size(); ++i) {
+			const Adf::ExactCell &x = lazy.exact_cells()[i], &y = batched.exact_cells()[i];
+			if (x.offset != y.offset || x.count != y.count || x.base != y.base || x.error != y.error) {
+				return false;
+			}
+		}
+		return true;
+	};
+	CHECK(same());
+	for (const Edit &e : demo::random_strokes(body, 6, 5)) {
+		if (!body.add(e)) {
+			continue;
+		}
+		const std::size_t index = body.edits().size() - 1;
+		octree.add_edit(body, std::uint32_t(index));
+		lazy.update(body, octree, Adf::dirty_region(body, octree, index));
+		batched.update(body, octree, Adf::dirty_region(body, octree, index));
+	}
+	CHECK(same());
+}
+
+namespace {
+
+// The largest |a - b| at points near the surface of `body` (found by rays down onto the
+// board) where both ADFs hold bricks (empty and solid leaves only keep a centre value).
+float worst_brick_difference(const Body &body, const Octree &octree, const Adf &a, const Adf &b, t::Rng &rng) {
+	float worst = 0.0f;
+	for (int i = 0; i < 400; ++i) {
+		const vec3 origin(rng.uniform(-75, 75), rng.uniform(-45, 45), 60);
+		const auto hit = raycast(body, octree, origin, {0, 0, -1}, 200.0f, 1e-4f);
+		if (!hit) {
+			continue;
+		}
+		const vec3 p = hit->point + hit->normal * rng.uniform(-0.2f, 0.2f);
+		const int la = a.leaf(p), lb = b.leaf(p);
+		if (la < 0 || lb < 0 || a.nodes()[std::size_t(la)].brick < 0 || b.nodes()[std::size_t(lb)].brick < 0) {
+			continue;
+		}
+		worst = std::max(worst, std::fabs(a.distance(body, octree, p) - b.distance(body, octree, p)));
+	}
+	return worst;
+}
+
+// Cuts made on the board by each tool, as a commit appends them.
+std::vector<std::vector<Edit>> board_cuts() {
+	const float top = 12.5f;
+	const vec3 up(0, 0, 1);
+	const tools::Frame plane = tools::Frame::at({20, 10, top}, up, {1, 0, 0});
+	return {
+			tools::Chisel{}.paring({-50, -20, top}, {10, -20, top}, up, 1.5f),
+			{tools::Saw{}.kerf_cut({30, 0, top}, {0, 1, 0}, up, 6.0f)},
+			{tools::SandingBlock{}.pass(plane, {-25, -15}, {25, 15}, 0.3f)},
+			tools::Chisel{6.0f}.paring({-20, 30, top}, {-20, -30, top}, up, 0.8f),
+	};
+}
+
+} // namespace
+
+// Committing cuts folds them into the old bricks (a primitive per sample instead of the whole
+// tape), leaves the creases they make in coarse exact leaves, and refine() then takes those
+// down to what a build makes: at every stage the field matches a fresh build's.
+TEST(adf_cuts_fold_and_refine_like_fresh_builds) {
+	Body body = demo::board(mat::Oak);
+	Octree octree;
+	octree.build(body);
+	Adf adf;
+	adf.build(body, octree);
+	CHECK(!adf.needs_refine());
+	t::Rng rng(21);
+	std::size_t folded = 0, unchanged = 0;
+	float worst = 0.0f, worst_refined = 0.0f;
+	for (const std::vector<Edit> &cut : board_cuts()) {
+		Aabb region;
+		for (const Edit &e : cut) {
+			CHECK(body.add(e));
+			const std::size_t index = body.edits().size() - 1;
+			octree.add_edit(body, std::uint32_t(index));
+			region.include(Adf::dirty_region(body, octree, index));
+		}
+		adf.update(body, octree, region);
+		folded += adf.stats().folded_bricks;
+		unchanged += adf.stats().unchanged_bricks;
+		CHECK(adf.needs_refine());
+		bool coarse = false;
+		for (const Adf::Node &n : adf.nodes()) {
+			coarse = coarse || (n.exact() && n.size > adf.params().exact_cell);
+		}
+		CHECK(coarse); // the cut's creases, not yet refined
+
+		Adf fresh;
+		fresh.build(body, octree);
+		worst = std::max(worst, worst_brick_difference(body, octree, adf, fresh, rng));
+
+		// Refined, the tree is what a build makes, but for splits kept from before.
+		adf.refine(body, octree);
+		CHECK(!adf.needs_refine());
+		bool still_coarse = false;
+		for (const Adf::Node &n : adf.nodes()) {
+			still_coarse = still_coarse || (n.exact() && n.size > adf.params().exact_cell * 1.001f);
+		}
+		CHECK(!still_coarse);
+		CHECK(adf.stats().bricks >= fresh.stats().bricks * 9 / 10 && adf.stats().bricks <= fresh.stats().bricks * 11 / 10);
+		worst_refined = std::max(worst_refined, worst_brick_difference(body, octree, adf, fresh, rng));
+	}
+	std::printf("    %zu bricks folded, %zu more left as they were; worst difference from fresh builds %.2g mm, "
+				"refined %.2g mm\n",
+			folded, unchanged, double(worst), double(worst_refined));
+	CHECK(folded > 0);
+	CHECK(worst <= 2.0f * adf.params().tolerance);
+	CHECK(worst_refined <= 2.0f * adf.params().tolerance);
 }
 
 // Lookups start at the grid block's node; they must land in a leaf containing the point,

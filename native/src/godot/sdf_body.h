@@ -94,6 +94,11 @@ public:
 	bool get_stroke_preview() const { return stroke_preview_; }
 	// Waits for every queued edit to be applied and uploaded (for tests).
 	void flush();
+	// Whether the creases edits leave in coarse ADF cells (so that they land in a few
+	// milliseconds) are refined on the worker once the body is idle: no tool engaged and
+	// nothing queued. Refining changes no surface, only makes it cheaper to draw.
+	void set_refine_when_idle(bool enabled) { refine_when_idle_ = enabled; }
+	bool get_refine_when_idle() const { return refine_when_idle_; }
 
 	void set_debug_view(int view);
 	int get_debug_view() const { return debug_view_; }
@@ -120,7 +125,7 @@ protected:
 private:
 	// An edit-session command, queued on the main thread and applied on a worker.
 	struct Command {
-		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO } kind;
+		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO, REFINE } kind;
 		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
 		std::vector<Edit> edits; // then append these
 		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
@@ -161,6 +166,8 @@ private:
 	std::shared_ptr<tools::Stroke> stroke_; // the tool in use, if any (queued work may share it)
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed
+	bool refine_when_idle_ = true;
+	bool job_refines_ = false;              // the running batch only refines (the body is unchanged)
 	std::vector<Command> queue_;            // not yet applied
 	std::future<void> job_;                 // the batch being applied, if any
 	std::vector<std::uint32_t> job_bricks_, job_materials_; // slots the batch rewrote
@@ -170,7 +177,7 @@ private:
 	int overlay_count_ = 0;
 	sdf::Aabb overlay_box_;
 	float overlay_lipschitz_ = 1.0f;
-	double job_ms_ = 0, upload_ms_ = 0;
+	double job_ms_ = 0, upload_ms_ = 0, refine_ms_ = 0;
 	godot::Dictionary stats_;
 	godot::Dictionary last_hit_;
 	sdf::Aabb bounds_; // the body's when loaded (edits only cut)

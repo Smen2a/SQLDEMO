@@ -20,6 +20,10 @@ struct AdfParams {
 	// Cells that miss the tolerance (creases, mostly) stop refining once they are this
 	// small and are evaluated exactly instead, if their tape is short enough to be cheap.
 	float exact_cell = 1.0f;
+	// Updates stop at exact cells this large (7 = max_voxel * 7, the largest bricks: they
+	// never split for creases), so an edit lands in milliseconds; refine() then takes the
+	// creases down to exact_cell in the background, for cheaper drawing.
+	float update_exact_cell = 7.0f;
 	int exact_tape_limit = 16;
 	int threads = 0;           // 0 = hardware concurrency
 };
@@ -89,6 +93,10 @@ public:
 		std::size_t nodes = 0, bricks = 0, material_bricks = 0, exact_leaves = 0, bytes = 0;
 		double mean_exact_tape = 0;
 		std::size_t rebuilt_bricks = 0; // by the last build or update
+		// Of those, bricks the last update's cuts were folded into (their old samples cut,
+		// not re-sampled), and bricks whose samples a fold left as they were (kept, not
+		// counted in rebuilt_bricks).
+		std::size_t folded_bricks = 0, unchanged_bricks = 0;
 		float finest_voxel = 0;
 		double seconds = 0;             // last build or update
 	};
@@ -110,6 +118,12 @@ public:
 	void update(const Body &body, const Octree &octree, const Change &change);
 	// The same after appending edits only (from the edit count at the last build or update).
 	void update(const Body &body, const Octree &octree, const Aabb &region);
+	// Updates leave the creases they make in coarse exact leaves (update_exact_cell):
+	// refine() takes those down to exact_cell, as a build would, keeping everything else.
+	// The field is the same either way (exact leaves evaluate their tapes); finer leaves
+	// only draw faster.
+	void refine(const Body &body, const Octree &octree);
+	bool needs_refine() const { return !coarse_.empty(); }
 	// Where edit `index` can have changed the octree's sampled field.
 	static Aabb dirty_region(const Body &body, const Octree &octree, std::size_t index);
 
@@ -177,7 +191,8 @@ public:
 	Stats stats() const;
 
 private:
-	void rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse);
+	enum class Pass { Build, Update, Refine };
+	void rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse, Pass pass);
 	void build_grid();
 
 	AdfParams params_;
@@ -188,9 +203,10 @@ private:
 	std::vector<std::uint32_t> exact_tape_;
 	std::vector<std::uint32_t> dirty_bricks_, dirty_materials_;
 	std::vector<GridCell> grid_;
-	std::size_t live_bricks_ = 0, live_materials_ = 0, rebuilt_ = 0;
+	std::size_t live_bricks_ = 0, live_materials_ = 0, rebuilt_ = 0, folded_ = 0, unchanged_ = 0;
 	std::size_t edits_ = 0; // the body's edit count when last built or updated
 	std::shared_ptr<AdfSampler> sampler_;
+	Aabb coarse_; // where updates may have left coarse exact leaves
 	double seconds_ = 0;
 };
 

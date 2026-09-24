@@ -41,8 +41,9 @@
 //   sdf_adf_grid   RGBA32F, 2 cells per texel: the ADF's top-level grid (Adf::grid(), 64^3
 //                  blocks over the root cube, x fastest), each (node, depth): the deepest
 //                  node covering the block, where leaf lookups start
-//   sdf_bricks     R16F array, 1024^2 layers of 2048 bricks: a brick is a 64x8 tile of
-//                  its 8 z-slices of 8x8 samples side by side
+//   sdf_bricks     R16F array, 512^2 layers of 512 bricks: a brick is a 64x8 tile of
+//                  its 8 z-slices of 8x8 samples side by side (small layers, so an edit
+//                  re-uploads little)
 //   sdf_brick_materials  RGBA8 array, the same layout: (material 0, material 1, mix, -)
 
 #include "res://shaders/sdf/sdf_prelude.gdshaderinc"
@@ -58,7 +59,8 @@ const int SDF_STATE_SOLID = -1;
 const int SDF_ADF_EMPTY = -1;
 const int SDF_ADF_SOLID = -2;
 const int SDF_ADF_EXACT_BASE = 256;
-const int SDF_BRICKS_PER_LAYER = 2048;
+const int SDF_BRICKS_PER_LAYER = 512;
+const int SDF_BRICK_LAYER_SIZE = 512; // texels a side: 8 x 64 tiles of 64 x 8
 const int SDF_GRID_LEVELS = 6; // Adf::kGridLevels
 const int SDF_GRID_SIDE = 64;
 const float SDF_BRICK_CELLS = 7.0;
@@ -257,7 +259,7 @@ int sdf_adf_find_leaf(vec3 p, out vec3 lo, out float size, out vec4 a) {
 // Top-left texel of a brick's tile, and its layer.
 ivec3 sdf_brick_origin(int slot) {
 	int tile = slot % SDF_BRICKS_PER_LAYER;
-	return ivec3((tile % 16) * 64, (tile / 16) * 8, slot / SDF_BRICKS_PER_LAYER);
+	return ivec3((tile % 8) * 64, (tile / 8) * 8, slot / SDF_BRICKS_PER_LAYER);
 }
 
 // Trilinear lookup at voxel coordinates u in [0, 7]^3: hardware bilinear within the two
@@ -266,9 +268,9 @@ float sdf_brick_value(int slot, vec3 u) {
 	u = clamp(u, vec3(0.0), vec3(SDF_BRICK_CELLS));
 	float z = min(floor(u.z), SDF_BRICK_CELLS - 1.0);
 	ivec3 o = sdf_brick_origin(slot);
-	vec2 uv = (vec2(float(o.x) + z * 8.0 + u.x + 0.5, float(o.y) + u.y + 0.5)) / float(SDF_TEX_WIDTH);
+	vec2 uv = (vec2(float(o.x) + z * 8.0 + u.x + 0.5, float(o.y) + u.y + 0.5)) / float(SDF_BRICK_LAYER_SIZE);
 	float a = textureLod(sdf_bricks, vec3(uv, float(o.z)), 0.0).r;
-	float b = textureLod(sdf_bricks, vec3(uv + vec2(8.0 / float(SDF_TEX_WIDTH), 0.0), float(o.z)), 0.0).r;
+	float b = textureLod(sdf_bricks, vec3(uv + vec2(8.0 / float(SDF_BRICK_LAYER_SIZE), 0.0), float(o.z)), 0.0).r;
 	return mix(a, b, u.z - z);
 }
 

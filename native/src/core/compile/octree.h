@@ -80,6 +80,9 @@ public:
 	}
 	// A tape (entries as in Leaf::tape) evaluated at p.
 	static Sample eval_tape(const Body &body, bool base, const std::uint32_t *tape, std::size_t count, vec3 p);
+	// The distance after applying tape entries to `d`, the field before them at p (the
+	// material is left out: for cuts, which keep it).
+	static float continue_tape(const Body &body, float d, const std::uint32_t *tape, std::size_t count, vec3 p);
 
 	const std::vector<Node> &nodes() const { return nodes_; }
 	const std::vector<Leaf> &leaves() const { return leaves_; }

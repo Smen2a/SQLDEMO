@@ -49,6 +49,17 @@ struct Old {
 	Aabb region;
 	std::uint32_t first_changed = 0;
 	Aabb removed;
+	// The old bricks' samples (their slots are only rewritten when the new tree is spliced).
+	const std::vector<std::uint16_t> *values = nullptr;
+	// Whether the change only appends cuts (see Refiner::fold).
+	bool fold = false;
+	// A refinement pass (Adf::refine): nothing changed, but coarse exact leaves in the
+	// region are refined down to the finest exact cells.
+	bool refining = false;
+	// An update with coarse exact cells: split nodes the change reaches are redone from their
+	// cube (their fine leaves are refine()'s to rebuild), so that cutting across finely
+	// refined creases costs no more than cutting a face.
+	bool coarse = false;
 };
 
 // Node of `nodes` covering exactly the cube (lo, size), or -1.
@@ -79,20 +90,33 @@ int find_cube(const std::vector<Adf::Node> &nodes, vec3 lo, float size) {
 
 // A subtree built by one worker, spliced into the tree afterwards. Local node 0 is the
 // task's cell. New bricks, material bricks and exact tapes are numbered locally; bricks
-// copied from the old tree keep their slots (flagged in kept_brick / kept_material).
+// copied from the old tree keep their slots (flagged in kept_brick / kept_material), and
+// bricks folded from an old one are written back into its slot (reuse_brick).
 struct Local {
 	std::vector<Adf::Node> nodes;
 	std::vector<char> kept_brick, kept_material;
+	std::vector<std::int32_t> reuse_brick;
 	std::vector<std::uint16_t> values;
 	std::vector<std::uint8_t> materials;
 	std::vector<Adf::ExactCell> exact;
 	std::vector<std::uint32_t> tape;
+	std::size_t folded = 0, unchanged = 0;
+
+	void start(vec3 lo, float size) {
+		nodes.resize(1);
+		kept_brick.assign(1, 0);
+		kept_material.assign(1, 0);
+		reuse_brick.assign(1, -1);
+		nodes[0].lo = lo;
+		nodes[0].size = size;
+	}
 
 	int add_children(int parent, vec3 lo, float size) {
 		const int first = int(nodes.size());
 		nodes.resize(std::size_t(first) + 8);
 		kept_brick.resize(nodes.size(), 0);
 		kept_material.resize(nodes.size(), 0);
+		reuse_brick.resize(nodes.size(), -1);
 		nodes[std::size_t(parent)].child = first;
 		for (int c = 0; c < 8; ++c) {
 			nodes[std::size_t(first + c)].lo = lo + corner(c) * (size * 0.5f);
@@ -133,6 +157,7 @@ struct Refiner {
 	const Octree &octree;
 	const AdfParams &params;
 	const Old &old;
+	float exact_cell; // this pass's: creases stop refining at cells this large
 
 	Sample at(const Octree::Leaf &cell, vec3 p) const {
 		return Octree::eval_tape(body, cell.base, cell.tape.data(), cell.tape.size(), p);
@@ -183,10 +208,27 @@ struct Refiner {
 				copy(local, cube.old_node, cube.node);
 				continue;
 			}
+			if (old.refining && cube.old_node >= 0) {
+				// Only coarse exact leaves are redone; their tapes are valid over the cubes
+				// below, pruned or not, so split nodes are passed without pruning.
+				const Adf::Node &o = (*old.nodes)[std::size_t(cube.old_node)];
+				if (o.child >= 0) {
+					const int first = local.add_children(cube.node, cube.lo, cube.size);
+					for (int c = 0; c < 8; ++c) {
+						w.frontier.push_back({first + c, local.nodes[std::size_t(first + c)].lo, cube.size * 0.5f, cube.parent,
+								o.child + c});
+					}
+					continue;
+				}
+				if (!(o.exact() && o.size > exact_cell * 1.001f)) {
+					copy(local, cube.old_node, cube.node);
+					continue;
+				}
+			}
 			// Only the edits that can shape this cube: a few, even where the octree cell's tape
 			// is long, and none at all where the cube is provably empty or solid.
 			const Octree::Leaf &cell = w.cells.emplace_back(octree.prune_within(body, *cube.parent, cube.lo, cube.size));
-			if (cube.old_node >= 0 && !overlaps(old.removed, cube.lo, cube.size) &&
+			if (cube.old_node >= 0 && !old.refining && !overlaps(old.removed, cube.lo, cube.size) &&
 					std::none_of(cell.tape.begin(), cell.tape.end(),
 							[&](std::uint32_t entry) { return (entry & ~Octree::kResetBit) >= old.first_changed; })) {
 				// Pruning dropped every changed edit here: each provably changes nothing in this
@@ -195,7 +237,8 @@ struct Refiner {
 				copy(local, cube.old_node, cube.node);
 				continue;
 			}
-			if (cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child >= 0) {
+			if (cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child >= 0 &&
+					!(old.coarse && cube.size <= exact_cell * 1.001f)) {
 				// Split before: stay split (at worst finer than now needed) and redo only the
 				// children the change reaches.
 				const int first = local.add_children(cube.node, cube.lo, cube.size);
@@ -211,10 +254,53 @@ struct Refiner {
 				w.cells.pop_back();
 				continue;
 			}
+			if (old.fold && cube.old_node >= 0 && (*old.nodes)[std::size_t(cube.old_node)].child < 0) {
+				const Adf::Node &o = (*old.nodes)[std::size_t(cube.old_node)];
+				if (o.brick == Adf::kEmpty) {
+					// Cuts only remove material: an empty cube stays empty (its field only grows).
+					leaf_without_brick(local, cube.node, Octree::State::Empty, at(cell, cube.lo + vec3(cube.size * 0.5f)));
+					w.cells.pop_back();
+					continue;
+				}
+				if (o.brick >= 0 && !o.exact()) {
+					fold(w, cube, cell);
+					continue;
+				}
+			}
 			w.sampling.push_back(cube);
 			w.sampling_cells.push_back(&cell);
 		}
 		w.frontier.clear();
+	}
+
+	// A cut folded into an old brick: the new edits (the tape's last entries) applied to its
+	// samples, one primitive each, instead of the whole tape. Appending a cut is exact on
+	// the field, so these are the samples re-sampling would give (bit for bit for hard cuts,
+	// as half rounding is monotone; within the old samples' rounding otherwise). Then the
+	// usual decision, whose centre checks (through the cube's tape) catch what the cut does
+	// between the samples: a new crease, or a cut too thin or curved for the brick, splits
+	// the cube, and its children are sampled in full.
+	void fold(Work &w, const Cube &cube, const Octree::Leaf &cell) const {
+		const Adf::Node &o = (*old.nodes)[std::size_t(cube.old_node)];
+		std::size_t first = cell.tape.size();
+		while (first > 0 && (cell.tape[first - 1] & ~Octree::kResetBit) >= old.first_changed) {
+			--first;
+		}
+		const std::uint16_t *before = old.values->data() + std::size_t(o.brick) * Adf::kBrickSamples;
+		const float voxel = cube.size / float(kCells);
+		Sample s[Adf::kBrickSamples];
+		bool unchanged = true;
+		for (int z = 0; z < kN; ++z) {
+			for (int y = 0; y < kN; ++y) {
+				for (int x = 0; x < kN; ++x) {
+					const int i = index(x, y, z);
+					s[i].d = Octree::continue_tape(body, half_to_float(before[i]), cell.tape.data() + first,
+							cell.tape.size() - first, cube.lo + vec3(float(x), float(y), float(z)) * voxel);
+					unchanged = unchanged && float_to_half(s[i].d) == before[i];
+				}
+			}
+		}
+		decide(w, cube, cell, s, nullptr, cube.old_node, unchanged);
 	}
 
 	// Makes each sampled cube a leaf (with or without a brick, exact or not) or splits it,
@@ -230,7 +316,10 @@ struct Refiner {
 		w.sampling_cells.clear();
 	}
 
-	void decide(Work &w, const Cube &cube, const Octree::Leaf &cell, const Sample *s, const float *centres) const {
+	// `folded` is the old brick leaf the samples were folded from (see fold()), or -1;
+	// `unchanged` whether folding changed none of them.
+	void decide(Work &w, const Cube &cube, const Octree::Leaf &cell, const Sample *s, const float *centres,
+			int folded = -1, bool unchanged = false) const {
 		Local &local = w.local;
 		const int node = cube.node;
 		const vec3 lo = cube.lo;
@@ -261,7 +350,7 @@ struct Refiner {
 		const bool can_split = voxel * 0.5f >= params.min_voxel;
 		// The Live shader cannot evaluate smoothing layers (they are sampled grids, which only
 		// the CPU holds): a cell where one weighs in refines its bricks instead.
-		const bool may_be_exact = (size <= params.exact_cell || !can_split) &&
+		const bool may_be_exact = (size <= exact_cell || !can_split) &&
 				int(cell.tape.size()) <= params.exact_tape_limit && !holds_layer(cell);
 		const float stop = may_be_exact ? std::numeric_limits<float>::max() : params.tolerance;
 		float worst = 0.0f;
@@ -295,9 +384,19 @@ struct Refiner {
 		}
 
 		// A brick leaf.
+		if (folded >= 0 && unchanged && !exact) {
+			// The cut passed the samples by: the old brick stays, in its slot (no upload).
+			copy(local, folded, node);
+			++local.unchanged;
+			return;
+		}
 		Adf::Node &n = local.nodes[std::size_t(node)];
 		n.brick = int(local.values.size() / Adf::kBrickSamples);
 		local.values.insert(local.values.end(), half, half + Adf::kBrickSamples);
+		if (folded >= 0) {
+			local.reuse_brick[std::size_t(node)] = (*old.nodes)[std::size_t(folded)].brick;
+			++local.folded;
+		}
 		// The trilinear field's gradient in a voxel is bounded, per axis, by the largest of
 		// the voxel's four edge differences along that axis.
 		float lip = 0.0f;
@@ -327,6 +426,13 @@ struct Refiner {
 			const float error = std::min(2.0f * worst + n.value * voxel / 128.0f + 1e-4f, n.value * voxel * kSqrt3);
 			local.exact.push_back({std::uint32_t(local.tape.size()), std::uint32_t(cell.tape.size()), cell.base, error});
 			local.tape.insert(local.tape.end(), cell.tape.begin(), cell.tape.end());
+			return;
+		}
+		if (folded >= 0) {
+			// Cuts keep the materials: the old id, or the old material brick in its slot.
+			const Adf::Node &o = (*old.nodes)[std::size_t(folded)];
+			n.material = o.material;
+			local.kept_material[std::size_t(node)] = o.material < 0;
 			return;
 		}
 
@@ -363,14 +469,29 @@ struct Refiner {
 
 void Adf::build(const Body &body, const Octree &octree, const AdfParams &params) {
 	params_ = params;
-	rebuild(body, octree, Change{Aabb::infinite(), 0, Aabb::infinite()}, false);
+	coarse_ = Aabb();
+	rebuild(body, octree, Change{Aabb::infinite(), 0, Aabb::infinite()}, false, Pass::Build);
 }
 
 void Adf::update(const Body &body, const Octree &octree, const Change &change) {
 	const Octree::Node &root = octree.nodes()[0];
 	const bool same_root = !nodes_.empty() && nodes_[0].size == root.size && nodes_[0].lo.x == root.lo.x &&
 			nodes_[0].lo.y == root.lo.y && nodes_[0].lo.z == root.lo.z;
-	rebuild(body, octree, same_root ? change : Change{Aabb::infinite(), 0, Aabb::infinite()}, same_root);
+	const Change applied = same_root ? change : Change{Aabb::infinite(), 0, Aabb::infinite()};
+	rebuild(body, octree, applied, same_root, Pass::Update);
+	if (params_.update_exact_cell > params_.exact_cell) {
+		coarse_.include(applied.region);
+	}
+}
+
+void Adf::refine(const Body &body, const Octree &octree) {
+	if (coarse_.empty() || nodes_.empty()) {
+		coarse_ = Aabb();
+		return;
+	}
+	const Aabb region = coarse_;
+	coarse_ = Aabb();
+	rebuild(body, octree, Change{region, std::uint32_t(body.edits().size()), Aabb()}, true, Pass::Refine);
 }
 
 void Adf::update(const Body &body, const Octree &octree, const Aabb &region) {
@@ -390,7 +511,7 @@ Aabb Adf::dirty_region(const Body &body, const Octree &, std::size_t index) {
 	return body.edit_box(index).expanded(body.edit_influence(index));
 }
 
-void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse) {
+void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, bool reuse, Pass pass) {
 	const Aabb &region = change.region;
 	const auto start = std::chrono::steady_clock::now();
 	// Cells outside the region keep their bricks. Their samples far from the surface may
@@ -412,7 +533,16 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 	nodes_.reserve(old_nodes.size() + 64);
 	exact_cells_.clear();
 	exact_tape_.clear();
-	const Old old{&old_nodes, &old_exact, &old_tape, region, change.first_changed, change.removed};
+	// Folding needs every new edit to be a cut: it can only remove material (so empty cells
+	// stay empty), keeps the materials, and is a function of the field before it.
+	bool fold = reuse && change.removed.empty() && change.first_changed < body.edits().size();
+	for (std::size_t i = change.first_changed; fold && i < body.edits().size(); ++i) {
+		const Edit &e = body.edits()[i];
+		fold = (e.op == Op::Subtract || e.op == Op::Intersect) && e.blend != Blend::Profile;
+	}
+	const Old old{&old_nodes, &old_exact, &old_tape, region, change.first_changed, change.removed, &values_,
+			fold && pass == Pass::Update, pass == Pass::Refine,
+			pass == Pass::Update && params_.update_exact_cell > params_.exact_cell};
 	edits_ = body.edits().size();
 	auto add_exact = [&](const ExactCell &cell, const std::uint32_t *entries) {
 		exact_cells_.push_back({std::uint32_t(exact_tape_.size()), cell.count, cell.base, cell.error});
@@ -529,7 +659,8 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 	CpuSampler cpu(threads);
 	AdfSampler &sampler = sampler_ ? *sampler_ : cpu;
 	const bool batched = sampler.batches_centres();
-	const Refiner refiner{body, octree, params_, old};
+	const Refiner refiner{body, octree, params_, old,
+			pass == Pass::Update ? std::max(params_.update_exact_cell, params_.exact_cell) : params_.exact_cell};
 	constexpr std::size_t kGroup = 2048;
 	std::vector<AdfJob> jobs;
 	std::vector<Sample> corners;
@@ -539,12 +670,7 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 		std::vector<Work> works(count);
 		for (std::size_t i = 0; i < count; ++i) {
 			const Task &task = tasks[group + i];
-			Local &local = works[i].local;
-			local.nodes.resize(1);
-			local.kept_brick.assign(1, 0);
-			local.kept_material.assign(1, 0);
-			local.nodes[0].lo = task.lo;
-			local.nodes[0].size = task.size;
+			works[i].local.start(task.lo, task.size);
 			const Octree::Leaf &leaf = octree.leaves()[std::size_t(octree.nodes()[std::size_t(task.tape_node)].leaf)];
 			works[i].frontier.push_back({0, task.lo, task.size, &leaf, task.old_node});
 		}
@@ -573,10 +699,16 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 
 	// Splice the subtrees in task order, filling freed slots first, so the result does not
 	// depend on scheduling.
+	folded_ = unchanged_ = 0;
 	for (const Local &local : locals) {
+		folded_ += local.folded;
+		unchanged_ += local.unchanged;
 		for (std::size_t k = 0; k < local.nodes.size(); ++k) {
 			if (local.kept_brick[k]) {
 				keep_brick[std::size_t(local.nodes[k].brick)] = 1;
+			}
+			if (local.reuse_brick[k] >= 0) {
+				keep_brick[std::size_t(local.reuse_brick[k])] = 1;
 			}
 			if (local.kept_material[k]) {
 				keep_material[std::size_t(-local.nodes[k].material - 1)] = 1;
@@ -627,7 +759,7 @@ void Adf::rebuild(const Body &body, const Octree &octree, const Change &change, 
 				n.material = add_exact(cell, local.tape.data() + cell.offset);
 			}
 			if (n.brick >= 0 && !local.kept_brick[k]) {
-				const std::uint32_t slot = take_brick();
+				const std::uint32_t slot = local.reuse_brick[k] >= 0 ? std::uint32_t(local.reuse_brick[k]) : take_brick();
 				std::copy_n(&local.values[std::size_t(n.brick) * kBrickSamples], kBrickSamples,
 						&values_[std::size_t(slot) * kBrickSamples]);
 				dirty_bricks_.push_back(slot);
@@ -833,6 +965,8 @@ Adf::Stats Adf::stats() const {
 	}
 	s.mean_exact_tape = exact_cells_.empty() ? 0.0 : double(exact_tape_.size()) / double(exact_cells_.size());
 	s.rebuilt_bricks = rebuilt_;
+	s.folded_bricks = folded_;
+	s.unchanged_bricks = unchanged_;
 	s.seconds = seconds_;
 	s.finest_voxel = std::numeric_limits<float>::max();
 	for (const Node &n : nodes_) {

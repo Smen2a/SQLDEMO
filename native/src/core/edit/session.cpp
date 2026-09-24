@@ -35,6 +35,7 @@ void EditSession::reset(const Body &body, const AdfParams &params, bool with_adf
 	last_.octree_ms = ms_since(start);
 	const auto adf_start = std::chrono::steady_clock::now();
 	adf_ = Adf();
+	adf_.set_sampler(sampler_);
 	if (with_adf_) {
 		adf_.build(body_, octree_, params);
 	}
@@ -50,8 +51,24 @@ void EditSession::set_adf(bool with_adf) {
 		adf_.build(body_, octree_, params_);
 	} else if (!with_adf) {
 		adf_ = Adf();
+		adf_.set_sampler(sampler_);
 	}
 	with_adf_ = with_adf;
+}
+
+void EditSession::refine() {
+	const auto start = std::chrono::steady_clock::now();
+	if (with_adf_) {
+		adf_.refine(body_, octree_);
+	}
+	last_.octree_ms = 0;
+	last_.adf_ms = ms_since(start);
+	last_.rebuilt_bricks = adf_.stats().rebuilt_bricks;
+}
+
+void EditSession::set_adf_sampler(std::shared_ptr<AdfSampler> sampler) {
+	sampler_ = std::move(sampler);
+	adf_.set_sampler(sampler_);
 }
 
 bool EditSession::set_stroke(const std::vector<Edit> &edits) {
