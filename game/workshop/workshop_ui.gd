@@ -210,10 +210,10 @@ func update_status() -> void:
 		line = "left-drag: use it   hold right: plan it first"
 	_plan.text = line
 	# Below and right of the pointer; left of it where the line would run off the view.
-	var pointer := workshop.get_viewport().get_mouse_position()
-	var at := pointer + Vector2(18, 14)
+	var pointer: Vector2 = workshop.get_viewport().get_mouse_position()
+	var at: Vector2 = pointer + Vector2(18, 14)
 	var size := _plan.get_combined_minimum_size()
-	var view := workshop.get_viewport().get_visible_rect().size
+	var view: Vector2 = workshop.get_viewport().get_visible_rect().size
 	if at.x + size.x > view.x - 8.0:
 		at.x = maxf(8.0, pointer.x - 18.0 - size.x)
 	at.y = clampf(at.y, 8.0, maxf(8.0, view.y - 8.0 - size.y))
