@@ -36,12 +36,17 @@ bool plane_clear(const Body &body, const Octree &octree, const Plane &plane, con
 Aabb clip_box(const Aabb &box, const Plane &plane);
 
 // The volume (mm^3) of material behind `plane` (all of it without one), from the ADF: solid
-// leaves, and the voxels of brick leaves whose centres (by their bricks) are inside.
-double volume(const Adf &adf, const Plane *plane = nullptr);
+// leaves, and the voxels of brick leaves whose centres (by their bricks) are inside. With
+// `centroid`, also where its centre of volume lies.
+double volume(const Adf &adf, const Plane *plane = nullptr, vec3 *centroid = nullptr);
 
 // Points on the surface behind `plane` (all of it without one) for a convex physics hull:
 // where the ADF's bricks cross zero along their sample edges, reduced to at most `count`
-// extreme points (the furthest along evenly spread directions).
-std::vector<vec3> hull_points(const Adf &adf, const Plane *plane = nullptr, int count = 256);
+// extreme points (the furthest along evenly spread directions), then to the outermost of
+// any lying within `merge` (mm) of each other. Extremes of a sampled surface come in tight
+// clusters round its corners and along its edges; left in, they make sliver faces that
+// physics engines rest badly on (a hull of them rocks and sinks where one of its corners
+// does not).
+std::vector<vec3> hull_points(const Adf &adf, const Plane *plane = nullptr, int count = 256, float merge = 1.0f);
 
 } // namespace sdf

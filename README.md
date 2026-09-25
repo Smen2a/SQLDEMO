@@ -185,6 +185,58 @@ The "sanded" demo (`sdf_render sanded`, `load_demo("sanded")`): a sharp walnut b
 with a chisel groove, sanded by two sponge strokes, one layer each. It is part of the
 GPU/CPU parity set.
 
+### Pieces: sawn through, the board comes apart
+
+Saw right through the board and the strip you cut off comes away. It is a body of its own,
+resting on the bench, and still editable. Undo straight after puts the pieces back together.
+Fracture and failing joints will split bodies the same way later
+([docs/PLAN.md](docs/PLAN.md), "Pieces"); only what cuts them will differ.
+- **Detecting it.** A saw stroke that has gone through reports its kerf's middle plane
+  (`Stroke::separation`). After its commit, the worker checks the plane with
+  `plane_clear` (`native/src/core/pieces/`). This is an adaptive quadtree over the plane
+  within the body's bounds. A square is proven free of material when the field at its
+  centre exceeds the Lipschitz bound times its half-diagonal; otherwise it splits, down to
+  0.05 mm. If no material crosses the plane, the two sides cannot be joined: any path
+  between them crosses it. On the board the check takes about 13 ms. Then `SdfBody` emits
+  `separated(point, normal)`.
+- **Splitting without waiting.** `SdfBody.split(point, normal)` returns a new body for the
+  part in front of the plane and keeps the part behind it.
+  - Each piece appends an `Op::Intersect` with its half-space, as an undo step. Until
+    that lands, the shader's overlay draws the half-space: the same mechanism that
+    previews strokes (W2a) cuts the other side away.
+  - Both pieces draw the same textures until either uploads anew; the next upload
+    creates new ones.
+  - Nothing waits on a rebuild.
+- **Physics.**
+  - Each piece's mass (from the ADF's volume and the wood's density) and its centre of
+    mass are computed before its rebuild starts.
+  - Its rigid body sits at its centre of mass, because Godot's automatic one follows shape
+    origins.
+  - Its collider is a box when the piece fills at least 90% of its bounds, as a sawn
+    strip does, and a convex hull otherwise. The hull's points are brick zero crossings,
+    reduced to the extremes along 256 directions, then to the outermost of any within
+    1 mm. Left as tight clusters round corners and edges, they made sliver faces the
+    offcut rocked and sank on.
+  - The offcut gets a 0.25 m/s nudge off the kerf; the kept board gets a static hull.
+- **Millimetre tolerances.** Godot's physics engines are tuned for metre-sized objects:
+  Jolt, the default, lets contacts overlap by 2 cm. `project.godot` sets the overlap to
+  0.2 mm (`[physics]`), so a 25 mm offcut rests on the bench instead of sinking into it.
+- **Measured** (`game/tests/offcut_physics`, 1 s after the saw goes through; Jolt's figures
+  match its 0.2 mm slop). `tools/compare_physics.sh` repeats it under Box3D, Erin Catto's
+  new engine, through the experimental
+  [godot-box3d](https://github.com/bearlikelion/godot-box3d) extension (built from source,
+  never committed):
+
+  | | Jolt (default, tuned), box | Jolt, hull | Box3D, box | Box3D, hull |
+  | --- | --- | --- | --- | --- |
+  | sinks into the bench at rest | 0.20 mm | 0.20 mm | 0.09 mm | 0.16 mm (4.2 at worst) |
+  | tilts | 0° | 0.5° | 0° | 0.7° |
+  | slides off the kerf | 5.7 mm | 5.4 mm | 0.9 mm | 2.2 mm |
+  | per physics step | 0.25 ms | 0.30 ms | 0.24 ms | 0.27 ms |
+
+  Both handle it. Box3D's friction combines differently, hence the shorter slide. It is
+  still alpha, as is its Godot extension, so the default stays Jolt.
+
 ## Layout
 
 | Path | What it is |
@@ -196,13 +248,14 @@ GPU/CPU parity set.
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
 | `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
+| `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), and each piece's bounds, volume, centre of mass and hull points. |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live, and the GPU brick sampler. |
 | `native/tests/` | Property tests for the core and golden-image tests. No Godot needed. |
 | `game/` | The Godot 4.7 project. `game/workshop/` is the workshop (the main scene); `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
 | `extern/godot-cpp/` | godot-cpp 10.0.0 (submodule), built against the Godot 4.7 API. |
-| `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner, OpenGL or Vulkan), `test_godot.sh`, `parity.sh`. |
+| `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner, OpenGL or Vulkan), `test_godot.sh`, `parity.sh`, `compare_physics.sh` (Jolt vs Box3D on a sawn offcut). |
 | `docs/PLAN.md` | The plan: principles, what is done, and the roadmap from here. The first plan is archived in `docs/archive/plan-v1.md`. |
 
 ![Every blend mode applied to the same union (a boss rising from a block) and subtract (a chiselled channel)](docs/images/blend_gallery.png)

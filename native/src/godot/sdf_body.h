@@ -5,6 +5,7 @@
 #include "edit/session.h"
 #include "eval/reference_renderer.h"
 #include "godot/gpu_sampler.h"
+#include "pieces/pieces.h"
 #include "tools/tools.h"
 
 #include <godot_cpp/classes/image_texture.hpp>
@@ -18,6 +19,7 @@
 #include <deque>
 #include <future>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace sdf::godot_bind {
@@ -104,6 +106,28 @@ public:
 	// the renderer has a RenderingDevice (Forward+, Mobile); the CPU samples them otherwise.
 	void set_gpu_bricks(bool enabled);
 	bool get_gpu_bricks() const { return gpu_bricks_; }
+	// Pieces. When a stroke cuts clean through the body (a saw through a board), the body
+	// checks whether it now lies in two parts and, if so, emits separated(point, normal)
+	// with the cut's middle plane (world space). split() then makes the part in front of
+	// the plane (+normal) a body of its own and keeps the part behind: at once, as both
+	// draw the same textures with the other side cut away by the shader, while each body
+	// takes its half-space into its edit list on its worker (an undo step, previewed until
+	// it lands). Both stay editable.
+	SdfBody *split(const godot::Vector3 &point, const godot::Vector3 &normal);
+	// Undoes a split's half-space here (the other piece is the caller's to free), leaving
+	// nothing to redo.
+	void rejoin();
+	// The volume (mm^3) in front of a world-space plane, from the ADF.
+	double volume_in_front(const godot::Vector3 &point, const godot::Vector3 &normal);
+	// Points on this body's surface (body space, mm) for a convex physics hull: at most
+	// 256 extremes, on this piece's side of its last split.
+	godot::PackedVector3Array get_hull_points();
+	// The body's mass (kg), from its volume and its base material's density, and its centre
+	// of mass (body space, mm).
+	double get_mass();
+	godot::Vector3 get_centre_of_mass();
+	double get_volume(); // mm^3
+
 	// For tests: the ADF against one built afresh on the CPU for the same body, at up to
 	// `points` random points within 0.2 mm of the surface where both hold bricks: {sampler,
 	// compared, max_difference, max_difference_exact (from the exact field), ...}.
@@ -134,11 +158,12 @@ protected:
 private:
 	// An edit-session command, queued on the main thread and applied on a worker.
 	struct Command {
-		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO, REFINE } kind;
+		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO, REFINE, DROP } kind;
 		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
 		std::vector<Edit> edits; // then append these
 		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
 		std::shared_ptr<tools::Stroke> stroke = nullptr; // WORK: a deferred stroke's recorded motion to work
+		std::optional<Plane> separation = std::nullopt;  // COMMIT: a plane the stroke cut clean through
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
@@ -178,6 +203,23 @@ private:
 	bool refine_when_idle_ = true;
 	bool gpu_bricks_ = true;
 	std::shared_ptr<GpuSampler> gpu_; // while the session samples on it
+	std::optional<Plane> job_separated_; // the batch found the body in two parts across this plane
+	double separation_ms_ = 0;
+	// This piece's side of each split it came out of (undone by rejoin()), and its bounds
+	// before each.
+	std::vector<Plane> clips_;
+	std::vector<sdf::Aabb> unclipped_bounds_;
+	// get_hull_points() and get_mass(), once computed (dropped when an edit lands): split()
+	// computes them before its batches start, so that nothing reads the session meanwhile.
+	std::vector<vec3> hull_;
+	double mass_ = -1.0; // kg
+	double volume_ = 0.0; // mm^3, with mass_
+	vec3 centre_{0.0f};  // of mass, with mass_
+	void clip(const Plane &plane);
+	void set_proxy();
+	// Textures shared with another piece since a split: the next upload makes new ones.
+	bool shared_textures_ = false;
+	void unshare_textures();
 	double job_gpu_ms_ = 0;
 	std::size_t job_gpu_jobs_ = 0, gpu_jobs_total_ = 0;
 	void collect_gpu_stats(); // the GPU sampler's work since the last call (shared by bodies)

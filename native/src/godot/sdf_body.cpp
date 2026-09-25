@@ -327,10 +327,7 @@ void SdfBody::add_random_strokes(int count, int seed) {
 
 void SdfBody::rebuild() {
 	bounds_ = session_.body().bounds();
-	// The proxy only needs to cover the body; the octree's root cube is usually larger.
-	const Ref<ArrayMesh> proxy = proxy_box(bounds_.expanded(0.5f));
-	set_mesh(proxy);
-	shadow_caster_->set_mesh(proxy);
+	set_proxy();
 	upload_all();
 	update_material();
 	refresh_stats();
@@ -448,6 +445,7 @@ void SdfBody::end_stroke() {
 	if (!stroke_) {
 		return;
 	}
+	const std::optional<sdf::Plane> through = stroke_->separation();
 	if (previewing_) {
 		// The whole stroke, merged, in one batch; it stays in the overlay until that lands.
 		std::vector<Edit> edits = stroke_->edits();
@@ -460,6 +458,7 @@ void SdfBody::end_stroke() {
 			std::vector<Command> commands;
 			commands.push_back({Command::STROKE, 0, std::move(edits)});
 			commands.push_back({Command::COMMIT, 0, {}, true});
+			commands.back().separation = through;
 			queue_all(std::move(commands));
 		}
 		update_overlay();
@@ -474,6 +473,7 @@ void SdfBody::end_stroke() {
 		commands.push_back({Command::STROKE, 0, std::move(finish)});
 	}
 	commands.push_back({Command::COMMIT, 0, {}});
+	commands.back().separation = through;
 	queue_all(std::move(commands));
 	stroke_.reset();
 }
@@ -552,6 +552,7 @@ void SdfBody::start_job() {
 	job_materials_.clear();
 	job_previews_ = 0;
 	job_refines_ = true;
+	job_separated_.reset();
 	for (const Command &c : batch) {
 		job_previews_ += c.previewed;
 		job_refines_ = job_refines_ && c.kind == Command::REFINE;
@@ -572,6 +573,18 @@ void SdfBody::start_job() {
 				}
 				case Command::COMMIT:
 					session_.commit();
+					if (c.separation) {
+						// Cut clean through: are the parts on either side still joined anywhere?
+						const auto t0 = std::chrono::steady_clock::now();
+						const Body &body = session_.body();
+						if (plane_clear(body, session_.octree(), *c.separation, body.bounds())) {
+							job_separated_ = c.separation;
+						}
+						separation_ms_ = ms_since(t0);
+					}
+					break;
+				case Command::DROP:
+					session_.drop_last_step();
 					break;
 				case Command::CANCEL:
 					session_.cancel();
@@ -615,8 +628,163 @@ void SdfBody::finish_job() {
 		return;
 	}
 	last_update_ms_ = job_ms_;
+	hull_.clear(); // the body changed
+	mass_ = -1.0;
 	refresh_stats();
 	emit_signal("edited", stats_);
+	if (job_separated_) {
+		const sdf::Plane plane = *job_separated_;
+		job_separated_.reset();
+		const Transform3D xf = get_global_transform();
+		emit_signal("separated", xf.xform(to_godot(plane.point)), xf.basis.xform(to_godot(plane.normal)).normalized());
+	}
+}
+
+// --- pieces ------------------------------------------------------------------------------
+
+void SdfBody::set_proxy() {
+	// The proxy only needs to cover the body; the octree's root cube is usually larger.
+	const Ref<ArrayMesh> proxy = proxy_box(bounds_.expanded(0.5f));
+	set_mesh(proxy);
+	shadow_caster_->set_mesh(proxy);
+}
+
+void SdfBody::unshare_textures() {
+	if (!shared_textures_) {
+		return;
+	}
+	// Another piece still draws these: this body's next upload goes into new ones.
+	for (Ref<ImageTexture> *tex :
+			{&nodes_tex_, &tape_tex_, &edits_tex_, &materials_tex_, &adf_nodes_tex_, &adf_cells_tex_, &adf_grid_tex_}) {
+		tex->unref();
+	}
+	bricks_tex_.unref();
+	brick_materials_tex_.unref();
+	shared_textures_ = false;
+}
+
+void SdfBody::clip(const sdf::Plane &plane) {
+	clips_.push_back(plane);
+	unclipped_bounds_.push_back(bounds_);
+	bounds_ = clip_box(bounds_, plane);
+	set_proxy();
+	// The half-space edit, drawn by the overlay until the batch taking it in lands.
+	const Edit keep = plane.keep_behind();
+	committing_.push_back({keep});
+	std::vector<Command> commands;
+	commands.push_back({Command::STROKE, 0, {keep}});
+	commands.push_back({Command::COMMIT, 0, {}, true});
+	queue_all(std::move(commands));
+	update_overlay();
+}
+
+SdfBody *SdfBody::split(const Vector3 &point, const Vector3 &normal) {
+	flush();
+	if (stroke_ || !session_.has_adf()) {
+		UtilityFunctions::push_error("SdfBody.split: needs an ADF body with no tool engaged");
+		return nullptr;
+	}
+	const sdf::Plane behind{to_body(point), gl::normalize(to_body_direction(normal))};
+	const sdf::Plane front = behind.flipped();
+	SdfBody *piece = memnew(SdfBody);
+	piece->session_ = session_;
+	piece->materials_ = materials_;
+	piece->demo_camera_ = demo_camera_;
+	piece->debug_view_ = debug_view_;
+	piece->live_source_ = live_source_;
+	piece->exact_cells_ = exact_cells_;
+	piece->stroke_preview_ = stroke_preview_;
+	piece->refine_when_idle_ = refine_when_idle_;
+	piece->gpu_bricks_ = gpu_bricks_;
+	piece->gpu_ = gpu_;
+	piece->bounds_ = bounds_;
+	piece->clips_ = clips_;
+	piece->unclipped_bounds_ = unclipped_bounds_;
+	piece->nodes_tex_ = nodes_tex_;
+	piece->tape_tex_ = tape_tex_;
+	piece->edits_tex_ = edits_tex_;
+	piece->materials_tex_ = materials_tex_;
+	piece->adf_nodes_tex_ = adf_nodes_tex_;
+	piece->adf_cells_tex_ = adf_cells_tex_;
+	piece->adf_grid_tex_ = adf_grid_tex_;
+	piece->bricks_tex_ = bricks_tex_;
+	piece->brick_materials_tex_ = brick_materials_tex_;
+	piece->shared_textures_ = shared_textures_ = true;
+	piece->update_shaders();
+	piece->set_live_shadows(live_shadows_);
+	piece->set_transform(get_transform());
+	// Each side's physics hull and mass, from the ADF as it stands (whole), and everything
+	// else that reads the session, before the batches taking in the half-spaces start.
+	const Adf &adf = session_.adf();
+	const double density = double(materials_[session_.body().base_material].density) * 1e-6; // kg per mm^3
+	hull_ = hull_points(adf, &behind);
+	volume_ = volume(adf, &behind, &centre_);
+	mass_ = volume_ * density;
+	piece->hull_ = hull_points(adf, &front);
+	piece->volume_ = volume(adf, &front, &piece->centre_);
+	piece->mass_ = piece->volume_ * density;
+	update_material();
+	piece->update_material();
+	refresh_stats();
+	piece->refresh_stats();
+	clip(behind);
+	piece->clip(front);
+	return piece;
+}
+
+void SdfBody::rejoin() {
+	flush();
+	if (clips_.empty()) {
+		return;
+	}
+	clips_.pop_back();
+	bounds_ = unclipped_bounds_.back();
+	unclipped_bounds_.pop_back();
+	set_proxy();
+	hull_.clear();
+	mass_ = -1.0;
+	queue({Command::DROP, 0, {}});
+}
+
+double SdfBody::volume_in_front(const Vector3 &point, const Vector3 &normal) {
+	flush();
+	if (!session_.has_adf()) {
+		return 0.0;
+	}
+	const sdf::Plane front = sdf::Plane{to_body(point), gl::normalize(to_body_direction(normal))}.flipped();
+	return volume(session_.adf(), &front);
+}
+
+PackedVector3Array SdfBody::get_hull_points() {
+	if (hull_.empty() && session_.has_adf()) {
+		flush();
+		hull_ = hull_points(session_.adf(), clips_.empty() ? nullptr : &clips_.back());
+	}
+	PackedVector3Array out;
+	for (const vec3 &p : hull_) {
+		out.push_back(to_godot(p));
+	}
+	return out;
+}
+
+double SdfBody::get_mass() {
+	if (mass_ < 0.0 && session_.has_adf()) {
+		flush();
+		// mm^3 x g/cm^3 = 1e-3 g = 1e-6 kg.
+		volume_ = volume(session_.adf(), clips_.empty() ? nullptr : &clips_.back(), &centre_);
+		mass_ = volume_ * double(materials_[session_.body().base_material].density) * 1e-6;
+	}
+	return std::max(mass_, 0.0);
+}
+
+double SdfBody::get_volume() {
+	get_mass();
+	return volume_;
+}
+
+Vector3 SdfBody::get_centre_of_mass() {
+	get_mass();
+	return to_godot(centre_);
 }
 
 void SdfBody::update_overlay() {
@@ -635,8 +803,9 @@ void SdfBody::update_overlay() {
 	overlay_box_ = Aabb();
 	overlay_lipschitz_ = 1.0f;
 	for (const Edit &e : edits) {
-		// The body would refuse what it does not accept, and the shader only cuts.
-		if (overlay_count_ == kOverlayMax || !Body::accepts(e) || e.op != Op::Subtract) {
+		// The body would refuse what it does not accept, and the shader only cuts (a piece's
+		// half-space too: an intersection).
+		if (overlay_count_ == kOverlayMax || !Body::accepts(e) || (e.op != Op::Subtract && e.op != Op::Intersect)) {
 			continue;
 		}
 		const Aabb box = e.bounds().expanded(kOverlayMargin);
@@ -763,6 +932,7 @@ void SdfBody::upload_all() {
 
 void SdfBody::upload_adf(bool full, const std::vector<std::uint32_t> &bricks,
 		const std::vector<std::uint32_t> &materials) {
+	unshare_textures();
 	if (!session_.has_adf()) {
 		return;
 	}
@@ -792,6 +962,7 @@ void SdfBody::upload_adf(bool full, const std::vector<std::uint32_t> &bricks,
 // 16384-row limit caps each table at 16.7M texels. Large bodies will need integer storage
 // buffers through RenderingDevice (milestone E8).
 void SdfBody::upload_textures() {
+	unshare_textures();
 	const Body &body = session_.body();
 	const Octree &octree = session_.octree();
 	// The ADF source reads only its exact cells' tapes; the octree's are for EXACT.
@@ -927,6 +1098,8 @@ void SdfBody::refresh_stats() {
 	d["update_ms"] = last_update_ms_;
 	d["refine_ms"] = refine_ms_; // the last refinement of coarse cells, in the background
 	d["refine_pending"] = session_.needs_refine();
+	d["separation_ms"] = separation_ms_; // the last check whether a cut left two parts
+	d["pieces_split"] = int64_t(clips_.size());
 	d["sampler"] = gpu_ ? "gpu" : "cpu"; // where ADF bricks are sampled
 	d["gpu_ms"] = job_gpu_ms_;           // the last batch's time on the GPU sampler (with transfers)
 	d["gpu_bricks"] = int64_t(job_gpu_jobs_);
@@ -961,6 +1134,13 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("flush"), &SdfBody::flush);
 	ClassDB::bind_method(D_METHOD("set_stroke_preview", "enabled"), &SdfBody::set_stroke_preview);
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
+	ClassDB::bind_method(D_METHOD("split", "point", "normal"), &SdfBody::split);
+	ClassDB::bind_method(D_METHOD("rejoin"), &SdfBody::rejoin);
+	ClassDB::bind_method(D_METHOD("volume_in_front", "point", "normal"), &SdfBody::volume_in_front);
+	ClassDB::bind_method(D_METHOD("get_hull_points"), &SdfBody::get_hull_points);
+	ClassDB::bind_method(D_METHOD("get_mass"), &SdfBody::get_mass);
+	ClassDB::bind_method(D_METHOD("get_centre_of_mass"), &SdfBody::get_centre_of_mass);
+	ClassDB::bind_method(D_METHOD("get_volume"), &SdfBody::get_volume);
 	ClassDB::bind_method(D_METHOD("set_gpu_bricks", "enabled"), &SdfBody::set_gpu_bricks);
 	ClassDB::bind_method(D_METHOD("get_gpu_bricks"), &SdfBody::get_gpu_bricks);
 	ClassDB::bind_method(D_METHOD("compare_bricks_with_cpu", "points"), &SdfBody::compare_bricks_with_cpu);
@@ -986,6 +1166,7 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "refine_when_idle"), "set_refine_when_idle", "get_refine_when_idle");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gpu_bricks"), "set_gpu_bricks", "get_gpu_bricks");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));
+	ADD_SIGNAL(MethodInfo("separated", PropertyInfo(Variant::VECTOR3, "point"), PropertyInfo(Variant::VECTOR3, "normal")));
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);
 	BIND_ENUM_CONSTANT(SHADED);

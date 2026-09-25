@@ -114,17 +114,24 @@ Aabb clip_box(const Aabb &box, const Plane &plane) {
 	return out;
 }
 
-double volume(const Adf &adf, const Plane *plane) {
+double volume(const Adf &adf, const Plane *plane, vec3 *centroid) {
 	const std::vector<Adf::Node> &nodes = adf.nodes();
 	const std::vector<std::uint16_t> &values = adf.brick_values();
-	double total = 0.0;
+	double total = 0.0, moment[3] = {0.0, 0.0, 0.0};
+	auto add = [&](vec3 centre, double v) {
+		total += v;
+		moment[0] += v * centre.x;
+		moment[1] += v * centre.y;
+		moment[2] += v * centre.z;
+	};
 	for (const Adf::Node &n : nodes) {
 		if (n.child >= 0) {
 			continue;
 		}
+		const vec3 middle = n.lo + vec3(n.size * 0.5f);
 		if (n.brick == Adf::kSolid) {
 			if (!plane) {
-				total += double(n.size) * n.size * n.size;
+				add(middle, double(n.size) * n.size * n.size);
 				continue;
 			}
 			float lo = std::numeric_limits<float>::max(), hi = -lo;
@@ -134,20 +141,21 @@ double volume(const Adf &adf, const Plane *plane) {
 				hi = std::max(hi, d);
 			}
 			if (hi <= 0.0f) {
-				total += double(n.size) * n.size * n.size;
+				add(middle, double(n.size) * n.size * n.size);
 			} else if (lo < 0.0f) {
 				// Straddling the plane: count sub-cubes by their centres.
 				constexpr int kSub = 16;
 				const float s = n.size / float(kSub);
-				int inside = 0;
 				for (int z = 0; z < kSub; ++z) {
 					for (int y = 0; y < kSub; ++y) {
 						for (int x = 0; x < kSub; ++x) {
-							inside += plane->distance(n.lo + (vec3(float(x), float(y), float(z)) + 0.5f) * s) < 0.0f;
+							const vec3 c = n.lo + (vec3(float(x), float(y), float(z)) + 0.5f) * s;
+							if (plane->distance(c) < 0.0f) {
+								add(c, double(s) * s * s);
+							}
 						}
 					}
 				}
-				total += double(inside) * s * s * s;
 			}
 			continue;
 		}
@@ -156,7 +164,7 @@ double volume(const Adf &adf, const Plane *plane) {
 		}
 		const std::uint16_t *brick = values.data() + std::size_t(n.brick) * Adf::kBrickSamples;
 		const float voxel = n.size / float(kCells);
-		int inside = 0;
+		const double cube = double(voxel) * voxel * voxel;
 		for (int z = 0; z < kCells; ++z) {
 			for (int y = 0; y < kCells; ++y) {
 				for (int x = 0; x < kCells; ++x) {
@@ -164,19 +172,21 @@ double volume(const Adf &adf, const Plane *plane) {
 					for (int c = 0; c < 8; ++c) {
 						sum += half_to_float(brick[index(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))]);
 					}
-					if (sum < 0.0f &&
-							(!plane || plane->distance(n.lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel) < 0.0f)) {
-						++inside;
+					const vec3 c = n.lo + (vec3(float(x), float(y), float(z)) + 0.5f) * voxel;
+					if (sum < 0.0f && (!plane || plane->distance(c) < 0.0f)) {
+						add(c, cube);
 					}
 				}
 			}
 		}
-		total += double(inside) * voxel * voxel * voxel;
+	}
+	if (centroid && total > 0.0) {
+		*centroid = vec3(float(moment[0] / total), float(moment[1] / total), float(moment[2] / total));
 	}
 	return total;
 }
 
-std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count) {
+std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count, float merge) {
 	// Zero crossings along the bricks' sample edges.
 	std::vector<vec3> points;
 	const std::vector<std::uint16_t> &values = adf.brick_values();
@@ -232,10 +242,22 @@ std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count) {
 	});
 	std::sort(best.begin(), best.end());
 	best.erase(std::unique(best.begin(), best.end()), best.end());
+	// Outermost first (from the extremes' centroid), dropping any within `merge` of a kept one.
+	vec3 centre(0.0f);
+	for (int i : best) {
+		centre = centre + points[std::size_t(i)];
+	}
+	centre = centre / float(best.size());
+	std::sort(best.begin(), best.end(), [&](int a, int b) {
+		return gl::length(points[std::size_t(a)] - centre) > gl::length(points[std::size_t(b)] - centre);
+	});
 	std::vector<vec3> out;
 	out.reserve(best.size());
 	for (int i : best) {
-		out.push_back(points[std::size_t(i)]);
+		const vec3 &p = points[std::size_t(i)];
+		if (std::none_of(out.begin(), out.end(), [&](const vec3 &q) { return gl::length(p - q) < merge; })) {
+			out.push_back(p);
+		}
 	}
 	return out;
 }

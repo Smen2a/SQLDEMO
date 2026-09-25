@@ -102,10 +102,13 @@ TEST(piece_volumes_and_hull_points_from_the_adf) {
 	adf.build(body, octree);
 	const double full = volume(adf);
 	const Plane plane{{5, 0, 0}, {1, 0, 0}};
-	const double behind = volume(adf, &plane);
-	std::printf("    box volume %.0f mm^3 (24000), behind x = 5: %.0f (15000)\n", full, behind);
+	vec3 centre(0.0f);
+	const double behind = volume(adf, &plane, &centre);
+	std::printf("    box volume %.0f mm^3 (24000), behind x = 5: %.0f (15000), centred at x = %.2f (-7.5)\n", full,
+			behind, double(centre.x));
 	CHECK(std::fabs(full - 24000.0) < 0.02 * 24000.0);
 	CHECK(std::fabs(behind - 15000.0) < 0.02 * 15000.0);
+	CHECK(std::fabs(centre.x + 7.5f) < 0.2f && std::fabs(centre.y) < 0.2f && std::fabs(centre.z) < 0.2f);
 
 	const std::vector<vec3> points = hull_points(adf, &plane, 256);
 	CHECK(!points.empty() && points.size() <= 256);

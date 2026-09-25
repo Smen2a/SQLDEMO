@@ -10,6 +10,10 @@ extends Node3D
 ## Q / E turn the tool, Esc drops the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and
 ## redo. Right-drag orbits the camera, middle-drag pans, the wheel zooms.
 ##
+## A saw cut that goes right through leaves the board in two pieces: the smaller one comes
+## away as a rigid body and slides off the kerf, the larger stays on the bench as the
+## board. Undo straight after puts them back together.
+##
 ## The world is in metres with y up. Bodies are in millimetres with z up: each body node is
 ## scaled by 0.001 and turned -90 degrees about x.
 
@@ -51,6 +55,14 @@ var _engaged := false
 var _plane := Plane()
 var _engage_pose := Transform3D()
 var _engage_time := 0.0
+## Pieces sawn off, oldest first: {"body": RigidBody3D, "piece": SdfBody, "steps": the
+## board's step count once its half-space landed, "spawn": where the body started}.
+var offcuts: Array[Dictionary] = []
+## An offcut's collider: "box" (its bounds), "hull" (convex, from its surface) or "auto"
+## (a box when the piece fills nearly all its bounds, as sawn strips do: a box rests and
+## slides more steadily than a hull of many points).
+var offcut_collider := "auto"
+var _board_collider: StaticBody3D # the board's hull, while offcuts lie about
 
 
 func _ready() -> void:
@@ -58,6 +70,7 @@ func _ready() -> void:
 	board = _new_body()
 	board.load_demo(wood)
 	board.edited.connect(func(_stats): _ui.refresh())
+	board.separated.connect(_on_separated, CONNECT_DEFERRED)
 	for tool in TOOL_NAMES:
 		var body = _new_body()
 		body.load_tool(tool, settings[tool])
@@ -174,6 +187,16 @@ func cancel() -> void:
 
 func undo() -> void:
 	cancel()
+	board.flush()
+	if not offcuts.is_empty() and board.get_stats().get("steps", 0) == offcuts.back().steps:
+		# Straight after a split: the pieces go back together.
+		var last: Dictionary = offcuts.pop_back()
+		last.body.queue_free()
+		board.rejoin()
+		board.flush()
+		_update_board_collider()
+		_ui.refresh()
+		return
 	board.undo()
 
 
@@ -184,9 +207,84 @@ func redo() -> void:
 
 func set_wood(choice: String) -> void:
 	cancel()
+	for offcut in offcuts:
+		offcut.body.queue_free()
+	offcuts.clear()
+	_update_board_collider()
 	wood = choice
 	board.load_demo(wood)
 	_ui.refresh()
+
+
+## The board came apart across a plane (world space): the smaller side becomes an offcut,
+## a rigid body with a convex hull, nudged away from the kerf.
+func _on_separated(point: Vector3, normal: Vector3) -> void:
+	if board.volume_in_front(point, normal) > board.volume_in_front(point, -normal):
+		normal = -normal
+	var piece = board.split(point, normal)
+	if piece == null:
+		return
+	# The rigid body sits at the piece's centre of mass (Godot's own follows shape origins).
+	var body := RigidBody3D.new()
+	add_child(body)
+	var centre: Vector3 = board.global_transform * piece.get_centre_of_mass()
+	body.global_transform = Transform3D(Basis.IDENTITY, centre)
+	piece.transform = Transform3D(board.global_basis, board.global_position - centre)
+	body.add_child(piece)
+	body.add_child(_collider_for(piece))
+	body.mass = maxf(piece.get_mass(), 0.005)
+	# Sanded wood on a bench top. Below the width-to-height ratio of a sawn strip, so it
+	# slides off the kerf rather than toppling over.
+	var surface := PhysicsMaterial.new()
+	surface.friction = 0.5
+	body.physics_material_override = surface
+	# As the last saw stroke would: a nudge off the kerf (about 6 mm of slide).
+	body.linear_velocity = normal * 0.25
+	board.flush()
+	offcuts.append({"body": body, "piece": piece, "steps": board.get_stats().get("steps", 0),
+			"spawn": body.global_transform})
+	_update_board_collider()
+	_ui.refresh()
+
+
+## A collider for a piece (a child of its rigid body, placed by piece.transform).
+func _collider_for(piece) -> CollisionShape3D:
+	var collider := CollisionShape3D.new()
+	var bounds: AABB = piece.get_body_bounds()
+	var fill: float = piece.get_volume() / maxf(bounds.size.x * bounds.size.y * bounds.size.z, 1e-6)
+	if offcut_collider == "box" or (offcut_collider == "auto" and fill >= 0.9):
+		var box := BoxShape3D.new()
+		box.size = (piece.transform.basis * bounds.size).abs()
+		collider.shape = box
+		collider.position = piece.transform * bounds.get_center()
+	else:
+		var hull := ConvexPolygonShape3D.new()
+		var points := PackedVector3Array()
+		for p in piece.get_hull_points():
+			points.push_back(piece.transform * p)
+		hull.points = points
+		collider.shape = hull
+	return collider
+
+
+## While offcuts lie about, the board has a (convex) collider too, so they rest against it
+## rather than in it.
+func _update_board_collider() -> void:
+	if _board_collider:
+		_board_collider.queue_free()
+		_board_collider = null
+	if offcuts.is_empty():
+		return
+	_board_collider = StaticBody3D.new()
+	add_child(_board_collider)
+	var hull := ConvexPolygonShape3D.new()
+	var points := PackedVector3Array()
+	for p in board.get_hull_points():
+		points.push_back(board.transform * p)
+	hull.points = points
+	var collider := CollisionShape3D.new()
+	collider.shape = hull
+	_board_collider.add_child(collider)
 
 
 func reset_board() -> void:
@@ -393,6 +491,15 @@ func _build_world() -> void:
 	top.material_override = oak
 	top.position = Vector3(0.0, -0.025, 0.0)
 	add_child(top)
+	# Offcuts land on the bench and the floor.
+	var bench := StaticBody3D.new()
+	var bench_shape := CollisionShape3D.new()
+	var bench_box := BoxShape3D.new()
+	bench_box.size = slab.size
+	bench_shape.shape = bench_box
+	bench_shape.position = top.position
+	bench.add_child(bench_shape)
+	add_child(bench)
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:
 			var leg := MeshInstance3D.new()
@@ -411,3 +518,9 @@ func _build_world() -> void:
 	ground.material_override = grey
 	ground.position = Vector3(0.0, -0.85, 0.0)
 	add_child(ground)
+	var floor_body := StaticBody3D.new()
+	var floor_shape := CollisionShape3D.new()
+	floor_shape.shape = WorldBoundaryShape3D.new()
+	floor_shape.position = ground.position
+	floor_body.add_child(floor_shape)
+	add_child(floor_body)

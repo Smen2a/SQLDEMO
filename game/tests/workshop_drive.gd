@@ -2,7 +2,8 @@ extends "res://tests/harness.gd"
 
 ## Uses the workshop as a person would, through its own pointer methods: pares with the
 ## chisel, saws a kerf, sands a patch with the block, rounds an arris over with the sponge,
-## then undoes the sponge's work. Prints what each did and, when rendering, saves
+## then undoes the sponge's work; then saws a strip right off the board, watches it come
+## away, and undoes that to put it back. Prints what each did and, when rendering, saves
 ## out/workshop_<tool>.png after each (--out=<dir>).
 
 const Workshop := preload("res://workshop/workshop.tscn")
@@ -74,6 +75,40 @@ func _ready() -> void:
 	if chisel_edits != 3 or saw_edits != 1 or sand_edits != 1 or sponge_edits != 1 or \
 			after_undo != chisel_edits + saw_edits + sand_edits:
 		push_error("workshop drive: a tool made no cut or not its merged one, or undo did not take the sponge's work back")
+
+	# Saw through: a kerf along the board 20 mm in from its front edge, right through. The
+	# strip comes away as a rigid body and slides off the kerf; undo puts it back.
+	var steps_before: int = workshop.board.get_stats().steps
+	workshop.set_setting("saw", "feed", 0.1)
+	var through: Array[Vector3] = []
+	for i in 12:
+		through.append(_on_top(-0.03 if i % 2 == 0 else 0.03, 0.03))
+	await _stroke("saw", _on_top(0.0, 0.03), through, 2)
+	for i in 30: # the split follows the commit that found the parts apart
+		if not workshop.offcuts.is_empty():
+			break
+		await _frames(1)
+	if workshop.offcuts.is_empty():
+		push_error("workshop drive: the saw went through but the board did not come apart")
+	else:
+		var offcut: RigidBody3D = workshop.offcuts.back().body
+		var start: Vector3 = workshop.offcuts.back().spawn.origin # (frames may span several physics steps)
+		for i in 60: # a second of physics, however slowly frames render
+			await get_tree().physics_frame
+		var moved := offcut.global_position.distance_to(start) * 1000.0
+		workshop.select_tool("")
+		await _frames(4)
+		await _shot(out, "sawn_through")
+		var mass := offcut.mass
+		workshop.undo()
+		await _frames(2)
+		var steps_after: int = workshop.board.get_stats().steps
+		print("workshop drive: sawn through in %.1f ms of checking; the offcut (%.0f g) moved %.1f mm in 1 s; after undo %d piece(s), %d steps (from %d)" % [
+				workshop.board.get_stats().get("separation_ms", 0.0), mass * 1000.0, moved, workshop.offcuts.size() + 1,
+				steps_after, steps_before])
+		# The kerf stays, one step; the split's half-space is gone with the offcut.
+		if moved < 2.0 or not workshop.offcuts.is_empty() or steps_after != steps_before + 1:
+			push_error("workshop drive: the offcut did not come away, or undo did not rejoin it")
 	get_tree().quit()
 
 

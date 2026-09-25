@@ -12,7 +12,8 @@ This revision merges those into shared capabilities and keeps finished work to o
 - The first plan's lasting design sections and its detailed E4 (bake) design are archived
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
-- **Pieces** comes next.
+- **Pieces** is under way: P1 (saw through) is done, and P2 (islands left by any cut) is
+  next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -58,6 +59,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W2a | Strokes drawn by the shader while the tool moves (no CPU), applied once on release, merged |
 | W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
+| P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms); `SdfBody.split` makes two editable bodies at once (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -79,7 +81,7 @@ path needs compute passes.
 | 7 | **Forging**: hot metal deformed by blows | E7 | sampled base grid |
 | 8 | **Scale**: 2 m stone, 100k edits | E8, O3 | everything |
 
-## 1. Pieces — bodies that come apart (next)
+## 1. Pieces — bodies that come apart (current: P1 done, P2 next)
 
 **Why one capability.** Sawing through, a failing joint and a fracture all end with one
 body becoming several that move on their own. Build it once:
@@ -89,7 +91,18 @@ body becoming several that move on their own. Build it once:
 
 Fracture (6) and assembly failure (5) later only supply the cutter.
 
-### P1 — planar separation (saw through)
+### P1 — planar separation (saw through): done
+As built, it differs from the design below in these ways:
+- **Clipping.** There is no separate `sdf_clip` uniform. Each piece's half-space is an
+  `Op::Intersect` edit that the stroke overlay draws until it lands.
+- **Colliders.** Pieces that fill at least 90% of their bounds get a box. Hulls are
+  reduced to the outermost of points within 1 mm: tight clusters made sliver faces that
+  rocked and sank.
+- **Tolerances.** `project.godot` sets 0.2 mm tolerances.
+- **Engines.** `tools/compare_physics.sh` compares Jolt with Box3D.
+
+The details are in the README ("Pieces").
+
 - **Core** (`native/src/core/pieces/pieces.{h,cpp}`, new):
   - `bool plane_clear(body, octree, Plane, Aabb)`: an adaptive quadtree over the plane
     within the body's bounds.
