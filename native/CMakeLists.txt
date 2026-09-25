@@ -34,6 +34,7 @@ add_library(sdf_core STATIC
 	src/core/eval/image.cpp
 	src/core/eval/query.cpp
 	src/core/eval/reference_renderer.cpp
+	src/core/pieces/parts.cpp
 	src/core/pieces/pieces.cpp
 	src/core/tools/catalog.cpp
 	src/core/tools/cutting.cpp
@@ -78,6 +79,7 @@ if(ZLIB_FOUND)
 		tests/test_adf.cpp
 		tests/test_tools.cpp
 		tests/test_session.cpp
+		tests/test_parts.cpp
 		tests/test_pieces.cpp
 		tests/test_smoothing.cpp
 		tests/test_cutting.cpp
