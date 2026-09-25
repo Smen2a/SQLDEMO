@@ -134,10 +134,10 @@ public:
 	// Where the tool's model is now: its frame, as the models are built.
 	virtual Frame pose() const = 0;
 
-	// A plane the stroke has cut clean through the work, if it has (the middle of a saw's
-	// kerf once the saw is through): the body may now lie in two pieces, one each side
-	// (see pieces/pieces.h: plane_clear).
-	virtual std::optional<Plane> separation() const { return std::nullopt; }
+	// Where the stroke has cut clean through the work, if it has (the middle of a saw's
+	// kerf, and its width, once the saw is through): the body may now lie in two pieces,
+	// one each side (see pieces/pieces.h: plane_clear).
+	virtual std::optional<Separation> separation() const { return std::nullopt; }
 
 	virtual bool deferred() const { return false; }
 	// The motion recorded since the last call, as an update for the edit session holding

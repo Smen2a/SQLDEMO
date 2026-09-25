@@ -221,11 +221,11 @@ func set_wood(choice: String) -> void:
 	_ui.refresh()
 
 
-## The board came apart across a plane (world space): the smaller side becomes an offcut,
-## a rigid body with a convex hull, nudged away from the kerf.
+## The board came apart across a plane (world space), turned so that the smaller side is in
+## front: that side becomes an offcut, a rigid body with a convex hull, nudged away from the
+## kerf. The board measured both sides on its worker, so this reads nothing from it that
+## waits: the half-spaces land on the pieces' workers over the next frames.
 func _on_separated(point: Vector3, normal: Vector3) -> void:
-	if board.volume_in_front(point, normal) > board.volume_in_front(point, -normal):
-		normal = -normal
 	var piece = board.split(point, normal)
 	if piece == null:
 		return
@@ -245,8 +245,8 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 	body.physics_material_override = surface
 	# As the last saw stroke would: a nudge off the kerf (about 6 mm of slide).
 	body.linear_velocity = normal * 0.25
-	board.flush()
-	offcuts.append({"body": body, "piece": piece, "steps": board.get_stats().get("steps", 0),
+	# The board's step count once its half-space lands (undo then rejoins the pieces).
+	offcuts.append({"body": body, "piece": piece, "steps": board.get_stats().get("steps", 0) + 1,
 			"spawn": body.global_transform})
 	_update_board_collider()
 	_ui.refresh()

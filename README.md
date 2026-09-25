@@ -197,19 +197,30 @@ Fracture and failing joints will split bodies the same way later
   within the body's bounds. A square is proven free of material when the field at its
   centre exceeds the Lipschitz bound times its half-diagonal; otherwise it splits, down to
   0.05 mm. If no material crosses the plane, the two sides cannot be joined: any path
-  between them crosses it. On the board the check takes about 13 ms. Then `SdfBody` emits
+  between them crosses it. On the board the check takes about 13 ms.
+- **Measuring it.** The same worker then measures both sides from the ADF
+  (`measure_sides`): volume, centre of volume and hull points, in about 30 ms more. It
+  turns the plane so that the smaller side is in front, and `SdfBody` emits
   `separated(point, normal)`.
 - **Splitting without waiting.** `SdfBody.split(point, normal)` returns a new body for the
-  part in front of the plane and keeps the part behind it.
-  - Each piece appends an `Op::Intersect` with its half-space, as an undo step. Until
-    that lands, the shader's overlay draws the half-space: the same mechanism that
+  part in front of the plane and keeps the part behind it. It takes the worker's
+  measurements and reads nothing else from the body, so it costs about 3 ms of the frame.
+  It used to measure there and then wait for the pieces' rebuilds, which stalled the frame
+  for about half a second.
+  - Each piece appends an `Op::Intersect` with its half-space, as an undo step. The plane
+    sits 5 µm into the kerf from the piece's own face, not in the kerf's middle. A plane
+    in the middle would leave a kink in the field just outside each face (where the
+    other face used to be), and the ADF would refine it along the whole face.
+  - Until the half-space lands, the shader's overlay draws it: the same mechanism that
     previews strokes (W2a) cuts the other side away.
-  - Both pieces draw the same textures until either uploads anew; the next upload
-    creates new ones.
+  - Both pieces draw the same textures until one of them uploads. That piece makes new
+    textures, the one full upload a split costs; the other then updates its own in place.
+    Brick textures are made a quarter larger than needed, so a brick pool that grows while
+    refining seldom sends them whole again.
   - Nothing waits on a rebuild.
 - **Physics.**
-  - Each piece's mass (from the ADF's volume and the wood's density) and its centre of
-    mass are computed before its rebuild starts.
+  - Each piece's mass (from its volume and the wood's density) and its centre of mass
+    come from the worker's measurements.
   - Its rigid body sits at its centre of mass, because Godot's automatic one follows shape
     origins.
   - Its collider is a box when the piece fills at least 90% of its bounds, as a sawn

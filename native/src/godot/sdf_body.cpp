@@ -326,6 +326,12 @@ void SdfBody::add_random_strokes(int count, int seed) {
 }
 
 void SdfBody::rebuild() {
+	// A new body: no pieces of the last one.
+	clips_.clear();
+	unclipped_bounds_.clear();
+	sides_.reset();
+	hull_.clear();
+	mass_ = -1.0;
 	bounds_ = session_.body().bounds();
 	set_proxy();
 	upload_all();
@@ -445,7 +451,7 @@ void SdfBody::end_stroke() {
 	if (!stroke_) {
 		return;
 	}
-	const std::optional<sdf::Plane> through = stroke_->separation();
+	const std::optional<sdf::Separation> through = stroke_->separation();
 	if (previewing_) {
 		// The whole stroke, merged, in one batch; it stays in the overlay until that lands.
 		std::vector<Edit> edits = stroke_->edits();
@@ -510,6 +516,9 @@ void SdfBody::redo() {
 }
 
 void SdfBody::queue(Command c) {
+	if (c.kind != Command::REFINE) {
+		sides_.reset(); // the body is about to change (refining changes no surface)
+	}
 	queue_.push_back(std::move(c));
 	if (!job_.valid()) {
 		start_job();
@@ -517,6 +526,7 @@ void SdfBody::queue(Command c) {
 }
 
 void SdfBody::queue_all(std::vector<Command> commands) {
+	sides_.reset();
 	for (Command &c : commands) {
 		queue_.push_back(std::move(c));
 	}
@@ -536,6 +546,7 @@ void SdfBody::start_job() {
 		}
 		if (c.kind == Command::STROKE && !batch.empty() && batch.back().kind == Command::STROKE) {
 			Command &a = batch.back();
+			a.clip = a.clip && c.clip;
 			if (c.drop <= a.edits.size()) {
 				a.edits.resize(a.edits.size() - c.drop);
 			} else {
@@ -552,10 +563,12 @@ void SdfBody::start_job() {
 	job_materials_.clear();
 	job_previews_ = 0;
 	job_refines_ = true;
+	job_clips_ = true;
 	job_separated_.reset();
 	for (const Command &c : batch) {
 		job_previews_ += c.previewed;
 		job_refines_ = job_refines_ && c.kind == Command::REFINE;
+		job_clips_ = job_clips_ && c.clip;
 	}
 	job_ = std::async(std::launch::async, [this, batch = std::move(batch)]() {
 		const auto start = std::chrono::steady_clock::now();
@@ -575,10 +588,11 @@ void SdfBody::start_job() {
 					session_.commit();
 					if (c.separation) {
 						// Cut clean through: are the parts on either side still joined anywhere?
+						// If not, measure both here, so that split() has nothing to read.
 						const auto t0 = std::chrono::steady_clock::now();
 						const Body &body = session_.body();
-						if (plane_clear(body, session_.octree(), *c.separation, body.bounds())) {
-							job_separated_ = c.separation;
+						if (plane_clear(body, session_.octree(), c.separation->plane, body.bounds())) {
+							job_separated_ = measure_sides(session_.adf(), *c.separation, true);
 						}
 						separation_ms_ = ms_since(t0);
 					}
@@ -628,13 +642,17 @@ void SdfBody::finish_job() {
 		return;
 	}
 	last_update_ms_ = job_ms_;
-	hull_.clear(); // the body changed
-	mass_ = -1.0;
+	if (!job_clips_) { // the body changed (a split's half-space leaves what split() measured)
+		hull_.clear();
+		mass_ = -1.0;
+	}
 	refresh_stats();
 	emit_signal("edited", stats_);
 	if (job_separated_) {
-		const sdf::Plane plane = *job_separated_;
+		sides_ = std::move(job_separated_);
 		job_separated_.reset();
+		hold_refine_ = true;
+		const sdf::Plane plane = sides_->cut.plane;
 		const Transform3D xf = get_global_transform();
 		emit_signal("separated", xf.xform(to_godot(plane.point)), xf.basis.xform(to_godot(plane.normal)).normalized());
 	}
@@ -650,7 +668,7 @@ void SdfBody::set_proxy() {
 }
 
 void SdfBody::unshare_textures() {
-	if (!shared_textures_) {
+	if (textures_.use_count() == 1) {
 		return;
 	}
 	// Another piece still draws these: this body's next upload goes into new ones.
@@ -660,7 +678,7 @@ void SdfBody::unshare_textures() {
 	}
 	bricks_tex_.unref();
 	brick_materials_tex_.unref();
-	shared_textures_ = false;
+	textures_ = std::make_shared<char>();
 }
 
 void SdfBody::clip(const sdf::Plane &plane) {
@@ -674,18 +692,41 @@ void SdfBody::clip(const sdf::Plane &plane) {
 	std::vector<Command> commands;
 	commands.push_back({Command::STROKE, 0, {keep}});
 	commands.push_back({Command::COMMIT, 0, {}, true});
+	for (Command &c : commands) {
+		c.clip = true;
+	}
 	queue_all(std::move(commands));
 	update_overlay();
 }
 
 SdfBody *SdfBody::split(const Vector3 &point, const Vector3 &normal) {
-	flush();
+	const auto start = std::chrono::steady_clock::now();
 	if (stroke_ || !session_.has_adf()) {
 		UtilityFunctions::push_error("SdfBody.split: needs an ADF body with no tool engaged");
 		return nullptr;
 	}
-	const sdf::Plane behind{to_body(point), gl::normalize(to_body_direction(normal))};
-	const sdf::Plane front = behind.flipped();
+	const sdf::Plane plane{to_body(point), gl::normalize(to_body_direction(normal))};
+	// What the worker measured, if this is the plane separated() reported (either way round).
+	std::optional<PieceSides> sides = std::move(sides_);
+	sides_.reset();
+	if (sides) {
+		const float turn = gl::dot(sides->cut.plane.normal, plane.normal);
+		if (std::fabs(sides->cut.plane.distance(plane.point)) > 1e-3f || std::fabs(std::fabs(turn) - 1.0f) > 1e-4f) {
+			sides.reset();
+		} else if (turn < 0.0f) {
+			sides->cut = sides->cut.flipped();
+			std::swap(sides->volume[0], sides->volume[1]);
+			std::swap(sides->centre[0], sides->centre[1]);
+			std::swap(sides->hull[0], sides->hull[1]);
+		}
+	}
+	// The new piece copies the session, so nothing may be changing it (at most a refine
+	// runs here, if split() comes a frame or more after the signal).
+	flush();
+	if (!sides) {
+		sides = measure_sides(session_.adf(), Separation{plane, 0.0f}, false);
+	}
+	const Separation cut = sides->cut;
 	SdfBody *piece = memnew(SdfBody);
 	piece->session_ = session_;
 	piece->materials_ = materials_;
@@ -709,26 +750,29 @@ SdfBody *SdfBody::split(const Vector3 &point, const Vector3 &normal) {
 	piece->adf_grid_tex_ = adf_grid_tex_;
 	piece->bricks_tex_ = bricks_tex_;
 	piece->brick_materials_tex_ = brick_materials_tex_;
-	piece->shared_textures_ = shared_textures_ = true;
+	piece->textures_ = textures_;
 	piece->update_shaders();
 	piece->set_live_shadows(live_shadows_);
 	piece->set_transform(get_transform());
-	// Each side's physics hull and mass, from the ADF as it stands (whole), and everything
-	// else that reads the session, before the batches taking in the half-spaces start.
-	const Adf &adf = session_.adf();
+	// Each side's physics hull and mass, and everything else that reads the session, before
+	// the batches taking in the half-spaces start.
 	const double density = double(materials_[session_.body().base_material].density) * 1e-6; // kg per mm^3
-	hull_ = hull_points(adf, &behind);
-	volume_ = volume(adf, &behind, &centre_);
+	hull_ = std::move(sides->hull[0]);
+	volume_ = sides->volume[0];
+	centre_ = sides->centre[0];
 	mass_ = volume_ * density;
-	piece->hull_ = hull_points(adf, &front);
-	piece->volume_ = volume(adf, &front, &piece->centre_);
+	piece->hull_ = std::move(sides->hull[1]);
+	piece->volume_ = sides->volume[1];
+	piece->centre_ = sides->centre[1];
 	piece->mass_ = piece->volume_ * density;
 	update_material();
 	piece->update_material();
 	refresh_stats();
 	piece->refresh_stats();
-	clip(behind);
-	piece->clip(front);
+	clip(cut.behind());
+	piece->clip(cut.front());
+	split_ms_ = ms_since(start);
+	stats_["split_ms"] = split_ms_;
 	return piece;
 }
 
@@ -744,15 +788,6 @@ void SdfBody::rejoin() {
 	hull_.clear();
 	mass_ = -1.0;
 	queue({Command::DROP, 0, {}});
-}
-
-double SdfBody::volume_in_front(const Vector3 &point, const Vector3 &normal) {
-	flush();
-	if (!session_.has_adf()) {
-		return 0.0;
-	}
-	const sdf::Plane front = sdf::Plane{to_body(point), gl::normalize(to_body_direction(normal))}.flipped();
-	return volume(session_.adf(), &front);
 }
 
 PackedVector3Array SdfBody::get_hull_points() {
@@ -857,9 +892,10 @@ void SdfBody::_process(double) {
 	if (!job_.valid() && !queue_.empty()) {
 		start_job();
 	}
-	if (!job_.valid() && queue_.empty() && !stroke_ && refine_when_idle_ && session_.needs_refine()) {
+	if (!job_.valid() && queue_.empty() && !stroke_ && refine_when_idle_ && !hold_refine_ && session_.needs_refine()) {
 		queue({Command::REFINE, 0, {}});
 	}
+	hold_refine_ = false;
 }
 
 // --- uploads -----------------------------------------------------------------------------
@@ -896,12 +932,14 @@ Ref<godot::Image> brick_layer(const std::uint8_t *data, std::size_t slots, int l
 	return godot::Image::create_from_data(kLayerSize, kLayerSize, false, format, bytes);
 }
 
-// Brings a layered texture up to date: all layers when its layer count changes (or on
-// request), otherwise only those holding `dirty` slots.
+// Brings a layered texture up to date: all layers on request or when the slots outgrow it
+// (made a quarter larger than needed then, so that a growing brick pool seldom sends it
+// whole again), otherwise only those holding `dirty` slots.
 void upload_layers(Ref<Texture2DArray> &tex, const std::uint8_t *data, std::size_t slots, int texel_bytes,
 		godot::Image::Format format, bool full, const std::vector<std::uint32_t> &dirty) {
-	const int layers = std::max<int>(1, int((slots + kBricksPerLayer - 1) / kBricksPerLayer));
-	if (full || tex.is_null() || tex->get_layers() != layers) {
+	const int needed = std::max<int>(1, int((slots + kBricksPerLayer - 1) / kBricksPerLayer));
+	if (full || tex.is_null() || tex->get_layers() < needed) {
+		const int layers = needed + needed / 4 + 1;
 		TypedArray<Ref<godot::Image>> images;
 		for (int l = 0; l < layers; ++l) {
 			images.push_back(brick_layer(data, slots, l, texel_bytes, format));
@@ -1098,7 +1136,8 @@ void SdfBody::refresh_stats() {
 	d["update_ms"] = last_update_ms_;
 	d["refine_ms"] = refine_ms_; // the last refinement of coarse cells, in the background
 	d["refine_pending"] = session_.needs_refine();
-	d["separation_ms"] = separation_ms_; // the last check whether a cut left two parts
+	d["separation_ms"] = separation_ms_; // the worker's last check whether a cut left two parts (and measuring them)
+	d["split_ms"] = split_ms_;           // the last split(), on the main thread
 	d["pieces_split"] = int64_t(clips_.size());
 	d["sampler"] = gpu_ ? "gpu" : "cpu"; // where ADF bricks are sampled
 	d["gpu_ms"] = job_gpu_ms_;           // the last batch's time on the GPU sampler (with transfers)
@@ -1136,7 +1175,6 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
 	ClassDB::bind_method(D_METHOD("split", "point", "normal"), &SdfBody::split);
 	ClassDB::bind_method(D_METHOD("rejoin"), &SdfBody::rejoin);
-	ClassDB::bind_method(D_METHOD("volume_in_front", "point", "normal"), &SdfBody::volume_in_front);
 	ClassDB::bind_method(D_METHOD("get_hull_points"), &SdfBody::get_hull_points);
 	ClassDB::bind_method(D_METHOD("get_mass"), &SdfBody::get_mass);
 	ClassDB::bind_method(D_METHOD("get_centre_of_mass"), &SdfBody::get_centre_of_mass);

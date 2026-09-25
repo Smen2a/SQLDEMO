@@ -59,11 +59,12 @@ TEST(saw_strokes_report_their_plane_once_through) {
 			CHECK(!saw->separation()); // 20 mm of travel: 10 mm deep
 		}
 	}
-	const std::optional<Plane> plane = saw->separation();
-	CHECK(plane.has_value());
-	if (plane) {
-		CHECK(std::fabs(plane->distance({30, 17, -3})) < 1e-5f);
-		CHECK(std::fabs(std::fabs(plane->normal.x) - 1.0f) < 1e-5f);
+	const std::optional<Separation> cut = saw->separation();
+	CHECK(cut.has_value());
+	if (cut) {
+		CHECK(std::fabs(cut->plane.distance({30, 17, -3})) < 1e-5f);
+		CHECK(std::fabs(std::fabs(cut->plane.normal.x) - 1.0f) < 1e-5f);
+		CHECK(cut->gap == tools::Saw{}.kerf);
 	}
 }
 
@@ -89,6 +90,41 @@ TEST(pieces_keep_the_body_on_their_side) {
 		++compared;
 	}
 	CHECK(compared > 1000);
+}
+
+// The worker measures both sides as soon as a cut leaves two parts, turning the cut so the
+// smaller side is in front (it comes away). Each piece keeps the half-space behind its own
+// face: just outside that face the field is the plain distance to it, with no kink where
+// the other face would have been (which the ADF would refine along the whole face).
+TEST(measured_sides_put_the_smaller_piece_in_front) {
+	const Body body = sawn_board(26.0f);
+	Octree octree;
+	octree.build(body);
+	Adf adf;
+	adf.build(body, octree);
+	const Separation cut{kerf_plane(), tools::Saw{}.kerf}; // its front is the longer side (x < 30)
+	const PieceSides sides = measure_sides(adf, cut, true);
+	std::printf("    sides: %.0f mm^3 behind, %.0f in front (the offcut); hulls of %zu and %zu points\n",
+			sides.volume[0], sides.volume[1], sides.hull[0].size(), sides.hull[1].size());
+	CHECK(sides.cut.plane.normal.x > 0.5f); // turned: the front is now x > 30
+	CHECK(std::fabs(sides.volume[1] - 49.6 * 100.0 * 25.0) < 0.02 * 49.6 * 100.0 * 25.0);
+	CHECK(std::fabs(sides.volume[0] - 109.6 * 100.0 * 25.0) < 0.02 * 109.6 * 100.0 * 25.0);
+	CHECK(sides.centre[1].x > 30.0f && sides.centre[0].x < 30.0f);
+	for (const vec3 &p : sides.hull[1]) {
+		CHECK(p.x > 30.3f);
+	}
+	Body offcut = body;
+	CHECK(offcut.add(sides.cut.front().keep_behind()));
+	float worst = 0.0f;
+	for (float y = -45.0f; y <= 45.0f; y += 9.7f) {
+		for (float z = -11.0f; z <= 11.0f; z += 4.3f) {
+			for (float d = 0.05f; d < 0.75f; d += 0.1f) { // in the kerf, outside the offcut's face at x = 30.4
+				worst = std::max(worst, std::fabs(offcut.distance({30.4f - d, y, z}) - d));
+			}
+		}
+	}
+	std::printf("    outside the offcut's face the field strays %.4f mm from the distance to it\n", double(worst));
+	CHECK(worst < 0.006f);
 }
 
 // Volumes and hull points from the ADF: a box's volume within 2%, on either side of a plane,

@@ -107,18 +107,19 @@ public:
 	void set_gpu_bricks(bool enabled);
 	bool get_gpu_bricks() const { return gpu_bricks_; }
 	// Pieces. When a stroke cuts clean through the body (a saw through a board), the body
-	// checks whether it now lies in two parts and, if so, emits separated(point, normal)
-	// with the cut's middle plane (world space). split() then makes the part in front of
-	// the plane (+normal) a body of its own and keeps the part behind: at once, as both
-	// draw the same textures with the other side cut away by the shader, while each body
-	// takes its half-space into its edit list on its worker (an undo step, previewed until
-	// it lands). Both stay editable.
+	// checks on its worker whether it now lies in two parts and, if so, measures both (their
+	// volumes, centres of mass and hull points) and emits separated(point, normal) with the
+	// cut's middle plane (world space), turned so that the smaller part lies in front.
+	// split() then makes the part in front of the plane (+normal) a body of its own and
+	// keeps the part behind: at once, as both draw the same textures with the other side cut
+	// away by the shader, while each body takes its half-space into its edit list on its
+	// worker (an undo step, previewed until it lands). Both stay editable. Given the plane
+	// separated() reported (either way round), split() takes the worker's measures and
+	// reads nothing else from the body; given any other, it measures there and then.
 	SdfBody *split(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// Undoes a split's half-space here (the other piece is the caller's to free), leaving
 	// nothing to redo.
 	void rejoin();
-	// The volume (mm^3) in front of a world-space plane, from the ADF.
-	double volume_in_front(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// Points on this body's surface (body space, mm) for a convex physics hull: at most
 	// 256 extremes, on this piece's side of its last split.
 	godot::PackedVector3Array get_hull_points();
@@ -163,7 +164,8 @@ private:
 		std::vector<Edit> edits; // then append these
 		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
 		std::shared_ptr<tools::Stroke> stroke = nullptr; // WORK: a deferred stroke's recorded motion to work
-		std::optional<Plane> separation = std::nullopt;  // COMMIT: a plane the stroke cut clean through
+		std::optional<Separation> separation = std::nullopt; // COMMIT: where the stroke cut clean through
+		bool clip = false; // a split's half-space (which leaves the piece's measures standing)
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
@@ -203,27 +205,35 @@ private:
 	bool refine_when_idle_ = true;
 	bool gpu_bricks_ = true;
 	std::shared_ptr<GpuSampler> gpu_; // while the session samples on it
-	std::optional<Plane> job_separated_; // the batch found the body in two parts across this plane
-	double separation_ms_ = 0;
+	std::optional<PieceSides> job_separated_; // the batch found the body in two parts, measured
+	double separation_ms_ = 0, split_ms_ = 0;
+	// The parts separated() last reported, for split(), until the body changes. Refining
+	// waits a frame after the signal, so that split() (deferred to the frame's end) finds
+	// the worker idle and the session free to copy.
+	std::optional<PieceSides> sides_;
+	bool hold_refine_ = false;
 	// This piece's side of each split it came out of (undone by rejoin()), and its bounds
 	// before each.
 	std::vector<Plane> clips_;
 	std::vector<sdf::Aabb> unclipped_bounds_;
-	// get_hull_points() and get_mass(), once computed (dropped when an edit lands): split()
-	// computes them before its batches start, so that nothing reads the session meanwhile.
+	// get_hull_points() and get_mass(), once computed (dropped when an edit other than a
+	// split's half-space lands): split() sets them, so that nothing reads the session while
+	// its batches run.
 	std::vector<vec3> hull_;
 	double mass_ = -1.0; // kg
 	double volume_ = 0.0; // mm^3, with mass_
 	vec3 centre_{0.0f};  // of mass, with mass_
 	void clip(const Plane &plane);
 	void set_proxy();
-	// Textures shared with another piece since a split: the next upload makes new ones.
-	bool shared_textures_ = false;
+	// Held by every piece drawing this body's textures (they share them after a split, until
+	// one uploads): the first of them to upload makes new ones, leaving the rest in place.
+	std::shared_ptr<char> textures_ = std::make_shared<char>();
 	void unshare_textures();
 	double job_gpu_ms_ = 0;
 	std::size_t job_gpu_jobs_ = 0, gpu_jobs_total_ = 0;
 	void collect_gpu_stats(); // the GPU sampler's work since the last call (shared by bodies)
 	bool job_refines_ = false;              // the running batch only refines (the body is unchanged)
+	bool job_clips_ = false;                // the running batch only takes in split half-spaces
 	std::vector<Command> queue_;            // not yet applied
 	std::future<void> job_;                 // the batch being applied, if any
 	std::vector<std::uint32_t> job_bricks_, job_materials_; // slots the batch rewrote

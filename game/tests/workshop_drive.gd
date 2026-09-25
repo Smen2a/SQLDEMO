@@ -103,12 +103,17 @@ func _ready() -> void:
 		workshop.undo()
 		await _frames(2)
 		var steps_after: int = workshop.board.get_stats().steps
-		print("workshop drive: sawn through in %.1f ms of checking; the offcut (%.0f g) moved %.1f mm in 1 s; after undo %d piece(s), %d steps (from %d)" % [
-				workshop.board.get_stats().get("separation_ms", 0.0), mass * 1000.0, moved, workshop.offcuts.size() + 1,
-				steps_after, steps_before])
+		var split_ms: float = workshop.board.get_stats().get("split_ms", 0.0)
+		print("workshop drive: sawn through in %.1f ms of checking and measuring (worker), split in %.1f ms (main thread); the offcut (%.0f g) moved %.1f mm in 1 s; after undo %d piece(s), %d steps (from %d)" % [
+				workshop.board.get_stats().get("separation_ms", 0.0), split_ms, mass * 1000.0, moved,
+				workshop.offcuts.size() + 1, steps_after, steps_before])
 		# The kerf stays, one step; the split's half-space is gone with the offcut.
 		if moved < 2.0 or not workshop.offcuts.is_empty() or steps_after != steps_before + 1:
 			push_error("workshop drive: the offcut did not come away, or undo did not rejoin it")
+		# The split takes what the worker measured: it reads nothing from the body, and waits
+		# on nothing (it once stalled the frame for half a second).
+		if split_ms > 50.0:
+			push_error("workshop drive: the split held up the main thread for %.0f ms" % split_ms)
 	get_tree().quit()
 
 

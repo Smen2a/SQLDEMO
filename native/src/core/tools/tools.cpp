@@ -357,11 +357,11 @@ public:
 	}
 
 	// Through the work: the kerf's middle plane, which holds the saw's line and the normal.
-	std::optional<Plane> separation() const override {
+	std::optional<Separation> separation() const override {
 		if (max_depth_ >= 1e8f || cut_ < max_depth_ - 1e-3f) {
 			return std::nullopt;
 		}
-		return Plane{frame_.origin, frame_.y};
+		return Separation{Plane{frame_.origin, frame_.y}, saw_.kerf};
 	}
 
 private:

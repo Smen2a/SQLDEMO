@@ -59,7 +59,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W2a | Strokes drawn by the shader while the tool moves (no CPU), applied once on release, merged |
 | W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
-| P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms); `SdfBody.split` makes two editable bodies at once (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
+| P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -100,6 +100,14 @@ As built, it differs from the design below in these ways:
   rocked and sank.
 - **Tolerances.** `project.godot` sets 0.2 mm tolerances.
 - **Engines.** `tools/compare_physics.sh` compares Jolt with Box3D.
+- **Measured on the worker.** The worker measures both sides (volumes, centres, hull
+  points) right after the separation check, and turns the plane so that the smaller side
+  is in front. `split()` takes those measurements and waits on nothing: about 3 ms of the
+  frame, down from a half-second stall.
+- **Half-spaces at the faces.** Each half-space sits 5 µm into the kerf from its piece's
+  own face, not in the kerf's middle, so the ADF has no kink in the air to refine.
+- **One upload.** Only the first piece to upload makes new textures; the other keeps the
+  shared ones and updates them in place.
 
 The details are in the README ("Pieces").
 
