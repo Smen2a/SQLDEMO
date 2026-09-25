@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace sdf {
@@ -101,19 +102,20 @@ struct Joiner {
 
 // Calls visit(a, b, axis) for every pair of leaves sharing a face, a below b along the axis
 // (the octree face procedure), among the nodes overlapping `region` (all without one).
-template <typename Visit>
+// Nodes: an octree's, with lo, size and child (the first of 8, or -1).
+template <typename Node, typename Visit>
 struct FacePairs {
-	const std::vector<Adf::Node> &nodes;
+	const std::vector<Node> &nodes;
 	const Aabb *region;
 	Visit &visit;
 
 	bool in(int n) const {
-		const Adf::Node &c = nodes[std::size_t(n)];
+		const Node &c = nodes[std::size_t(n)];
 		return !region || overlaps(*region, c.lo, c.size);
 	}
 
 	void cell(int n) {
-		const Adf::Node &c = nodes[std::size_t(n)];
+		const Node &c = nodes[std::size_t(n)];
 		if (c.child < 0 || !in(n)) {
 			return;
 		}
@@ -134,7 +136,7 @@ struct FacePairs {
 		if (!in(a) || !in(b)) {
 			return;
 		}
-		const Adf::Node &na = nodes[std::size_t(a)], &nb = nodes[std::size_t(b)];
+		const Node &na = nodes[std::size_t(a)], &nb = nodes[std::size_t(b)];
 		if (na.child < 0 && nb.child < 0) {
 			visit(a, b, axis);
 			return;
@@ -333,7 +335,7 @@ Parts find_parts(const Body &body, const Octree &octree, const Adf &adf, const A
 			pairs.push_back({a, b, axis});
 		}
 	};
-	FacePairs<decltype(collect)>{nodes, region, collect}.cell(0);
+	FacePairs<Adf::Node, decltype(collect)>{nodes, region, collect}.cell(0);
 	// Sample (u, w) of a leaf's face (lower side 0, upper 1) across `axis`.
 	auto face_sample = [](int axis, int side, int u, int w) {
 		int c[3];
@@ -533,6 +535,325 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 		}
 	}
 	return out;
+}
+
+CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts, int island, float margin,
+		float finest) {
+	const auto start = std::chrono::steady_clock::now();
+	CutOut out;
+	if (island < 0 || std::size_t(island) >= parts.parts.size() || adf.nodes().empty()) {
+		out.failed = "no island";
+		return out;
+	}
+	const std::vector<Adf::Node> &adf_nodes = adf.nodes();
+	const std::vector<std::uint16_t> &values = adf.brick_values();
+	const Aabb bounds = parts.parts[std::size_t(island)].bounds.expanded(margin);
+	const float root_size = std::max(bounds.size().x, std::max(bounds.size().y, bounds.size().z));
+	const vec3 root_lo = bounds.centre() - vec3(root_size * 0.5f);
+	const Aabb root{root_lo, root_lo + vec3(root_size)};
+	constexpr unsigned kIsland = 1, kRest = 2;
+
+	// Whose material each ADF node holds, over the root: bit 1 the island's, bit 2 anything
+	// else's (inside samples of other parts, or of none: those lie outside what was looked at).
+	std::vector<std::uint8_t> mask(adf_nodes.size(), 0);
+	std::vector<std::int32_t> order{0};
+	for (std::size_t k = 0; k < order.size(); ++k) {
+		const Adf::Node &n = adf_nodes[std::size_t(order[k])];
+		if (n.child >= 0) {
+			for (int c = 0; c < 8; ++c) {
+				const Adf::Node &ch = adf_nodes[std::size_t(n.child + c)];
+				if (overlaps(root, ch.lo, ch.size)) {
+					order.push_back(n.child + c);
+				}
+			}
+		}
+	}
+	for (std::size_t k = order.size(); k-- > 0;) {
+		const int i = order[k];
+		const Adf::Node &n = adf_nodes[std::size_t(i)];
+		std::uint8_t m = 0;
+		if (n.child >= 0) {
+			for (int c = 0; c < 8; ++c) {
+				m |= mask[std::size_t(n.child + c)];
+			}
+		} else if (n.brick == Adf::kSolid) {
+			m = parts.of_node(i) == island ? kIsland : kRest;
+		} else if (n.brick >= 0) {
+			const std::uint16_t *brick = values.data() + std::size_t(n.brick) * kS;
+			for (int j = 0; j < kS && m != (kIsland | kRest); ++j) {
+				if (half_to_float(brick[j]) < 0.0f) {
+					m |= parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+				}
+			}
+		}
+		mask[std::size_t(i)] = m;
+	}
+	// Whose material the samples in a box show.
+	auto material = [&](vec3 lo, vec3 hi) {
+		unsigned bits = 0;
+		std::vector<int> stack{0};
+		while (!stack.empty() && bits != (kIsland | kRest)) {
+			const int i = stack.back();
+			stack.pop_back();
+			const Adf::Node &n = adf_nodes[std::size_t(i)];
+			const vec3 nhi = n.lo + vec3(n.size);
+			if (!mask[std::size_t(i)] || nhi.x < lo.x || nhi.y < lo.y || nhi.z < lo.z || n.lo.x > hi.x || n.lo.y > hi.y ||
+					n.lo.z > hi.z) {
+				continue;
+			}
+			if (n.lo.x >= lo.x && n.lo.y >= lo.y && n.lo.z >= lo.z && nhi.x <= hi.x && nhi.y <= hi.y && nhi.z <= hi.z) {
+				bits |= mask[std::size_t(i)];
+				continue;
+			}
+			if (n.child >= 0) {
+				for (int c = 0; c < 8; ++c) {
+					stack.push_back(n.child + c);
+				}
+				continue;
+			}
+			if (n.brick == Adf::kSolid) {
+				bits |= mask[std::size_t(i)];
+				continue;
+			}
+			// The brick's samples inside the box.
+			const float voxel = n.size / float(kCells);
+			int from[3], to[3];
+			for (int a = 0; a < 3; ++a) {
+				from[a] = std::clamp(int(std::ceil((axis_of(lo, a) - axis_of(n.lo, a)) / voxel - 1e-4f)), 0, kCells);
+				to[a] = std::clamp(int(std::floor((axis_of(hi, a) - axis_of(n.lo, a)) / voxel + 1e-4f)), 0, kCells);
+			}
+			const std::uint16_t *brick = values.data() + std::size_t(n.brick) * kS;
+			for (int z = from[2]; z <= to[2]; ++z) {
+				for (int y = from[1]; y <= to[1]; ++y) {
+					for (int x = from[0]; x <= to[0]; ++x) {
+						const int j = index(x, y, z);
+						if (half_to_float(brick[j]) < 0.0f) {
+							bits |= parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+						}
+					}
+				}
+			}
+		}
+		return bits;
+	};
+
+	std::atomic<std::size_t> evaluations{0};
+	// Whose material lies nearest a point (d: the field there): the point itself, if in
+	// material; else just inside the nearest surface, down the field's gradient. There, the
+	// solid leaf's part, or the nearest inside sample's in the brick. 0 if none is found.
+	auto side_at = [&](vec3 p, float d) -> unsigned {
+		if (d > 0.0f) {
+			const float h = 0.01f;
+			const vec3 k0(1, -1, -1), k1(-1, -1, 1), k2(-1, 1, -1), k3(1, 1, 1);
+			vec3 g = k0 * octree.distance(body, p + k0 * h) + k1 * octree.distance(body, p + k1 * h) +
+					k2 * octree.distance(body, p + k2 * h) + k3 * octree.distance(body, p + k3 * h);
+			evaluations += 4;
+			if (gl::length(g) < 1e-12f) {
+				return 0;
+			}
+			p = p - gl::normalize(g) * (d + 0.02f);
+		}
+		// The nearest inside sample (or solid leaf) within a radius, growing.
+		for (const float r : {0.25f, 0.5f, 1.0f, 2.0f}) {
+			const vec3 lo = p - vec3(r), hi = p + vec3(r);
+			float best = std::numeric_limits<float>::max();
+			unsigned side = 0;
+			std::vector<int> stack{0};
+			while (!stack.empty()) {
+				const int i = stack.back();
+				stack.pop_back();
+				const Adf::Node &n = adf_nodes[std::size_t(i)];
+				const vec3 nhi = n.lo + vec3(n.size);
+				if (nhi.x < lo.x || nhi.y < lo.y || nhi.z < lo.z || n.lo.x > hi.x || n.lo.y > hi.y || n.lo.z > hi.z) {
+					continue;
+				}
+				if (n.child >= 0) {
+					for (int c = 0; c < 8; ++c) {
+						stack.push_back(n.child + c);
+					}
+					continue;
+				}
+				if (n.brick == Adf::kSolid) {
+					const vec3 gap = gl::max(gl::max(n.lo - p, p - nhi), 0.0f);
+					const float dist = gl::length(gap);
+					if (dist < best) {
+						best = dist;
+						side = parts.of_node(i) == island ? kIsland : kRest;
+					}
+					continue;
+				}
+				if (n.brick < 0) {
+					continue;
+				}
+				const std::uint16_t *brick = values.data() + std::size_t(n.brick) * kS;
+				const float voxel = n.size / float(kCells);
+				for (int j = 0; j < kS; ++j) {
+					if (half_to_float(brick[j]) >= 0.0f) {
+						continue;
+					}
+					const vec3 q = n.lo + vec3(float(j % kN), float((j / kN) % kN), float(j / (kN * kN))) * voxel;
+					const float dist = gl::length(q - p);
+					if (dist < best) {
+						best = dist;
+						side = parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+					}
+				}
+			}
+			if (side && best <= r) {
+				return side;
+			}
+		}
+		return 0u;
+	};
+
+	// The region's tree, classified a level of new cubes at a time, in parallel.
+	const float lipschitz = std::max(body.lipschitz(), 1.0f);
+	const float clear = 0.5f * Region::kFloor;
+	std::vector<Region::Node> nodes;
+	nodes.push_back({root_lo, root_size, -1, Region::Free, 0});
+	std::atomic<const char *> failed{nullptr};
+	auto classify = [&](int i) {
+		Region::Node &n = nodes[std::size_t(i)];
+		const vec3 centre = n.lo + vec3(n.size * 0.5f);
+		const float reach = lipschitz * n.size * 0.8660254f;
+		const float d = octree.distance(body, centre);
+		++evaluations;
+		if (d - reach >= clear) {
+			n.label = Region::Free; // air, and clear of every surface
+			return;
+		}
+		const unsigned bits = material(n.lo - vec3(1e-4f), n.lo + vec3(n.size + 1e-4f));
+		if (bits == kIsland || bits == kRest) {
+			n.label = bits == kIsland ? Region::Island : Region::Rest;
+			return;
+		}
+		if (bits == 0) {
+			// No samples in it, yet near a surface (or in material thinner than the samples):
+			// the side whose surface is nearest. Where that is wrong, the cube touches a cube
+			// of the other side, and both split.
+			const unsigned side = side_at(centre, d);
+			if (side == kIsland || side == kRest) {
+				n.label = side == kIsland ? Region::Island : Region::Rest;
+				return;
+			}
+		}
+		if (n.size * 0.5f >= finest) {
+			n.child = -2; // to split
+			return;
+		}
+		failed = bits ? "both sides' material in a cube at the finest" : "material the samples do not show";
+	};
+	auto split = [&](int i, std::vector<int> &into) {
+		const int first = int(nodes.size());
+		const Region::Node parent = nodes[std::size_t(i)];
+		nodes[std::size_t(i)].child = first;
+		for (int c = 0; c < 8; ++c) {
+			const vec3 off(float(c & 1), float((c >> 1) & 1), float((c >> 2) & 1));
+			nodes.push_back({parent.lo + off * (parent.size * 0.5f), parent.size * 0.5f, -1, Region::Free, 0});
+			into.push_back(first + c);
+		}
+	};
+	// Classifies `batch`, splitting where both sides' samples share a cube, down to leaves.
+	auto settle = [&](std::vector<int> batch) {
+		while (!batch.empty() && !failed) {
+			parallel_for(batch.size(), [&](std::size_t k) { classify(batch[k]); });
+			std::vector<int> next;
+			for (const int i : batch) {
+				if (nodes[std::size_t(i)].child == -2) {
+					split(i, next);
+				}
+			}
+			batch = std::move(next);
+		}
+		return !failed;
+	};
+	auto finish = [&]() {
+		out.failed = failed;
+		out.evaluations = evaluations;
+		out.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		return out;
+	};
+	if (!settle({0})) {
+		return finish();
+	}
+	// Then wherever an island cube meets a rest cube, or the root's side (beyond which lies
+	// the rest), across a face that is not clear of every surface, split both, until none do.
+	// (Across a clear face the field is the same kept or dropped: max(d, c - d) = d.)
+	struct Face {
+		int a, b; // b: -1 for the root's side
+		int node, axis;
+		bool upper;
+	};
+	auto face_clear = [&](const Face &f) {
+		const Region::Node &n = nodes[std::size_t(f.node)];
+		const float shift = f.upper ? n.size * 0.5f : -n.size * 0.5f;
+		const vec3 centre = n.lo + vec3(n.size * 0.5f) +
+				vec3(f.axis == 0 ? shift : 0.0f, f.axis == 1 ? shift : 0.0f, f.axis == 2 ? shift : 0.0f);
+		++evaluations;
+		return octree.distance(body, centre) - lipschitz * n.size * 0.7071068f >= clear;
+	};
+	const float eps = root_size * 1e-6f;
+	for (;;) {
+		++out.passes;
+		std::vector<Face> faces;
+		auto visit = [&](int a, int b, int axis) {
+			const Region::Label la = nodes[std::size_t(a)].label, lb = nodes[std::size_t(b)].label;
+			if ((la == Region::Island && lb == Region::Rest) || (la == Region::Rest && lb == Region::Island)) {
+				// The face they share is the smaller one's (a lies below b along the axis).
+				const bool a_small = nodes[std::size_t(a)].size <= nodes[std::size_t(b)].size;
+				faces.push_back({a, b, a_small ? a : b, axis, a_small});
+			}
+		};
+		FacePairs<Region::Node, decltype(visit)>{nodes, nullptr, visit}.cell(0);
+		for (std::size_t i = 0; i < nodes.size(); ++i) {
+			const Region::Node &n = nodes[i];
+			if (n.child >= 0 || n.label != Region::Island) {
+				continue;
+			}
+			const float lo[3] = {n.lo.x, n.lo.y, n.lo.z}, rlo[3] = {root.lo.x, root.lo.y, root.lo.z},
+						rhi[3] = {root.hi.x, root.hi.y, root.hi.z};
+			for (int axis = 0; axis < 3; ++axis) {
+				if (lo[axis] <= rlo[axis] + eps) {
+					faces.push_back({int(i), -1, int(i), axis, false});
+				}
+				if (lo[axis] + n.size >= rhi[axis] - eps) {
+					faces.push_back({int(i), -1, int(i), axis, true});
+				}
+			}
+		}
+		std::vector<char> shut(faces.size(), 0);
+		parallel_for(faces.size(), [&](std::size_t k) { shut[k] = !face_clear(faces[k]); });
+		std::vector<char> touching(nodes.size(), 0);
+		for (std::size_t k = 0; k < faces.size(); ++k) {
+			if (shut[k]) {
+				touching[std::size_t(faces[k].a)] = 1;
+				if (faces[k].b >= 0) {
+					touching[std::size_t(faces[k].b)] = 1;
+				}
+			}
+		}
+		std::vector<int> batch;
+		for (std::size_t i = 0; i < touching.size(); ++i) {
+			if (!touching[i]) {
+				continue;
+			}
+			if (nodes[i].size * 0.5f < finest) {
+				failed = "the island's cubes and the rest's touch at the finest";
+				return finish();
+			}
+			split(int(i), batch);
+		}
+		if (batch.empty()) {
+			break;
+		}
+		if (!settle(std::move(batch))) {
+			return finish();
+		}
+	}
+	auto region = std::make_shared<const Region>(std::move(nodes));
+	out.leaves = region->leaves();
+	out.region = std::move(region);
+	return finish();
 }
 
 } // namespace sdf

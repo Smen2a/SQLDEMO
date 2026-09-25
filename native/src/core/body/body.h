@@ -9,6 +9,7 @@
 namespace sdf {
 
 class Layer;
+class Region;
 
 using gl::vec2;
 using gl::vec3;
@@ -48,6 +49,7 @@ enum class Op : int {
 	Tongue = gl::SDF_OP_TONGUE,
 	Paint = gl::SDF_OP_PAINT,
 	Layer = gl::SDF_OP_LAYER, // a sampled smoothing layer (see body/layer.h)
+	Keep = gl::SDF_OP_KEEP,   // one side of a body that came apart kept (see body/region.h)
 };
 
 struct Aabb {
@@ -114,9 +116,21 @@ struct Edit {
 	// Op::Layer: the layer it applies (its primitive is then just the layer's box, for
 	// culling). Shared, and immutable once built.
 	std::shared_ptr<const Layer> layer;
+	// Op::Keep: the region whose `side` (Region::Island or Region::Rest) it keeps (its
+	// primitive is then the region's cube). Shared, and immutable once built.
+	std::shared_ptr<const Region> region;
+	std::uint8_t side = 0;
 
 	// Applies `layer` over the field before it.
 	static Edit smoothing(std::shared_ptr<const Layer> layer);
+	// Keeps `side` of `region` (Region::Island: the island alone; Region::Rest: all but it).
+	static Edit keep(std::shared_ptr<const Region> region, std::uint8_t side);
+	// Whether it holds sampled data only the CPU evaluates (a layer, a region): the GPU
+	// takes it for the identity, so tapes holding one are never evaluated there.
+	bool sampled() const { return op == Op::Layer || op == Op::Keep; }
+	// The box beyond which it provably changes nothing (unbounded for an intersection, and
+	// for keeping an island, which drops everything beyond the region).
+	Aabb cull_box() const;
 
 	// Distance beyond the primitive's bounds within which this edit can change the field.
 	float influence() const;

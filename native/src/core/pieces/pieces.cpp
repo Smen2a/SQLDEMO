@@ -4,6 +4,7 @@
 #include "util/parallel.h"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <limits>
 
@@ -233,24 +234,32 @@ double volume(const Adf &adf, const Plane *plane, vec3 *centroid) {
 }
 
 std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count, float merge) {
-	// Brick leaves with any part behind the plane, and their bounds.
+	if (!plane) {
+		return hull_points(adf, nullptr, nullptr, count, merge);
+	}
+	const Plane cut = *plane;
+	// Brick leaves with any part behind the plane.
+	auto leaf = [cut](vec3 lo, float size) {
+		float least = std::numeric_limits<float>::max();
+		for (int c = 0; c < 8; ++c) {
+			least = std::min(least, cut.distance(corner({lo, lo + vec3(size)}, c)));
+		}
+		return least < 0.0f;
+	};
+	return hull_points(adf, leaf, [cut](vec3 p) { return cut.distance(p) < 0.0f; }, count, merge);
+}
+
+std::vector<vec3> hull_points(const Adf &adf, const std::function<bool(vec3, float)> &leaf,
+		const std::function<bool(vec3)> &keep, int count, float merge) {
+	// Brick leaves that may hold kept points, and their bounds.
 	struct Leaf {
 		const Adf::Node *node;
 		vec3 centre, half;
 	};
 	std::vector<Leaf> leaves;
 	for (const Adf::Node &n : adf.nodes()) {
-		if (n.child >= 0 || n.brick < 0) {
+		if (n.child >= 0 || n.brick < 0 || (leaf && !leaf(n.lo, n.size))) {
 			continue;
-		}
-		if (plane) {
-			float lo = std::numeric_limits<float>::max();
-			for (int c = 0; c < 8; ++c) {
-				lo = std::min(lo, plane->distance(corner({n.lo, n.lo + vec3(n.size)}, c)));
-			}
-			if (lo >= 0.0f) {
-				continue;
-			}
 		}
 		leaves.push_back({&n, n.lo + vec3(n.size * 0.5f), vec3(n.size * 0.5f)});
 	}
@@ -289,7 +298,7 @@ std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count, flo
 						const vec3 p = n.lo + (vec3(float(x), float(y), float(z)) +
 													  vec3(float(st[0]), float(st[1]), float(st[2])) * t) *
 													  voxel;
-						if (!plane || plane->distance(p) < 0.0f) {
+						if (!keep || keep(p)) {
 							crossings[k].push_back(p);
 						}
 					}
@@ -365,6 +374,28 @@ std::vector<vec3> hull_points(const Adf &adf, const Plane *plane, int count, flo
 		}
 	}
 	return out;
+}
+
+PieceSides measure_island(const Adf &adf, const Parts &parts, int island, std::shared_ptr<const Region> region) {
+	PieceSides s;
+	const Parts::Part &part = parts.parts[std::size_t(island)];
+	vec3 centre(0.0f);
+	const double total = volume(adf, nullptr, &centre);
+	s.volume[1] = part.volume;
+	s.centre[1] = part.centre;
+	s.volume[0] = std::max(total - part.volume, 0.0);
+	if (s.volume[0] > 0.0) {
+		s.centre[0] = (centre * float(total) - part.centre * float(part.volume)) / float(s.volume[0]);
+	}
+	const Region *r = region.get();
+	const Aabb box = r->box();
+	s.hull[1] = hull_points(
+			adf,
+			[box](vec3 lo, float size) { return Aabb{lo, lo + vec3(size)}.overlaps(box); },
+			[r](vec3 p) { return r->label(p) == Region::Island; });
+	s.hull[0] = hull_points(adf, nullptr, [r](vec3 p) { return r->label(p) != Region::Island; });
+	s.region = std::move(region);
+	return s;
 }
 
 } // namespace sdf

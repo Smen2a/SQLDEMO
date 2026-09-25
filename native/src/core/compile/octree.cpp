@@ -1,6 +1,7 @@
 #include "compile/octree.h"
 
 #include "body/layer.h"
+#include "body/region.h"
 
 #include <algorithm>
 #include <cmath>
@@ -105,6 +106,7 @@ Interval apply_interval(const Edit &e, Interval d, Interval ev) {
 		}
 		case Op::Paint:
 		case Op::Layer: // handled by prune() itself
+		case Op::Keep:
 			return d;
 	}
 	return d;
@@ -127,8 +129,11 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 	std::vector<char> touches(n, 0);
 	std::vector<Interval> range(n);
 	// Layers (Op::Layer): what their weight and field can be here; one that cannot weigh
-	// anything here is the identity, and drops out.
+	// anything here is the identity, and drops out. So does a region kept (Op::Keep) that
+	// drops nothing here; `keeps_none` where it keeps nothing (only dropped and free cubes:
+	// free ones are clear of every surface, so the field is at least half its floor).
 	std::vector<Layer::Range> layer(n);
+	std::vector<char> keeps_none(n, 0);
 	for (std::size_t i = 0; i < n; ++i) {
 		const std::uint32_t index = parent.tape[i] & ~kResetBit;
 		const Edit &e = body.edits()[index];
@@ -137,6 +142,11 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 		if (touches[i] && e.op == Op::Layer) {
 			layer[i] = e.layer->range(lo, size);
 			touches[i] = layer[i].w_hi > 0.0f;
+		} else if (touches[i] && e.op == Op::Keep) {
+			const unsigned dropped = 1u << (e.side == Region::Island ? Region::Rest : Region::Island);
+			const unsigned here = e.region->labels(lo, size);
+			touches[i] = (here & dropped) != 0;
+			keeps_none[i] = (here & (1u << e.side)) == 0;
 		} else if (touches[i]) {
 			const float ec = e.prim.eval(centre), es = e.prim.lipschitz() * radius;
 			range[i] = {ec - es, ec + es};
@@ -149,6 +159,9 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 	auto reads_values_here = [&](std::size_t i, const Edit &e) {
 		if (e.op == Op::Layer) {
 			return layer[i].w_lo < 1.0f;
+		}
+		if (e.op == Op::Keep) {
+			return true; // (only asked where it drops something)
 		}
 		const float reach = e.value_reach() + margin;
 		return e.value_reach() > 0.0f && range[i].lo < reach && range[i].hi > -reach;
@@ -225,8 +238,8 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 			if (e.op != Op::Intersect && !box_overlaps_cube(body.edit_box(index).expanded(reach), lo, size)) {
 				continue;
 			}
-			if (e.op == Op::Layer && !touches[i]) {
-				continue; // weighs nothing here
+			if ((e.op == Op::Layer || e.op == Op::Keep) && !touches[i]) {
+				continue; // weighs nothing here, or drops nothing
 			}
 			if (!touches[i]) {
 				const float ec = e.prim.eval(centre), es = e.prim.lipschitz() * radius;
@@ -267,6 +280,14 @@ Octree::Leaf Octree::prune(const Body &body, const Leaf &parent, vec3 lo, float 
 			d = r.w_lo >= 1.0f ? Interval{r.phi_lo, r.phi_hi}
 							   : Interval{std::min(d.lo, r.phi_lo), std::max(d.hi, r.phi_hi)};
 			lip = std::max(lip, e.layer->gradient()) + e.layer->ramp();
+			continue;
+		}
+		if (e.op == Op::Keep) {
+			// max(d, c - d) where it drops: at least c / 2, and no less than d. Where it keeps
+			// nothing (dropped and free cubes only), at least c / 2 throughout.
+			const float c = Region::kFloor;
+			d = {keeps_none[i] ? std::max(d.lo, 0.5f * c) : d.lo, std::max(d.hi, c - d.lo)};
+			lip = std::max(lip, 1.0f);
 			continue;
 		}
 		lip = std::max(lip, e.lipschitz());
@@ -475,6 +496,10 @@ Sample Octree::eval_tape(const Body &body, bool base, const std::uint32_t *tape,
 			d = e.layer->apply(p, d);
 			continue;
 		}
+		if (e.op == Op::Keep) {
+			d = e.region->apply(p, d, Region::Label(e.side));
+			continue;
+		}
 		const vec4 r = gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape),
 				float(e.material));
 		d = r.x;
@@ -493,6 +518,10 @@ float Octree::continue_tape(const Body &body, float d, const std::uint32_t *tape
 		}
 		if (e.op == Op::Layer) {
 			d = e.layer->apply(p, d);
+			continue;
+		}
+		if (e.op == Op::Keep) {
+			d = e.region->apply(p, d, Region::Label(e.side));
 			continue;
 		}
 		d = gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape), float(e.material)).x;

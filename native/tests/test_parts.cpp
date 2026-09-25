@@ -4,6 +4,7 @@
 #include "body/materials.h"
 #include "demo/gallery.h"
 #include "pieces/parts.h"
+#include "pieces/pieces.h"
 #include "tools/tools.h"
 
 #include <cstdio>
@@ -170,4 +171,120 @@ TEST(an_island_is_found_round_the_cut_that_freed_it) {
 	std::printf("    a groove: %d part(s) round it in %d look, %.1f ms (%zu exact checks)\n", none.parts.count(1.0),
 			none.passes, none.ms, none.parts.exact_checks);
 	CHECK(none.island < 0 && none.passes == 1);
+}
+
+namespace {
+
+// The corner cut off by two slots meeting (see slots_meeting_cut_off_a_corner).
+Body corner_cut(float web = 0.0f) {
+	Body body = demo::board(mat::Walnut);
+	CHECK(body.add(slot({59.6f, 30, -20}, {60.4f, 60, 20})));
+	CHECK(body.add(slot({59.6f, 29.6f, web > 0.0f ? -12.5f + web : -20.0f}, {90, 30.4f, 20})));
+	return body;
+}
+
+bool on_corner(vec3 p) {
+	return p.x > 60.0f && p.y > 30.0f;
+}
+
+} // namespace
+
+// Cut out, the corner and the rest are each the body where they are, and nothing where the
+// other is: kept surfaces exact, dropped material gone (the field at least half the floor),
+// and the field continuous across the gap between them.
+TEST(an_island_cut_out_keeps_each_side_exactly) {
+	const Cut cut(corner_cut());
+	const Parts parts = cut.parts();
+	CHECK(parts.parts.size() == 2);
+	if (parts.parts.size() != 2) {
+		return;
+	}
+	const CutOut out = cut_out(cut.body, cut.octree, cut.adf, parts, 1);
+	std::printf("    %s: %zu leaves (finest %.3f mm), %zu evaluations, %d passes, %.1f ms\n",
+			out.region ? "cut out" : out.failed, out.leaves, out.region ? double(out.region->finest()) : 0.0,
+			out.evaluations, out.passes, out.ms);
+	CHECK(out.region != nullptr);
+	if (!out.region) {
+		return;
+	}
+	Body island = cut.body, rest = cut.body;
+	CHECK(island.add(Edit::keep(out.region, Region::Island)));
+	CHECK(rest.add(Edit::keep(out.region, Region::Rest)));
+	t::Rng rng(11);
+	int kept = 0;
+	float worst_kept = 0.0f, least_dropped = 1e9f;
+	for (int i = 0; i < 40000; ++i) {
+		const vec3 p(rng.uniform(40, 82), rng.uniform(10, 52), rng.uniform(-14, 14));
+		const float d = cut.body.distance(p);
+		if (std::fabs(d) > 0.3f) {
+			continue;
+		}
+		const Body &mine = on_corner(p) ? island : rest, &other = on_corner(p) ? rest : island;
+		worst_kept = std::max(worst_kept, std::fabs(mine.distance(p) - d));
+		least_dropped = std::min(least_dropped, other.distance(p));
+		++kept;
+	}
+	std::printf("    %d points near the surface: kept within %.6f mm, dropped at least %.3f mm\n", kept,
+			double(worst_kept), double(least_dropped));
+	CHECK(kept > 1000);
+	CHECK(worst_kept < 1e-5f);
+	CHECK(least_dropped >= 0.5f * Region::kFloor - 1e-4f);
+	// Across the gaps, in steps of 5 um: never a jump.
+	float steepest = 0.0f;
+	for (float z = -12.0f; z <= 12.0f; z += 3.0f) {
+		for (const Body *b : {&island, &rest}) {
+			for (float x = 58.0f; x < 62.0f; x += 0.005f) {
+				steepest = std::max(steepest, std::fabs(b->distance({x + 0.005f, 40, z}) - b->distance({x, 40, z})) / 0.005f);
+			}
+			for (float y = 28.0f; y < 32.0f; y += 0.005f) {
+				steepest = std::max(steepest, std::fabs(b->distance({70, y + 0.005f, z}) - b->distance({70, y, z})) / 0.005f);
+			}
+		}
+	}
+	std::printf("    across the gaps the field's slope stays within %.3f\n", double(steepest));
+	CHECK(steepest < 1.01f);
+	// Each side's own ADF holds its own volume.
+	Octree island_tree, rest_tree;
+	island_tree.build(island);
+	rest_tree.build(rest);
+	Adf island_adf, rest_adf;
+	island_adf.build(island, island_tree);
+	rest_adf.build(rest, rest_tree);
+	const double corner = (80.0 - 60.4) * (50.0 - 30.4) * 25.0;
+	std::printf("    the corner's own ADF: %.0f mm^3 (%.0f), %zu bricks; the rest's %.0f mm^3, %zu bricks (the whole "
+				"board's %zu)\n",
+			volume(island_adf), corner, island_adf.stats().bricks, volume(rest_adf), rest_adf.stats().bricks,
+			cut.adf.stats().bricks);
+	CHECK(near(volume(island_adf), corner, 0.03));
+	CHECK(near(volume(rest_adf), volume(cut.adf) - corner, 0.01));
+
+	// Measured for the split: the corner comes away, the rest stays.
+	const PieceSides sides = measure_island(cut.adf, parts, 1, out.region);
+	std::printf("    measured: the rest %.0f mm^3, the corner %.0f mm^3 at (%.1f, %.1f, %.1f); hulls of %zu and %zu points\n",
+			sides.volume[0], sides.volume[1], double(sides.centre[1].x), double(sides.centre[1].y),
+			double(sides.centre[1].z), sides.hull[0].size(), sides.hull[1].size());
+	CHECK(near(sides.volume[1], corner, 0.03));
+	CHECK(near(sides.volume[0], volume(cut.adf) - corner, 0.01));
+	CHECK(std::fabs(sides.centre[1].x - 70.2f) < 0.3f && std::fabs(sides.centre[1].y - 40.2f) < 0.3f);
+	CHECK(!sides.hull[1].empty() && !sides.hull[0].empty());
+	for (const vec3 &p : sides.hull[1]) {
+		CHECK(on_corner(p));
+	}
+	for (const vec3 &p : sides.hull[0]) {
+		CHECK(!on_corner(p) || p.x < 60.0f || p.y < 30.0f);
+	}
+}
+
+// A web a hundredth of a millimetre thick left under the second slot: too thin for the ADF's samples,
+// which take the corner for an island, but the cut-out finds the material joining it.
+TEST(a_web_too_thin_to_sample_is_not_taken_for_a_gap) {
+	const Cut cut(corner_cut(0.01f));
+	const Parts parts = cut.parts();
+	std::printf("    %d parts by the samples\n", int(parts.parts.size()));
+	if (parts.parts.size() < 2) {
+		return; // the samples saw it: nothing to cut out
+	}
+	const CutOut out = cut_out(cut.body, cut.octree, cut.adf, parts, 1);
+	std::printf("    cut out: %s after %zu evaluations\n", out.region ? "yes" : out.failed, out.evaluations);
+	CHECK(out.region == nullptr);
 }

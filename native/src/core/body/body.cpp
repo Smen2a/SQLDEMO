@@ -1,6 +1,7 @@
 #include "body/body.h"
 
 #include "body/layer.h"
+#include "body/region.h"
 
 #include <algorithm>
 #include <cmath>
@@ -298,6 +299,23 @@ Edit Edit::smoothing(std::shared_ptr<const Layer> layer) {
 	return e;
 }
 
+Edit Edit::keep(std::shared_ptr<const Region> region, std::uint8_t side) {
+	Edit e;
+	const Aabb box = region->box().empty() ? Aabb{vec3(0.0f), vec3(0.0f)} : region->box();
+	e.prim = Primitive::box(box.centre(), box.size() * 0.5f);
+	e.op = Op::Keep;
+	e.region = std::move(region);
+	e.side = side;
+	return e;
+}
+
+Aabb Edit::cull_box() const {
+	if (op == Op::Intersect || (op == Op::Keep && side == Region::Island)) {
+		return Aabb::infinite();
+	}
+	return prim.bounds();
+}
+
 float Edit::influence() const {
 	switch (op) {
 		case Op::Union:
@@ -312,6 +330,7 @@ float Edit::influence() const {
 		case Op::Tongue:
 			return std::max(r, r2);
 		case Op::Layer:
+		case Op::Keep:
 			return 0.0f; // nothing beyond its box
 	}
 	return 0.0f;
@@ -334,20 +353,25 @@ float Edit::value_reach() const {
 			// It mixes the field before it with its own where w~ < 1; the sign there can only
 			// depend on the field's value within the layer's largest offset of the surface.
 			return layer->max_offset();
+		case Op::Keep:
+			// Where it drops, the field is positive whatever it was: only the value's size (for
+			// tracing) depends on it, and a bound serves.
+			return 0.0f;
 	}
 	return 0.0f;
 }
 
 Aabb Edit::bounds() const {
-	if (op == Op::Intersect) {
-		return Aabb::infinite();
-	}
-	return prim.bounds().expanded(influence());
+	const Aabb box = cull_box();
+	return box.lo.x <= -gl::SDF_BIG ? box : box.expanded(influence());
 }
 
 float Edit::feature_size() const {
 	if (op == Op::Layer) {
 		return 4.0f * layer->spacing(); // its samples' scale; not its box's
+	}
+	if (op == Op::Keep) {
+		return 1.0f; // where it drops, nothing is left to resolve
 	}
 	float size = prim.feature_size();
 	if (blend != Blend::Hard && (op == Op::Union || op == Op::Subtract || op == Op::Intersect)) {
@@ -362,6 +386,9 @@ float Edit::lipschitz() const {
 	if (op == Op::Layer) {
 		// Over a field with bound 1; in general max(L, gradient) + ramp (see Octree::prune).
 		return std::max(1.0f, layer->gradient()) + layer->ramp();
+	}
+	if (op == Op::Keep) {
+		return 1.0f; // max(d, c - d) keeps d's bound, and it only switches where it is d
 	}
 	float op_l = 1.0f;
 	switch (op) {
@@ -384,13 +411,13 @@ bool Body::add(const Edit &e) {
 		return false;
 	}
 	edits_.push_back(e);
-	culls_.push_back({e.op == Op::Intersect ? Aabb::infinite() : e.prim.bounds(), e.influence()});
+	culls_.push_back({e.cull_box(), e.influence()});
 	return true;
 }
 
 void Body::replace(std::size_t i, const Edit &e) {
 	edits_[i] = e;
-	culls_[i] = {e.op == Op::Intersect ? Aabb::infinite() : e.prim.bounds(), e.influence()};
+	culls_[i] = {e.cull_box(), e.influence()};
 }
 
 void Body::pop() {
@@ -408,6 +435,9 @@ float box_distance(const Aabb &b, vec3 p) {
 vec4 apply(const Edit &e, float d, vec3 mat, vec3 p) {
 	if (e.op == Op::Layer) {
 		return vec4(e.layer->apply(p, d), mat.x, mat.y, mat.z);
+	}
+	if (e.op == Op::Keep) {
+		return vec4(e.region->apply(p, d, Region::Label(e.side)), mat.x, mat.y, mat.z);
 	}
 	return gl::sdf_apply_edit(d, mat, e.prim.eval(p), int(e.op), int(e.blend), e.r, e.r2, int(e.shape),
 			float(e.material));

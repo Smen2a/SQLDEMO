@@ -109,7 +109,7 @@ PackedByteArray bytes(const void *data, std::size_t size) {
 
 bool holds_layer(const Body &body, const Octree::Leaf &cell) {
 	for (std::uint32_t entry : cell.tape) {
-		if (body.edits()[entry & ~Octree::kResetBit].op == Op::Layer) {
+		if (body.edits()[entry & ~Octree::kResetBit].sampled()) {
 			return true;
 		}
 	}

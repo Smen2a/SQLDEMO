@@ -29,6 +29,7 @@ add_library(sdf_core STATIC
 	src/core/body/body.cpp
 	src/core/body/layer.cpp
 	src/core/body/materials.cpp
+	src/core/body/region.cpp
 	src/core/compile/octree.cpp
 	src/core/edit/session.cpp
 	src/core/eval/image.cpp

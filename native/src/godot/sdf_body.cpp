@@ -27,6 +27,7 @@ constexpr int kTextureWidth = 1024;
 constexpr int kNodeTexels = 2;
 constexpr int kEditTexels = 6;
 // An edit's kinds share one float in the shader: prim | op << 3 | blend << 6 | profile << 9.
+// (Sampled edits, which the shader takes for the identity, all go as Op::Layer.)
 static_assert(int(Prim::SweepBezier) < 8 && int(Op::Layer) < 8 && int(Blend::Profile) < 8 &&
 				int(EdgeProfile::Ogee) < 4,
 		"edit kinds outgrew their bits in sdf_live.gdshaderinc");
@@ -1298,7 +1299,8 @@ void SdfBody::upload_textures() {
 	std::vector<float> edit_texels;
 	edit_texels.reserve(body.edits().size() * kEditTexels * 4);
 	for (const Edit &e : body.edits()) {
-		const int code = int(e.prim.type) | int(e.op) << 3 | int(e.blend) << 6 | int(e.shape) << 9;
+		const int op = e.sampled() ? int(Op::Layer) : int(e.op);
+		const int code = int(e.prim.type) | op << 3 | int(e.blend) << 6 | int(e.shape) << 9;
 		push(edit_texels, vec4(float(code), e.r, e.r2, float(e.material)));
 		for (const vec4 &p : e.prim.p) {
 			push(edit_texels, p);

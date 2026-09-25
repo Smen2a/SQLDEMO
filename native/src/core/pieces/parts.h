@@ -2,7 +2,10 @@
 
 #include "adf/adf.h"
 #include "body/body.h"
+#include "body/region.h"
 #include "compile/octree.h"
+
+#include <memory>
 
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +79,24 @@ struct Island {
 	double ms = 0.0;  // all passes
 };
 Island find_island(const Body &body, const Octree &octree, const Adf &adf, const Aabb &near, double least = 1.0,
+		float margin = 2.0f, float finest = 0.05f);
+
+// The island cut out: a Region (body/region.h) whose island cubes hold all of `island`'s
+// material and whose rest cubes hold everything else's near it, over the island's bounds
+// with `margin` mm round them. Cubes split where the samples in them are of both sides,
+// and where an island cube touches a rest cube, down to `finest` mm. What is left is the
+// proof that the island came away: its cubes and the rest's meet nowhere, and free cubes
+// hold no material (checked against the exact field). No region (and `failed` says why) if
+// the sides still touch at the finest: a bridge the samples did not see, or a gap too thin
+// for free air.
+struct CutOut {
+	std::shared_ptr<const Region> region;
+	const char *failed = nullptr;
+	std::size_t leaves = 0, evaluations = 0;
+	int passes = 0; // of splitting where the sides touched
+	double ms = 0.0;
+};
+CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts, int island,
 		float margin = 2.0f, float finest = 0.05f);
 
 } // namespace sdf

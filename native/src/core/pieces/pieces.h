@@ -2,8 +2,12 @@
 
 #include "adf/adf.h"
 #include "body/body.h"
+#include "body/region.h"
 #include "compile/octree.h"
+#include "pieces/parts.h"
 
+#include <functional>
+#include <memory>
 #include <vector>
 
 // Bodies that come apart: whether a cut left a body in pieces, and what each piece needs to
@@ -36,9 +40,12 @@ struct Separation {
 };
 
 // Both sides of a separation, measured from the ADF: what each piece needs to become a
-// body of its own (the worker measures them as soon as it finds the parts apart).
+// body of its own (the worker measures them as soon as it finds the parts apart). Either
+// cut by a plane (`cut`), or an island cut out (`region`: then side 0 is the rest, which
+// stays, and side 1 the island, which comes away).
 struct PieceSides {
 	Separation cut;
+	std::shared_ptr<const Region> region;
 	double volume[2] = {0.0, 0.0}; // behind the cut, in front of it (mm^3)
 	vec3 centre[2];                // centres of volume
 	std::vector<vec3> hull[2];     // hull_points() of each
@@ -72,5 +79,13 @@ double volume(const Adf &adf, const Plane *plane = nullptr, vec3 *centroid = nul
 // physics engines rest badly on (a hull of them rocks and sinks where one of its corners
 // does not).
 std::vector<vec3> hull_points(const Adf &adf, const Plane *plane = nullptr, int count = 256, float merge = 1.0f);
+// The same for the surface points `keep` keeps, among brick leaves `leaf` (lo, size) lets
+// through (null: all).
+std::vector<vec3> hull_points(const Adf &adf, const std::function<bool(vec3, float)> &leaf,
+		const std::function<bool(vec3)> &keep, int count = 256, float merge = 1.0f);
+
+// An island (`island` of `parts`, cut out by `region`) and the rest, measured: volumes and
+// centres from the parts and the whole body's, hull points from each side's surface.
+PieceSides measure_island(const Adf &adf, const Parts &parts, int island, std::shared_ptr<const Region> region);
 
 } // namespace sdf

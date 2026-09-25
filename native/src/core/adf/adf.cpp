@@ -163,9 +163,11 @@ struct Refiner {
 		return Octree::eval_tape(body, cell.base, cell.tape.data(), cell.tape.size(), p);
 	}
 
+	// Whether the tape holds sampled data (a layer, a region kept) the Live shader cannot
+	// evaluate.
 	bool holds_layer(const Octree::Leaf &cell) const {
 		for (std::uint32_t entry : cell.tape) {
-			if (body.edits()[entry & ~Octree::kResetBit].op == Op::Layer) {
+			if (body.edits()[entry & ~Octree::kResetBit].sampled()) {
 				return true;
 			}
 		}
