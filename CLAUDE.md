@@ -1,8 +1,9 @@
 # Working on this repo
 
 A real-time-editable SDF engine: a C++ core in `native/` (no dependencies), a Godot 4.7
-GDExtension built from it, and the Godot project in `game/`. See README.md for the
-design and docs/PLAN.md for the plan and what is done.
+GDExtension built from it, and the Godot project in `game/`. Start with PROJECT_CONTEXT.md
+for the whole picture (what exists, what comes next, lessons learnt); README.md has the
+as-built details and docs/PLAN.md the plan.
 
 ## Build
 

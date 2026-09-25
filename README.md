@@ -5,6 +5,8 @@ steel head, an ash handle and a wedge — from parts shaped by real processes an
 joined. Every part is a **signed distance field**: an analytic base shape plus an ordered
 list of edits (tool strokes, fillets, inlays, paint), each combined with a chosen blend
 mode. The full design is in the approved plan; this README covers what exists today.
+For the whole picture on one page (what exists, what comes next and how to work on it),
+read [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
 ## The workshop
 
