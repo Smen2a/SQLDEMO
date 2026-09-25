@@ -14,8 +14,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - As-built details stay in the [README](../README.md) and the commit messages.
 - **Tools** (below) is done: the tools behave like their real selves, and a stroke can be
   planned before it is made (T1 to T3).
-- **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut). Debris (2) is
-  next.
+- **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut).
+- **Debris** (2) is under way: D1 (shavings and chips) is done; D2 (dust) and D3 (small
+  pieces) are next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -66,6 +67,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
+| D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
@@ -276,7 +278,45 @@ The details are in the README ("Pieces").
   - A clip-drawn piece matches its own rebuilt ADF (image diff at the parity thresholds).
 - The existing suites stay green; `sdf_bench tools` reports the separation check's time.
 
-## 2. Debris
+## 2. Debris (current: D1 done)
+Built in three steps:
+- **D1:** shavings and chips.
+- **D2:** dust.
+- **D3:** small pieces.
+
+Dust will be grains of its own (a MultiMesh), not `CPUParticles3D`, which cannot collide:
+it should settle and pile, not fall through the bench.
+
+### D1 — shavings and chips: done
+- **The report** (`tools/debris.h`). A stroke says what it took off since it last said
+  (`Stroke::debris`), from the body as it was before the stroke. A previewed stroke
+  leaves the body alone until it lands, so `SdfBody` gathers debris only for previewed
+  strokes, and only while nothing else is applied to the body.
+  - A planned stroke samples its shaving every 0.5 mm: from the floor up to the surface,
+    as wide as the edge's chip.
+  - Each chip is reported once, when the edge reaches it: the material its cut takes
+    beyond the floor's, sampled over its box (`measure_chip`).
+  - `take_debris()` hands it over in world space, coloured by `albedo_at` (the shared
+    `MaterialTable::albedo` mix the reference renderer uses too).
+- **Breaking.** Every (1.5 + 3 (1 − split)) / grain mm (`CutPlan::shaving_piece`): along
+  the fibres a long ribbon, across them about 10 mm, into end grain 2.4 mm. Also wherever
+  the edge passes over air.
+- **The workshop** (`debris.gd`):
+  - the live shaving curls off the edge (radius 1.5 mm + 12 × thickness, 0.7 as long and
+    1/0.7 as thick as the cut) and comes away as a rigid body where it breaks and when the
+    stroke ends;
+  - chips are boxes thrown off the face;
+  - each piece is tagged with the board's undo step, so undo takes it back;
+  - the newest 24 move, older ones freeze, past 300 the oldest go;
+  - *Sweep* clears the bench.
+- **Physics as built.** Shavings rest on a box round the curl in its own frame: a hull of
+  the curl rocked from facet to facet and never settled. Debris weighs at least 5 g to the
+  solver (lighter, it is shaken about) and is damped. The board keeps a collider while
+  debris lies about, with the islands' 0.1 mm margin (its single hull had Godot's 4 cm).
+- **Measured.** A shaving is within 1% of the volume the board lost; with an uphill cut's
+  tear-out chips, within 1%. Taking it in costs at most about 0.5 ms a frame.
+
+### D2 and D3 (next)
 - **One system for material that leaves the body:**
   - **chisel shavings:** a curling ribbon as thick as the cut, whose grain comes from where
     it sat in the wood;

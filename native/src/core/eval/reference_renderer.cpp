@@ -147,12 +147,11 @@ private:
 		}
 		const Sample s = adf_ ? adf_->sample(body_, *octree_, p)
 							  : octree_ ? octree_->sample(body_, p) : body_.sample_exhaustive(p);
-		vec3 albedo = materials_.albedo(s.m0, p, body_.grain_origin, body_.grain_axis);
+		const vec3 albedo = materials_.albedo(s.m0, s.m1, s.t, p, body_.grain_origin, body_.grain_axis);
 		const Material &m0 = materials_[std::uint16_t(s.m0)];
 		float specular = m0.specular, shininess = m0.shininess;
 		if (s.t > 0.0f) {
 			const Material &m1 = materials_[std::uint16_t(s.m1)];
-			albedo = gl::mix(albedo, materials_.albedo(s.m1, p, body_.grain_origin, body_.grain_axis), s.t);
 			specular = gl::mix(specular, m1.specular, s.t);
 			shininess = gl::mix(shininess, m1.shininess, s.t);
 		}

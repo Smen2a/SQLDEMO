@@ -1,5 +1,7 @@
 #include "tools/cutting.h"
 
+#include "tools/debris.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -139,11 +141,36 @@ bool CutPlan::lift_out(float upto, Edit &out) const {
 	return true;
 }
 
+float CutPlan::shaving_piece() const {
+	return (1.5f + 3.0f * (1.0f - split)) / std::max(grain, 0.03f);
+}
+
 std::vector<Edit> CutPlan::edits(float upto, bool finished) const {
+	std::vector<Edit> out = floor_edits(upto);
+	if (chop) {
+		out.insert(out.end(), chips.begin(), chips.end());
+		return out;
+	}
+	if (out.empty()) {
+		return out;
+	}
+	const float end = std::min(upto, length);
+	for (std::size_t i = 0; i < chips.size(); ++i) {
+		if (chips_at[i] <= end) {
+			out.push_back(chips[i]);
+		}
+	}
+	Edit lift;
+	if (finished && lift_out(end, lift)) {
+		out.push_back(lift);
+	}
+	return out;
+}
+
+std::vector<Edit> CutPlan::floor_edits(float upto) const {
 	std::vector<Edit> out;
 	if (chop) {
 		out.push_back(slit);
-		out.insert(out.end(), chips.begin(), chips.end());
 		return out;
 	}
 	if (floor.size() < 2) {
@@ -187,15 +214,6 @@ std::vector<Edit> CutPlan::edits(float upto, bool finished) const {
 			to = to + gl::normalize(to - from) * 0.5f;
 		}
 		out.push_back(cut(Primitive::sweep(from, to, normal, profile)));
-	}
-	for (std::size_t i = 0; i < chips.size(); ++i) {
-		if (chips_at[i] <= end) {
-			out.push_back(chips[i]);
-		}
-	}
-	Edit lift;
-	if (finished && lift_out(end, lift)) {
-		out.push_back(lift);
 	}
 	return out;
 }
@@ -313,6 +331,7 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	const vec3 edge = gl::normalize(b * std::cos(skew) + t * std::sin(skew));
 	p.width = chisel.kind == gl::SDF_TOOL_FLAT ? chisel.width * std::cos(skew) : chisel.width;
 	const Wood wood = work.wood(start - n * 0.5f);
+	p.split = wood.split;
 	if (chisel.approach_deg >= 60.0f) {
 		return plan_chop(p, work, wood, b, edge);
 	}
@@ -467,9 +486,14 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 
 namespace {
 
+// The shaving is sampled every half millimetre; thinner than this, nothing came off.
+constexpr float kShavingStep = 0.5f;
+constexpr float kShavingLeast = 0.01f;
+
 class PlannedStroke : public Stroke {
 public:
-	explicit PlannedStroke(const CutPlan &plan) : plan_(plan) {}
+	explicit PlannedStroke(const CutPlan &plan)
+		: plan_(plan), piece_length_(plan.shaving_piece()), chip_sent_(plan.chips.size(), false) {}
 
 	StrokeUpdate move_to(vec3 point) override {
 		StrokeUpdate u;
@@ -513,11 +537,74 @@ public:
 		return Frame::at(plan_.point(reached_, plan_.depth_at(reached_)), plan_.normal, plan_.path);
 	}
 
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
+		out.ended = out.ended || ended;
+		if (plan_.chop) {
+			if (struck_) {
+				chips(body, octree, out, 1e9f); // a chop's pop-off comes with the blow
+			}
+			return;
+		}
+		// The shaving, from the floor up to the surface the edge came in under.
+		out.step = kShavingStep;
+		const vec3 n = plan_.normal;
+		const float most = (plan_.height > 0.0f ? plan_.height : plan_.depth + 2.0f);
+		const bool flat = plan_.chisel.kind == gl::SDF_TOOL_FLAT;
+		for (; shaved_ <= reached_ + 1e-4f; shaved_ += kShavingStep) {
+			const float s = shaved_;
+			const vec3 floor = plan_.point(s, plan_.depth_at(s));
+			const float t = depth_below_surface(body, octree, floor, n, most);
+			if (t < kShavingLeast) {
+				gap_ = true; // over air (off the work, over an earlier cut): it breaks here
+				continue;
+			}
+			ShavingSample sample;
+			sample.s = s;
+			sample.thickness = t;
+			sample.width = flat ? plan_.width : plan_.chisel.chip_area(t) / t;
+			sample.point = floor + n * (0.5f * t);
+			sample.starts = gap_ || piece_ >= piece_length_;
+			if (sample.starts) {
+				piece_ = 0.0f;
+			}
+			gap_ = false;
+			piece_ += kShavingStep;
+			out.shaving.push_back(sample);
+		}
+		chips(body, octree, out, reached_);
+	}
+
 private:
+	// The chips reached by `upto` and not yet sent: the material each takes beyond the
+	// floor's cut (and the chips before it).
+	void chips(const Body &body, const Octree &octree, Debris &out, float upto) {
+		std::vector<Edit> taken;
+		for (std::size_t i = 0; i < plan_.chips.size(); ++i) {
+			if (chip_sent_[i] || plan_.chips_at[i] > upto) {
+				continue;
+			}
+			if (taken.empty()) {
+				taken = plan_.floor_edits(plan_.chop ? 1e9f : reached_);
+			}
+			chip_sent_[i] = true;
+			Chip chip;
+			if (measure_chip(body, octree, plan_.chips[i], taken, plan_.path, plan_.normal, chip)) {
+				out.chips.push_back(chip);
+			}
+			taken.push_back(plan_.chips[i]);
+		}
+	}
+
 	CutPlan plan_;
 	float reached_ = 0.0f;
 	std::size_t emitted_ = 0;
 	bool struck_ = false;
+	// The debris sent so far: the shaving up to `shaved_` (the length of its current piece,
+	// whether it broke over a gap), the chips.
+	float piece_length_;
+	float shaved_ = 0.0f, piece_ = 0.0f;
+	bool gap_ = true;
+	std::vector<bool> chip_sent_;
 };
 
 } // namespace

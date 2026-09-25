@@ -7,6 +7,7 @@
 #include "godot/gpu_sampler.h"
 #include "pieces/pieces.h"
 #include "tools/cutting.h"
+#include "tools/debris.h"
 #include "tools/tools.h"
 
 #include <godot_cpp/classes/image_texture.hpp>
@@ -131,6 +132,22 @@ public:
 	// off (on), or applied as the tool moves (off). Takes effect from the next stroke.
 	void set_stroke_preview(bool enabled) { stroke_preview_ = enabled; }
 	bool get_stroke_preview() const { return stroke_preview_; }
+	// What the stroke took off the work since the last call (core tools/debris.h), in world
+	// space, for the game to show; empty when nothing came off. Gathered as a previewed
+	// stroke moves (from the body as it was before the stroke), and when it ends:
+	//   "shaving": {"points" (mid-thickness), "thickness", "width" (world lengths), "volume"
+	//     (mm^3 each), "starts" (1 where a new piece begins: it broke, or after a gap),
+	//     "colours"}, sampled every "step" (world length) along the cut, oldest first
+	//   "chips": [{"transform" (its centre; x along the cut, z out of the face; unscaled),
+	//     "size" (world), "volume" (mm^3), "colour"}]
+	//   "ended": the stroke is over (the shaving so far comes away); "cancelled": it was
+	//     taken back (and what came off with it)
+	//   "rise": degrees the blade stands at (the shaving rides up it), "density" (g/cm^3)
+	godot::Dictionary take_debris();
+	// The body's colour at `point` (world space): its material there, grain and all. Also
+	// inside material a stroke is cutting away (until the stroke lands). Transparent while an
+	// edit is being applied to the body.
+	godot::Color albedo_at(const godot::Vector3 &point) const;
 	// Waits for every queued edit to be applied and uploaded (for tests).
 	void flush();
 	// Whether the creases edits leave in coarse ADF cells (so that they land in a few
@@ -271,6 +288,13 @@ private:
 	// A chisel's, gouge's or spokeshave's plan against `work`, from its settings.
 	static tools::CutPlan plan_for(const godot::String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a,
 			float length, const godot::Dictionary &settings);
+	// What came off since take_debris(), with a colour per shaving sample and chip.
+	tools::Debris debris_;
+	std::vector<vec3> shaving_colours_, chip_colours_;
+	bool debris_cancelled_ = false;
+	float stroke_rise_ = 0.0f; // the stroke's blade angle (a chisel's approach, a spokeshave's bed)
+	void gather_debris(bool ended);
+	vec3 albedo_body(vec3 p) const; // body space; the body must stand
 	double opacity_ = 1.0;
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed

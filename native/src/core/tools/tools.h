@@ -20,6 +20,8 @@
 // normal (out of the wood) and a direction along the surface.
 namespace sdf::tools {
 
+struct Debris; // tools/debris.h
+
 // An orthonormal frame: z = normal, x = `along` made perpendicular to it, y = z x x.
 struct Frame {
 	vec3 origin, x, y, z;
@@ -157,6 +159,17 @@ public:
 	// kerf, and its width, once the saw is through): the body may now lie in two pieces,
 	// one each side (see pieces/pieces.h: plane_clear).
 	virtual std::optional<Separation> separation() const { return std::nullopt; }
+
+	// What came off the work since the last call (tools/debris.h), appended to `out`: read
+	// from `body` as it was before this stroke (a previewed stroke is only applied when it
+	// is committed). Called after move_to(), and with `ended` once it is lifted off (after
+	// finish()). Nothing by default.
+	virtual void debris(const Body &body, const Octree &octree, Debris &out, bool ended = false) {
+		(void)body;
+		(void)octree;
+		(void)out;
+		(void)ended;
+	}
 
 	virtual bool deferred() const { return false; }
 	// The motion recorded since the last call, as an update for the edit session holding

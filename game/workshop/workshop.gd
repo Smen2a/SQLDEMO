@@ -44,6 +44,11 @@ extends Node3D
 ## falls or rests as it will on the board, whose collider follows its surface from then on.
 ## Undo straight after puts them back together.
 ##
+## What the tools take off comes away too (debris.gd): a chisel's, gouge's or spokeshave's
+## shaving curls up off the edge as it goes and drops when it breaks or the stroke ends;
+## tear-out and a chop's pop-off throw chips. They land and lie where they fall; undo takes
+## a stroke's back, and Sweep clears the bench.
+##
 ## The world is in metres with y up. Bodies are in millimetres with z up: each body node is
 ## scaled by 0.001 and turned -90 degrees about x.
 
@@ -51,6 +56,7 @@ const MM := 0.001
 const HOVER_LIFT := 15.0 # mm the tool floats above where it will engage
 const OrbitCamera := preload("res://workshop/orbit_camera.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
+const Debris := preload("res://workshop/debris.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
@@ -148,11 +154,16 @@ var offcuts: Array[Dictionary] = []
 ## (a box when the piece fills nearly all its bounds, as sawn strips do: a box rests and
 ## slides more steadily than a hull of many points).
 var offcut_collider := "auto"
-var _board_collider: StaticBody3D # the board's hull, while offcuts lie about
+var _board_collider: StaticBody3D # the board's hull, while offcuts or debris lie about
+## What the tools took off (debris.gd), and the board's undo step the stroke in hand makes.
+var debris
+var _debris_step := 0
 
 
 func _ready() -> void:
 	_build_world()
+	debris = Debris.new()
+	add_child(debris)
 	board = _new_body()
 	board.load_demo(wood)
 	for v in board.tool_catalog():
@@ -349,6 +360,11 @@ func act() -> void:
 			_drop_plan()
 		return
 	_state = ACTING
+	_debris_step = board.get_stats().get("steps", 0) + 1
+	if _board_collider == null and current in ["chisel", "gouge", "spokeshave"]:
+		# Its shavings will land on the board: its collider, while the board stands (a
+		# stroke has just begun, nothing is being applied to it).
+		_update_board_collider(true)
 	if _lock.get("direct", false):
 		# What the stroke comes to, for the line by the pointer (a chisel's, gouge's or
 		# spokeshave's: the plan it was made from; nothing for the others).
@@ -401,9 +417,11 @@ func release() -> void:
 		return
 	if not _engaged:
 		return
+	var edge: Transform3D = board.get_tool_pose()
 	board.end_stroke()
 	_engaged = false
 	_state = IDLE
+	_take_debris(edge)
 	if _right_held and not _lock.get("direct", false):
 		_state = PLANNING
 		_replan()
@@ -415,6 +433,7 @@ func cancel() -> void:
 	if _engaged:
 		board.cancel_stroke()
 		_engaged = false
+		_take_debris(board.get_tool_pose())
 	_state = IDLE
 	_drop_plan()
 
@@ -505,6 +524,7 @@ func undo() -> void:
 		_update_board_collider()
 		_ui.refresh()
 		return
+	debris.undo_step(board.get_stats().get("steps", 0)) # what the stroke took off goes back
 	board.undo()
 
 
@@ -518,6 +538,7 @@ func set_wood(choice: String) -> void:
 	for offcut in offcuts:
 		offcut.body.queue_free()
 	offcuts.clear()
+	debris.clear()
 	_update_board_collider()
 	wood = choice
 	board.load_demo(wood)
@@ -602,13 +623,29 @@ func _collider_for(piece) -> CollisionShape3D:
 	return collider
 
 
-## While offcuts lie about, the board has a (convex) collider too, so they rest against it
-## rather than in it.
-func _update_board_collider() -> void:
+## Sweeps the bench: every shaving and chip goes.
+func sweep() -> void:
+	debris.clear()
+	_update_board_collider()
+
+
+## What the stroke took off since the last frame (with the edge where the tool is now).
+func _take_debris(edge: Transform3D) -> void:
+	var report: Dictionary = board.take_debris()
+	if report.is_empty() and debris.live_samples() == 0:
+		return
+	debris.feed(report, _debris_step, edge)
+	if _board_collider == null and not debris.pieces.is_empty():
+		_update_board_collider()
+
+
+## While offcuts or debris lie about, the board has a (convex) collider too, so they rest
+## against it rather than in it. `debris_coming`: a stroke that will throw some is starting.
+func _update_board_collider(debris_coming := false) -> void:
 	if _board_collider:
 		_board_collider.queue_free()
 		_board_collider = null
-	if offcuts.is_empty():
+	if offcuts.is_empty() and debris.pieces.is_empty() and not debris_coming:
 		return
 	_board_collider = StaticBody3D.new()
 	add_child(_board_collider)
@@ -638,6 +675,7 @@ func _update_board_collider() -> void:
 	for p in board.get_hull_points():
 		points.push_back(board.transform * p)
 	hull.points = points
+	hull.margin = SHAPE_MARGIN
 	collider.shape = hull
 	_board_collider.add_child(collider)
 
@@ -740,6 +778,8 @@ func _process(delta: float) -> void:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
+	if _engaged:
+		_take_debris(board.get_tool_pose())
 	# A plan asked for while an edit was landing is planned again once it has.
 	if _state == PLANNING and _plan.get("stale", false):
 		var fresh: Dictionary = board.get_plan()

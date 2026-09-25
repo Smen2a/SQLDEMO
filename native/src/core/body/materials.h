@@ -38,6 +38,8 @@ public:
 	// Albedo of material `id` at body-local point p, for a part whose grain runs along
 	// `grain_axis` through `grain_origin`.
 	vec3 albedo(float id, vec3 p, vec3 grain_origin, vec3 grain_axis) const;
+	// Albedo where a body was sampled (its two materials mixed by the sample's t).
+	vec3 albedo(float m0, float m1, float t, vec3 p, vec3 grain_origin, vec3 grain_axis) const;
 
 	// Ash, oak, walnut, putty, brass, steel, granite, cork, abrasive paper — in the order of
 	// the ids below.

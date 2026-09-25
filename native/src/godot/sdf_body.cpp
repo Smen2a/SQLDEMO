@@ -540,6 +540,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		}
 		stroke_ = make_stroke(tool, p, n, a, settings);
 	}
+	stroke_rise_ = cut_plan_ ? cut_plan_->chisel.approach_deg : 0.0f;
 	plan_request_.reset();
 	cut_plan_.reset();
 	if (!planned_.empty()) {
@@ -683,16 +684,122 @@ void SdfBody::move_stroke(const Vector3 &point) {
 		return;
 	}
 	if (previewing_) {
+		gather_debris(false);
 		update_overlay();
 	} else {
 		queue({Command::STROKE, u.drop, std::move(u.edits)});
 	}
 }
 
+void SdfBody::gather_debris(bool ended) {
+	// Read from the body before the stroke: only a previewed stroke leaves it alone, and only
+	// while nothing else is being applied to it (what is left is gathered at a later move).
+	if (!stroke_ || !previewing_) {
+		debris_.ended = debris_.ended || ended;
+		return;
+	}
+	if (!body_settled()) {
+		debris_.ended = debris_.ended || ended;
+		return;
+	}
+	stroke_->debris(session_.body(), session_.octree(), debris_, ended);
+	for (std::size_t i = shaving_colours_.size(); i < debris_.shaving.size(); ++i) {
+		shaving_colours_.push_back(albedo_body(debris_.shaving[i].point));
+	}
+	for (std::size_t i = chip_colours_.size(); i < debris_.chips.size(); ++i) {
+		chip_colours_.push_back(albedo_body(debris_.chips[i].frame.origin));
+	}
+}
+
+vec3 SdfBody::albedo_body(vec3 p) const {
+	const Body &body = session_.body();
+	const Sample s = session_.octree().sample(body, p);
+	return materials_.albedo(s.m0, s.m1, s.t, p, body.grain_origin, body.grain_axis);
+}
+
+Color SdfBody::albedo_at(const Vector3 &point) const {
+	if (!body_settled() || session_.octree().nodes().empty()) {
+		return Color(0, 0, 0, 0);
+	}
+	const vec3 c = albedo_body(to_body(point));
+	return Color(c.x, c.y, c.z);
+}
+
+Dictionary SdfBody::take_debris() {
+	Dictionary out;
+	if (debris_cancelled_) {
+		out["cancelled"] = true;
+		debris_cancelled_ = false;
+	}
+	if (debris_.empty()) {
+		return out;
+	}
+	const Transform3D xf = get_global_transform();
+	const double scale = xf.basis.get_column(0).length(); // world per mm
+	const Basis turn = xf.basis.orthonormalized();
+	const Body &body = session_.body();
+	const float density = materials_[body.base_material].density;
+	if (!debris_.shaving.empty()) {
+		const std::size_t n = debris_.shaving.size();
+		PackedVector3Array points;
+		PackedFloat32Array thickness, width, volume;
+		PackedByteArray starts;
+		PackedColorArray colours;
+		points.resize(int64_t(n));
+		thickness.resize(int64_t(n));
+		width.resize(int64_t(n));
+		volume.resize(int64_t(n));
+		starts.resize(int64_t(n));
+		colours.resize(int64_t(n));
+		for (std::size_t i = 0; i < n; ++i) {
+			const tools::ShavingSample &sample = debris_.shaving[i];
+			const vec3 c = i < shaving_colours_.size() ? shaving_colours_[i] : vec3(0.8f);
+			points.set(int64_t(i), xf.xform(to_godot(sample.point)));
+			thickness.set(int64_t(i), float(sample.thickness * scale));
+			width.set(int64_t(i), float(sample.width * scale));
+			volume.set(int64_t(i), sample.thickness * sample.width * debris_.step);
+			starts.set(int64_t(i), sample.starts ? 1 : 0);
+			colours.set(int64_t(i), Color(c.x, c.y, c.z));
+		}
+		Dictionary shaving;
+		shaving["points"] = points;
+		shaving["thickness"] = thickness;
+		shaving["width"] = width;
+		shaving["volume"] = volume;
+		shaving["starts"] = starts;
+		shaving["colours"] = colours;
+		out["shaving"] = shaving;
+		out["step"] = double(debris_.step) * scale;
+	}
+	if (!debris_.chips.empty()) {
+		Array chips;
+		for (std::size_t i = 0; i < debris_.chips.size(); ++i) {
+			const tools::Chip &chip = debris_.chips[i];
+			const vec3 c = i < chip_colours_.size() ? chip_colours_[i] : vec3(0.8f);
+			Dictionary d;
+			const Basis axes = turn * Basis(to_godot(chip.frame.x), to_godot(chip.frame.y), to_godot(chip.frame.z));
+			d["transform"] = Transform3D(axes, xf.xform(to_godot(chip.frame.origin)));
+			d["size"] = to_godot(chip.size) * scale;
+			d["volume"] = double(chip.volume);
+			d["colour"] = Color(c.x, c.y, c.z);
+			chips.push_back(d);
+		}
+		out["chips"] = chips;
+	}
+	out["ended"] = debris_.ended;
+	out["rise"] = double(stroke_rise_);
+	out["density"] = double(density);
+	debris_ = tools::Debris();
+	shaving_colours_.clear();
+	chip_colours_.clear();
+	return out;
+}
+
 void SdfBody::end_stroke() {
 	if (!stroke_) {
 		return;
 	}
+	gather_debris(true); // before the stroke is queued to be applied
 	const std::optional<sdf::Separation> through = stroke_->separation();
 	if (previewing_) {
 		// The whole stroke, merged, in one batch; it stays in the overlay until that lands.
@@ -731,6 +838,10 @@ void SdfBody::cancel_stroke() {
 		return;
 	}
 	stroke_.reset();
+	debris_ = tools::Debris(); // nothing came off after all
+	shaving_colours_.clear();
+	chip_colours_.clear();
+	debris_cancelled_ = true;
 	if (previewing_) {
 		update_overlay(); // the body never saw it
 	} else {
@@ -1622,6 +1733,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("cancel_stroke"), &SdfBody::cancel_stroke);
 	ClassDB::bind_method(D_METHOD("is_stroking"), &SdfBody::is_stroking);
 	ClassDB::bind_method(D_METHOD("get_tool_pose"), &SdfBody::get_tool_pose);
+	ClassDB::bind_method(D_METHOD("take_debris"), &SdfBody::take_debris);
+	ClassDB::bind_method(D_METHOD("albedo_at", "point"), &SdfBody::albedo_at);
 	ClassDB::bind_method(D_METHOD("pose_at", "contact", "normal", "along", "lift"), &SdfBody::pose_at);
 	ClassDB::bind_method(D_METHOD("undo"), &SdfBody::undo);
 	ClassDB::bind_method(D_METHOD("redo"), &SdfBody::redo);

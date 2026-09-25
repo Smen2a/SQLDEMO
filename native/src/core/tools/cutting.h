@@ -101,6 +101,7 @@ struct CutPlan {
 	float available = 0.0f;   // N the hand gives
 	float grain = 0.0f;       // 0 cutting along the fibres .. 1 severing them
 	int slope = 0;            // +1 with the grain (downhill), -1 against (uphill), 0 level or across
+	float split = 0.5f;       // how readily the wood splits (Wood::split)
 	unsigned warnings = 0;
 
 	float depth_at(float s) const;
@@ -108,6 +109,12 @@ struct CutPlan {
 	// The cut as edits as far as `upto` along the path (a chop: all of it): the floor swept
 	// with the edge's profile, the chips reached, and with `finished` the lift-out.
 	std::vector<Edit> edits(float upto = 1e9f, bool finished = true) const;
+	// Just the floor swept, as far as `upto` (a chop: its slit).
+	std::vector<Edit> floor_edits(float upto = 1e9f) const;
+	// How long a piece the shaving comes off in before it breaks: cut along the fibres it
+	// holds together (a long ribbon); severing them it crumbles into short pieces, the
+	// shorter the more readily the wood splits.
+	float shaving_piece() const;
 	// The edge lifting out forwards at `upto`, if it is in the work there.
 	bool lift_out(float upto, Edit &out) const;
 };

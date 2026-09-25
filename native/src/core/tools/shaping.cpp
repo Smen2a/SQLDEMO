@@ -195,6 +195,7 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	p.open = true; // the sole sets the blade's depth: it cuts from its first millimetre
 	const vec3 n = frame.z, t = frame.x, b = frame.y;
 	const Wood wood = work.wood(start - n * 0.5f);
+	p.split = wood.split;
 	const vec3 f = work.fibre();
 	const float g = grain_factor(f, t, b);
 	p.grain = (g - 1.0f) / 3.5f;

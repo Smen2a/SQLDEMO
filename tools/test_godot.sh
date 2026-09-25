@@ -17,10 +17,14 @@
 #   - a strip sawn off the board comes away as a rigid body resting on the bench
 #   - a rebate sawn off the end (two cuts meeting, no plane) comes away as an island, shown
 #     once cut out, resting in the rebate on the board's own surface
+#   - a chisel's shaving grows as it goes and comes away as much wood as the board lost,
+#     then lies still; across the grain it breaks; tear-out and a chop throw chips; undo
+#     takes them back
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
 #   - the Live path renders a shaded scene with shadows and mesh intersections
-#   - the workshop drive and the tool planning again, rendered, with screenshots in out/
+#   - the workshop drive, the tool planning and the debris again, rendered, with
+#     screenshots in out/
 #   - a stroke previewed by the shader looks the same once committed (image comparison)
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 #   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF
@@ -77,6 +81,7 @@ if [[ "$GPU" == 0 ]]; then
 	check tool_planning "tool planning: every step as planned" res://tests/tool_planning.tscn
 	check offcut_physics "offcut physics:" res://tests/offcut_physics.tscn
 	check island_split "island split: the rebate came away" res://tests/island_split.tscn
+	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	exit $status
 fi
 
@@ -88,6 +93,7 @@ check stroke_preview_render "stroke preview: every tool" --render res://tests/st
 	--out="$OUT/preview"
 check tool_planning_render "tool planning: every step as planned" --render res://tests/tool_planning.tscn -- \
 	--out="$OUT"
+check debris_render "debris: shavings and chips come away" --render res://tests/debris.tscn -- --out="$OUT"
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

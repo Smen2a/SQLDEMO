@@ -12,6 +12,11 @@ vec3 MaterialTable::albedo(float id, vec3 p, vec3 grain_origin, vec3 grain_axis)
 	return gl::sdf_material_albedo(p, m.k[0], m.k[1], m.k[2], vec4(grain_origin, 0), vec4(grain_axis, 0));
 }
 
+vec3 MaterialTable::albedo(float m0, float m1, float t, vec3 p, vec3 grain_origin, vec3 grain_axis) const {
+	const vec3 a = albedo(m0, p, grain_origin, grain_axis);
+	return t > 0.0f ? gl::mix(a, albedo(m1, p, grain_origin, grain_axis), t) : a;
+}
+
 Material wood(const std::string &name, vec3 earlywood, vec3 latewood, float ring_spacing_mm, float figure,
 		float fibre_contrast) {
 	Material m;

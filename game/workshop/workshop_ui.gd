@@ -109,6 +109,7 @@ func _ready() -> void:
 	_undo = _button(row, "Undo", func(): workshop.undo())
 	_redo = _button(row, "Redo", func(): workshop.redo())
 	_button(row, "New board", func(): workshop.reset_board())
+	_button(row, "Sweep", func(): workshop.sweep())
 	var shadows := CheckBox.new()
 	shadows.text = "Board casts shadows"
 	shadows.focus_mode = Control.FOCUS_NONE

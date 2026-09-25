@@ -60,8 +60,9 @@ Other controls:
 - Esc drops the plan or the stroke in progress.
 - Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit.
 - Middle-drag orbits, Shift+middle-drag pans, the wheel zooms.
-- The panel switches the wood (ash, oak, walnut), starts a new board, and lets the board
-  cast shadows. Its sliders are the same settings the wheel changes.
+- The panel switches the wood (ash, oak, walnut), starts a new board, sweeps the bench of
+  shavings and chips, and lets the board cast shadows. Its sliders are the same settings
+  the wheel changes.
 - *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
   and the board applies it once, when you let go. Turned off, every move is applied as it
   happens, for comparison.
@@ -433,6 +434,45 @@ chiselled free. That piece comes away too, and it rests where it lies.
   none across. The island's own ADF costs about 1.7 times the bricks its surface had in the
   board's, where the region keeps its creases from becoming exact leaves.
 
+### Shavings and chips: what the tools take off
+
+A chisel's, gouge's or spokeshave's shaving curls up off the edge as the stroke goes, and
+drops when it breaks or the stroke ends. Tear-out, breakout and a chop's pop-off throw
+chips. They land and lie where they fall; undo takes a stroke's back, a new board or
+*Sweep* clears them. Debris never goes back into a body: it only shows what came off.
+- **The report** (`native/src/core/tools/debris.h`). As a previewed stroke moves, it says
+  what it took off since it last said, read from the body as it was before the stroke
+  (the body is only changed when the stroke lands). A planned stroke samples its shaving
+  every half millimetre: from the cut's floor up to the surface the edge came in under
+  (thinner over a rounded edge, nothing over a groove), as wide as the edge's chip (a
+  gouge's curved chip: its area over its thickness). Each chip is reported once, when the
+  edge reaches it: the material its cut takes beyond the floor's, sampled over its box.
+  `SdfBody.take_debris()` hands it over in world space, coloured by the wood where it
+  came from (`albedo_at`: the grain and rings run on into the shaving).
+- **Breaking.** Cut along the fibres a shaving holds together; severing them it crumbles:
+  it breaks every (1.5 + 3 (1 − split)) / grain mm, about 10 mm across the grain in ash,
+  2.4 mm into end grain. It breaks too wherever the edge passes over air.
+- **The curl** (`game/workshop/debris.gd`). The shaving rides up the blade's back and
+  curls over, tighter the thinner it is (a radius of 1.5 mm + 12 times its thickness,
+  winding in a thickness a turn so the turns never meet). It comes off 0.7 as long and
+  1 / 0.7 as thick as the cut (the same wood, compressed along the cut). Drawn as a ribbon
+  with the wood's colours, rebuilt as it grows (at most about 0.5 ms a frame).
+- **Physics.** Released, a shaving is a rigid body whose collider is the box round the
+  curl in its own frame: a hull round the curl rocked from facet to facet and never came
+  to rest. It weighs at least a few grams to the solver (lighter bodies this small are
+  shaken about), and is damped (light and springy, it soon lies still). The board has a
+  collider while debris lies about. The newest 24 pieces move; older ones stay where
+  they lie; past 300, the oldest go.
+| | |
+| --- | --- |
+| ![A paring cut in ash, close up: the shaving rising off the chisel's edge and curling over as the stroke goes](docs/images/debris_shaving_working.png) | ![The shaving come away, lying curled on the board where it fell](docs/images/debris_shaving.png) |
+
+- **Measured** (`native/tests/test_debris.cpp`, `game/tests/debris`): a paring cut's
+  shaving is within 1% of the volume the board lost (sampled by columns, before and
+  after); the shaving and the tear-out chips of an uphill cut in oak together, within 1%;
+  in the workshop, a 50 mm paring cut 0.5 mm deep gives a 255 mm³ shaving (the board lost
+  248), at rest on the board within a second.
+
 ## Layout
 
 | Path | What it is |
@@ -699,7 +739,8 @@ The Godot tests come in two tiers:
   - the workshop's tools cut and undo;
   - stroke previews commit as previewed;
   - planned and direct strokes;
-  - offcuts and islands come away and settle.
+  - offcuts and islands come away and settle;
+  - shavings and chips come away as much wood as the board lost, and settle.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.
