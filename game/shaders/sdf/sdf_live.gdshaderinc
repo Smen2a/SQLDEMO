@@ -110,10 +110,6 @@ uniform bool sdf_exact_cells = true;
 // How much of the body is drawn in perspective views (a tool fading in and out): a
 // screen-door dither, so whatever is drawn keeps its exact depth.
 uniform float sdf_opacity = 1.0;
-// A section (the workshop's cross-section inset): in orthographic views only, the body is
-// drawn cut open along the plane n.p = w (n = xyz, w = w, body space), keeping n.p <= w.
-// n = 0: none. Shadow maps are orthographic too, but the caster material never has one.
-uniform vec4 sdf_section = vec4(0.0);
 // Cuts planned but not yet made (overlay edits flagged SDF_OVERLAY_PLANNED) are tinted:
 // colour, and how strongly.
 uniform vec4 sdf_plan_tint = vec4(1.0, 0.82, 0.25, 0.5);
@@ -619,8 +615,7 @@ int sdf_bayer2(int x, int y) {
 
 void fragment() {
 	bool ortho = PROJECTION_MATRIX[3][3] > 0.5;
-	// The fade is for perspective views: orthographic ones (the workshop's inset, shadow
-	// maps) draw the body whole.
+	// The fade is for the view: shadow maps (orthographic) draw the body whole.
 	if (sdf_opacity < 1.0 && !ortho) {
 		ivec2 q = ivec2(FRAGCOORD.xy);
 		int b = 4 * sdf_bayer2(q.x & 1, q.y & 1) + sdf_bayer2((q.x >> 1) & 1, (q.y >> 1) & 1);
@@ -635,21 +630,6 @@ void fragment() {
 	vec3 ro = ortho ? v_local - rd * dot(v_local - v_eye, rd) : v_eye;
 
 	vec2 span = sdf_clip_box(ro, rd);
-	// A section starts the ray on its plane (or ends it there, looking back through it).
-	bool sectioned = ortho && dot(sdf_section.xyz, sdf_section.xyz) > 0.5;
-	float section_t = -1.0;
-	if (sectioned) {
-		float dn = dot(rd, sdf_section.xyz);
-		float side = dot(ro, sdf_section.xyz) - sdf_section.w;
-		if (abs(dn) < 1.0e-6) {
-			span.y = side > 0.0 ? -1.0 : span.y;
-		} else if (dn < 0.0) {
-			section_t = -side / dn;
-			span.x = max(span.x, section_t);
-		} else {
-			span.y = min(span.y, -side / dn);
-		}
-	}
 #ifdef SDF_SINGLE_PASS
 	// End the ray at the opaque scene in front of it, so hidden parts of the body cost
 	// nothing: t there is the view distance to the scene (along the view axis for
@@ -725,16 +705,10 @@ void fragment() {
 		discard;
 	}
 
-	// A hit on the section plane inside the body is the section's face: it stays there, with
-	// the material there (a solid cell's shortcut above has none).
-	bool on_section = hit && section_t >= 0.0 && s.x < 0.0 && t <= section_t + eps;
-	if (on_section) {
-		s = sdf_sample_near(ro + rd * t, lo, size, n0, a);
-	}
 	// Settle onto the surface, to within a tenth of the epsilon, so shading does not depend
 	// on the step sequence. s ends up as the field at p, material included.
 	float settled = max(0.1 * eps, 1.0e-5);
-	for (int i = 0; i < 4 && hit && !on_section && abs(s.x) > settled; i++) {
+	for (int i = 0; i < 4 && hit && abs(s.x) > settled; i++) {
 		t += s.x;
 		s = sdf_sample_near(ro + rd * t, lo, size, n0, a);
 	}
@@ -759,9 +733,6 @@ void fragment() {
 #else
 		vec3 n = sdf_normal(p, max(eps, 2.0e-3), lo, size, n0, a);
 #endif
-		if (on_section) {
-			n = sdf_section.xyz;
-		}
 		NORMAL = normalize((VIEW_MATRIX * (MODEL_MATRIX * vec4(n, 0.0))).xyz);
 		vec3 albedo = sdf_material_rgb(s.y, p);
 		vec4 props = sdf_texel(sdf_materials, int(s.y + 0.5) * 4 + 3);
@@ -770,7 +741,7 @@ void fragment() {
 			props = mix(props, sdf_texel(sdf_materials, int(s.z + 0.5) * 4 + 3), s.w);
 		}
 		// A planned cut's surface, hatched in the tool's colour: not made yet.
-		if (!on_section && sdf_overlay_planned_at(p, max(2.0 * eps, 0.01))) {
+		if (sdf_overlay_planned_at(p, max(2.0 * eps, 0.01))) {
 			float hatch = step(0.5, fract((p.x + p.y + p.z) / 1.5));
 			albedo = mix(albedo, sdf_plan_tint.rgb, sdf_plan_tint.a * (0.6 + 0.4 * hatch));
 		}
@@ -791,7 +762,7 @@ void fragment() {
 			// Blinn-Phong exponent to GGX roughness: alpha = sqrt(2 / (n + 2)), roughness = sqrt(alpha).
 			ROUGHNESS = sqrt(sqrt(2.0 / (props.y + 2.0)));
 			SPECULAR = clamp(props.x * 5.0, 0.0, 1.0);
-			if (sdf_ambient_occlusion && !on_section) {
+			if (sdf_ambient_occlusion) {
 				AO = sdf_occlusion(p, n, lo, size, n0, a);
 			}
 		}

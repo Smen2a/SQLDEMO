@@ -6,8 +6,9 @@
 #   - the workshop: each tool, driven through the scene's own pointer methods, cuts, and
 #     undo takes a stroke back
 #   - a stroke previewed by the shader looks the same once committed, for each tool
-#   - a stroke planned with the right button held (hatched, the tool out of view, the
-#     section inset showing) is the cut the left-drag then makes; the camera's buttons
+#   - a stroke planned with the right button held (hatched, the tool out of view) is the
+#     cut the left-drag then makes; a left-drag without a plan cuts as the wood lets it;
+#     the camera's buttons
 #   - a strip sawn off the board comes away as a rigid body resting on the bench
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 #   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF

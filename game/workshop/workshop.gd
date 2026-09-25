@@ -2,18 +2,20 @@ extends Node3D
 
 ## The workshop: a board on a bench and eight hand tools, every one an SDF body. Pick a
 ## tool (click it on the bench, or 1 to 8; Tab for its variants) and point at the board:
-## its footprint shows where it would go. Every stroke is planned, then made:
-##   plan  hold the right button on the board: the stroke is locked in there, and runs
-##         towards the pointer. Its cut shows on the board, hatched, and in the section
-##         inset (on the right) cut open along it, and a line by the pointer says what it
-##         comes to: how deep the wood lets it go, the force it takes, the grain, and what
-##         will go wrong. The wheel sets how hard it works (a chisel's or gouge's depth, the
-##         saw's feed, the sanding tools' pressure); Shift+wheel the chisel's or gouge's
-##         angle to the work (C: straight up, to chop), or a rasp's tilt about its line;
-##         Q / E skew a chisel's edge, or turn the sanding tools.
-##   act   press the left button (still holding the right) and drag: the tool appears and
-##         follows the plan as far as you take it. Let go of the left button to finish:
-##         one undo step. Keep holding the right to plan the next pass from the same spot.
+## its footprint shows where it would go. Then:
+##   use   left-drag on the board: the tool sets to work where it was pressed, going the
+##         way the drag goes (the sanding tools follow it anywhere; a chisel held up to
+##         chop strikes a blow at the click). Let go to finish: one undo step. A line by
+##         the pointer says what the stroke comes to: how deep the wood lets it go, the
+##         force it takes, the grain, and what goes wrong.
+##   plan  or first hold the right button on the board: the stroke is locked in there and
+##         runs towards the pointer, its cut hatched on the board before it is made. The
+##         wheel sets how hard it works (a chisel's or gouge's depth, the spokeshave's
+##         shaving, the saw's feed, the pressure on the others); Shift+wheel a chisel's or
+##         gouge's angle to the work (C: straight up, to chop), or the rasp's tilt about
+##         its line; Q / E skew a chisel's edge, or turn the sanding tools. Then press the
+##         left button and drag: the tool follows the plan as far as you take it. Keep
+##         holding the right to plan the next pass from the same spot.
 ## The tools cut as the wood lets them (core tools/cutting.h):
 ##   chisel          pares along its path, as deep as a hand can push it in this wood and
 ##                   grain. From an edge or a cut it goes in at once; in the middle of a
@@ -31,6 +33,7 @@ extends Node3D
 ##   card scraper    back and forth: a whisper a stroke, for cleaning up tear-out
 ##   sanding block   takes the surface down wherever it rubs, flat
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
+## The tool in hand stays out of sight until it works, so it never hides where it goes.
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 ## Middle-drag orbits the camera, Shift+middle-drag pans, the wheel zooms.
 ##
@@ -45,16 +48,13 @@ const MM := 0.001
 const HOVER_LIFT := 15.0 # mm the tool floats above where it will engage
 const OrbitCamera := preload("res://workshop/orbit_camera.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
-const SectionInset := preload("res://workshop/section_inset.gd")
-
-## Render layers: the main view draws LAYER_MAIN, the section inset both. The tool in hand
-## is on LAYER_INSET alone until it is at work, so it never hides what is being planned.
-const LAYER_MAIN := 1
-const LAYER_INSET := 2
-const LAYER_OUTLINE := 4 # the footprint: the main view's only
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
+const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 
-enum { IDLE, PLANNING, ACTING }
+## IDLE: pointing. PLANNING: a stroke locked in with the right button. ARMED: a direct
+## stroke (the left button, no plan) waiting for its drag to show which way it goes.
+## ACTING: a stroke being made.
+enum { IDLE, PLANNING, ARMED, ACTING }
 
 ## Per tool, what the wheel sets while planning: [setting, step, lowest, highest, format].
 const INTENSITY := {
@@ -74,12 +74,11 @@ const TILT := {
 	"rasp": ["tilt", 5.0, -60.0, 60.0, "tilted %.0f°"],
 }
 const CHOP_ANGLE := 60.0
-## The least height (mm) the section inset frames round the tool in hand: big tools need
-## more to be seen whole.
-const INSET_FRAME := {"saw": 20.0, "rasp": 24.0, "spokeshave": 40.0, "scraper": 24.0}
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
 const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.0, "spokeshave": 40.0,
 		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
+## A direct stroke's path (mm): as far as the drag goes, up to this.
+const DIRECT_LENGTH := {"chisel": 300.0, "gouge": 300.0, "spokeshave": 300.0, "rasp": 150.0, "scraper": 150.0}
 
 const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper", "sanding_block",
 		"sanding_sponge"]
@@ -119,14 +118,14 @@ var camera: Camera3D
 var _rest := {}           # name -> Transform3D where each tool lies on the bench
 var _outline: MeshInstance3D
 var _ui
-var _inset
 var _pointer := Vector2.ZERO
 var _hit := {}            # the board under the pointer (SdfBody.raycast)
 var _state := IDLE
 var _engaged := false     # a stroke is on the board (ACTING)
 var _right_held := false
 ## The stroke being planned or made: {"point", "normal" (world), "plane", "along" (the
-## tool's facing), "path" (unit, the direction it works in), "length" (mm)}.
+## tool's facing), "path" (unit, the direction it works in), "length" (mm), "seed",
+## "direct" (made without a plan)}.
 var _lock := {}
 var _plan := {}           # what SdfBody.plan_stroke made of it
 ## The chisels and gouges (SdfBody.tool_catalog()): family -> [{id, label, width, ...}].
@@ -171,14 +170,12 @@ func _ready() -> void:
 	orbit.target = Vector3(0.0, 0.012, 0.0)
 	orbit.distance = 0.42
 	orbit.pitch = -0.8
-	orbit.cull_mask = 0xFFFFF & ~LAYER_INSET
 	add_child(orbit)
 	camera = orbit
 
 	_outline = MeshInstance3D.new()
 	_outline.mesh = ImmediateMesh.new()
 	_outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_outline.layers = LAYER_OUTLINE
 	var lines := StandardMaterial3D.new()
 	lines.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	lines.vertex_color_use_as_albedo = true
@@ -188,10 +185,6 @@ func _ready() -> void:
 	_ui = WorkshopUi.new()
 	_ui.workshop = self
 	add_child(_ui)
-	_inset = SectionInset.new()
-	_inset.board = board
-	_inset.cull_mask = LAYER_MAIN | LAYER_INSET
-	_ui.add_inset(_inset)
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	select_tool("chisel")
 
@@ -209,7 +202,6 @@ func select_tool(tool: String) -> void:
 	_opacity = 0.0
 	if current != "":
 		_show_tool(current, 0.0)
-	_inset.set_tool(tools.get(current))
 	_ui.refresh()
 
 
@@ -308,8 +300,10 @@ func adjust(steps: int, tilt: bool) -> void:
 	_replan()
 
 
-## Left button down: with a stroke planned, the tool sets to work along it; otherwise a tool
-## lying on the bench under the pointer is picked up.
+## Left button down: with a stroke planned, the tool sets to work along it. Otherwise a
+## tool lying on the bench under the pointer is picked up, or the tool in hand sets to work
+## where the pointer is on the board, without a plan: the sanding tools (and a chop) at
+## once, the others once the drag shows which way they go.
 func press(position: Vector2) -> void:
 	if _state == PLANNING:
 		act()
@@ -321,23 +315,41 @@ func press(position: Vector2) -> void:
 	var picked := _tool_under(position, board_distance)
 	if picked != "":
 		select_tool(picked)
+		return
+	if current == "" or _hit.is_empty() or _hit.get("stale", false):
+		return
+	var normal: Vector3 = _hit.normal
+	var facing := _along(normal)
+	_lock = {"point": _hit.position, "normal": normal, "plane": Plane(normal, _hit.position), "along": facing,
+			"path": facing, "length": DIRECT_LENGTH.get(current, DEFAULT_LENGTH[current]),
+			"seed": randi() % 100000, "direct": true}
+	_state = ARMED
+	if not _faces_its_path() or is_chopping():
+		act() # at once
 
 
-## The planned stroke begins: the tool appears where it was set, and drags carry it on. A
-## chop is one mallet blow, made at once.
+## The stroke begins: the tool appears where it was set, and drags carry it on. A chop is
+## one mallet blow, made at once.
 func act() -> void:
-	if _state != PLANNING:
+	if _state != PLANNING and _state != ARMED:
 		return
 	_engage_pose = tools[current].global_transform
 	_engage_time = Time.get_ticks_msec() / 1000.0
 	_plane = _lock.plane
 	_progress = 0.0
 	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, _stroke_settings())
-	if _engaged:
-		_state = ACTING
-		if is_chopping():
-			board.move_stroke(_lock.point)
-			release()
+	if not _engaged:
+		if _state == ARMED:
+			_drop_plan()
+		return
+	_state = ACTING
+	if _lock.get("direct", false):
+		# What the stroke comes to, for the line by the pointer (a chisel's, gouge's or
+		# spokeshave's: the plan it was made from; nothing for the others).
+		_plan = board.get_plan()
+	if is_chopping():
+		board.move_stroke(_lock.point)
+		release()
 
 
 ## Pointer motion while acting: a push tool (the chisel) goes on along its path as far as
@@ -345,6 +357,19 @@ func act() -> void:
 ## sanding tools follow the pointer over the plane they were set on.
 func drag_screen(position: Vector2) -> void:
 	_pointer = position
+	if _state == ARMED:
+		# A direct stroke goes the way the drag goes, once it has gone far enough to tell.
+		var at = _lock.plane.intersects_ray(camera.project_ray_origin(position), camera.project_ray_normal(position))
+		if at == null:
+			return
+		var n: Vector3 = _lock.normal
+		var d: Vector3 = at - _lock.point
+		d -= n * d.dot(n)
+		if d.length() < ARM_DISTANCE * MM:
+			return
+		_lock.path = d.normalized()
+		_lock.along = _lock.path
+		act()
 	if not _engaged:
 		return
 	var point = _plane.intersects_ray(camera.project_ray_origin(position), camera.project_ray_normal(position))
@@ -365,12 +390,15 @@ func drag_screen(position: Vector2) -> void:
 ## Left button up: the cut is finished and becomes one undo step. With the right button
 ## still held, the next pass is planned from the same spot.
 func release() -> void:
+	if _state == ARMED:
+		_drop_plan() # pressed and let go without a drag: nothing to make
+		return
 	if not _engaged:
 		return
 	board.end_stroke()
 	_engaged = false
 	_state = IDLE
-	if _right_held:
+	if _right_held and not _lock.get("direct", false):
 		_state = PLANNING
 		_replan()
 	else:
@@ -381,7 +409,7 @@ func cancel() -> void:
 	if _engaged:
 		board.cancel_stroke()
 		_engaged = false
-		_state = IDLE
+	_state = IDLE
 	_drop_plan()
 
 
@@ -425,9 +453,10 @@ func _stroke_settings() -> Dictionary:
 	return s
 
 
-## What the plan came to (SdfBody.plan_stroke), with the lock: {} when nothing is planned.
+## What the plan came to (SdfBody.plan_stroke), with the lock: {} when nothing is planned
+## (or a direct stroke says nothing of itself).
 func get_plan() -> Dictionary:
-	if _state == IDLE:
+	if _state == IDLE or _state == ARMED or (_lock.get("direct", false) and _plan.is_empty()):
 		return {}
 	var plan := _plan.duplicate()
 	plan.merge(_lock)
@@ -441,20 +470,19 @@ func _replan() -> void:
 
 
 func _drop_plan() -> void:
-	if _state == PLANNING:
+	if _state == PLANNING or _state == ARMED:
 		_state = IDLE
 	_lock = {}
 	_plan = {}
 	board.clear_plan()
 	camera.wheel_zoom = true
-	_inset.hide_section()
 
 
-## A tool's visibility in the main view: `opacity` 0 leaves it to the section inset alone.
+## A tool's visibility: `opacity` 0 hides it (the tool in hand, until it works).
 func _show_tool(tool: String, opacity: float) -> void:
 	var body = tools[tool]
 	body.opacity = opacity
-	body.layers = LAYER_MAIN | LAYER_INSET if opacity > 0.0 else LAYER_INSET
+	body.visible = opacity > 0.0
 	# Its shadow would give it away (and it has none of its own while it fades).
 	body.live_shadows = opacity >= 1.0
 
@@ -586,7 +614,7 @@ func is_engaged() -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		match _state:
-			ACTING:
+			ACTING, ARMED:
 				drag_screen(event.position)
 			PLANNING:
 				aim(event.position)
@@ -653,7 +681,7 @@ func _process(delta: float) -> void:
 			var t: float = clamp((Time.get_ticks_msec() / 1000.0 - _engage_time) / 0.08, 0.0, 1.0)
 			body.global_transform = _engage_pose.interpolate_with(board.get_tool_pose(), t)
 		elif tool == current and _state == PLANNING:
-			# Set on the work where the stroke starts (seen in the section inset).
+			# Set on the work where the stroke starts, out of sight until it acts.
 			body.global_transform = board.pose_at(_lock.point, _lock.normal, _lock.along, 0.0)
 		elif tool == current:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
@@ -670,13 +698,6 @@ func _process(delta: float) -> void:
 		if _opacity != target:
 			_opacity = move_toward(_opacity, target, delta / FADE_TIME)
 			_show_tool(current, _opacity)
-	if _state == IDLE:
-		_inset.hide_section()
-	else:
-		# Framed on the tool's edge: where the stroke starts, then wherever the tool is.
-		var focus: Vector3 = board.get_tool_pose().origin if _engaged else _lock.point
-		_inset.show_section(_lock.point, _lock.path, _lock.normal, focus, _plan.get("depth", 1.0), _ui.plan_text(),
-				_engaged, INSET_FRAME.get(current, 14.0))
 	_draw_outline()
 	_ui.update_status()
 
@@ -726,7 +747,7 @@ func _draw_outline() -> void:
 	var n: Vector3
 	var p: Vector3
 	var a: Vector3
-	if _state == PLANNING:
+	if _state == PLANNING or _state == ARMED:
 		n = _lock.normal
 		p = _lock.point + n * 0.0003
 		a = _lock.along

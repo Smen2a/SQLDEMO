@@ -19,9 +19,9 @@ const WARNINGS := {
 	"splits": "along the grain: the wedge splits it",
 }
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
-const HINTS := "Hold right on the board: plan a stroke (wheel: how hard, Shift+wheel: angle, Q / E: skew or " + \
-		"turn, C: chop, Tab: variant), then left-drag: make it\nEsc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, " + \
-		"redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
+		"Hold right first: plan it and see it (wheel: how hard, Shift+wheel: angle), then left-drag: make it\n" + \
+		"Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 
 var workshop
 
@@ -33,8 +33,7 @@ var _undo: Button
 var _redo: Button
 var _wood: OptionButton
 var _status: Label
-var _plan: Label  # beside the pointer: what the stroke being planned comes to
-var _root: Control
+var _plan: Label  # beside the pointer: what the stroke being planned or made comes to
 
 
 func _ready() -> void:
@@ -42,7 +41,6 @@ func _ready() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
-	_root = root
 
 	# Tools and their settings, top left.
 	var left := _panel(root, Vector2(12, 12))
@@ -145,17 +143,8 @@ func _ready() -> void:
 	refresh()
 
 
-## The section inset, on the right under the board's panel.
-func add_inset(inset: Control) -> void:
-	_root.add_child(inset)
-	inset.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	inset.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 12)
-	inset.offset_top = 130
-	_root.move_child(_plan, -1) # the plan's line stays on top
-
-
-## One line on the stroke being planned: the tool, what the wheel has set, how far it goes
-## and what it comes to.
+## One line on the stroke being planned or made: the tool, what the wheel has set, how far
+## it goes and what it comes to.
 func plan_text() -> String:
 	var plan: Dictionary = workshop.get_plan()
 	if plan.is_empty():
@@ -218,9 +207,17 @@ func update_status() -> void:
 	elif line != "" or workshop.is_engaged():
 		pass
 	elif workshop.current != "":
-		line = "hold right on the board to plan a stroke"
+		line = "left-drag: use it   hold right: plan it first"
 	_plan.text = line
-	_plan.position = workshop.get_viewport().get_mouse_position() + Vector2(18, 14)
+	# Below and right of the pointer; left of it where the line would run off the view.
+	var pointer := workshop.get_viewport().get_mouse_position()
+	var at := pointer + Vector2(18, 14)
+	var size := _plan.get_combined_minimum_size()
+	var view := workshop.get_viewport().get_visible_rect().size
+	if at.x + size.x > view.x - 8.0:
+		at.x = maxf(8.0, pointer.x - 18.0 - size.x)
+	at.y = clampf(at.y, 8.0, maxf(8.0, view.y - 8.0 - size.y))
+	_plan.position = at
 	var stats: Dictionary = workshop.board.get_stats()
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid())
 	var state := ""
@@ -234,7 +231,7 @@ func update_status() -> void:
 			Engine.get_frames_per_second()]
 
 
-## A chisel's or gouge's plan: what the wood lets it do.
+## A chisel's, gouge's or spokeshave's plan: what the wood lets it do.
 func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String:
 	var depth: float = plan.get("depth", 0.0)
 	if plan.get("chop", false):
@@ -245,7 +242,8 @@ func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String
 			parts.append("%.0f° to the work" % s.angle)
 		if absf(s.get("skew", 0.0)) > 0.5:
 			parts.append("skewed %.0f°" % s.skew)
-		parts.append("%.0f mm" % plan.get("length", 0.0))
+		if not plan.get("direct", false): # (a direct stroke goes as far as it is dragged)
+			parts.append("%.0f mm" % plan.get("length", 0.0))
 		parts.append("%.0f of %.0f N" % [plan.get("force", 0.0), plan.get("available", 0.0)])
 	var grain: float = plan.get("grain", 0.0)
 	var along := "along the grain" if grain < 0.15 else ("across the grain" if grain < 0.6 else "severing the fibres")

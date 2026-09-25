@@ -470,12 +470,10 @@ Dictionary SdfBody::raycast(const Vector3 &from, const Vector3 &direction, doubl
 
 std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, vec3 n, vec3 a,
 		const Dictionary &settings) const {
-	// These read the body: only while no edit is being applied to it.
+	// (Chisels, gouges and the spokeshave are planned: compute_plan().) The rasp and the
+	// scraper read the body's wood: only while no edit is being applied to it.
 	const tools::Work work{session_.body(), session_.octree(), materials_};
 	const float length = float(double(settings.get("length", 40.0)));
-	if (planned_tool(tool)) {
-		return tools::planned_stroke(plan_for(tool, work, p, n, a, length, settings));
-	}
 	if (tool == "rasp") {
 		return tools::rasp_stroke(rasp_from(settings), work.wood(p - n * 0.5f), p, n, a, length);
 	}
@@ -522,19 +520,31 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 			flush(); // lands the edit and plans again against it
 		}
 		stroke_ = tools::planned_stroke(*cut_plan_); // the plan it was shown
+	} else if (planned_tool(tool)) {
+		// Not planned first: planned now, against the body as it is, and made without a
+		// preview (its report still says what it comes to).
+		flush();
+		plan_request_ = PlanRequest{tool, contact, normal, along, double(settings.get("length", 40.0)), settings.duplicate()};
+		compute_plan();
+		if (cut_plan_) {
+			stroke_ = tools::planned_stroke(*cut_plan_);
+		}
 	} else {
 		if (reads_body(tool)) {
 			flush(); // these read the body
 		}
 		stroke_ = make_stroke(tool, p, n, a, settings);
 	}
+	plan_request_.reset();
+	cut_plan_.reset();
+	if (!planned_.empty()) {
+		planned_.clear(); // the stroke takes the plan's place
+		update_overlay();
+	}
 	if (!stroke_) {
 		return false;
 	}
-	planned_.clear(); // the stroke takes the plan's place
-	plan_request_.reset();
-	cut_plan_.reset();
-	plan_report_ = Dictionary();
+	// plan_report_ stays: what the stroke being made comes to (get_plan()), until clear_plan().
 	// A deferred stroke's work is a layer, which the shader cannot draw: it is applied as it goes.
 	previewing_ = stroke_preview_ && !stroke_->deferred();
 	std::size_t pending = 0;
@@ -653,15 +663,6 @@ void SdfBody::set_opacity(double opacity) {
 	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
 		m->set_shader_parameter("sdf_opacity", float(opacity_));
 	}
-}
-
-void SdfBody::set_section(const Vector3 &point, const Vector3 &normal) {
-	if (normal.length_squared() < 1e-12) {
-		material_->set_shader_parameter("sdf_section", Vector4());
-		return;
-	}
-	const vec3 n = gl::normalize(to_body_direction(normal));
-	material_->set_shader_parameter("sdf_section", Vector4(n.x, n.y, n.z, gl::dot(n, to_body(point))));
 }
 
 void SdfBody::move_stroke(const Vector3 &point) {
@@ -1415,7 +1416,6 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_plan_tint", "tint"), &SdfBody::set_plan_tint);
 	ClassDB::bind_method(D_METHOD("set_opacity", "opacity"), &SdfBody::set_opacity);
 	ClassDB::bind_method(D_METHOD("get_opacity"), &SdfBody::get_opacity);
-	ClassDB::bind_method(D_METHOD("set_section", "point", "normal"), &SdfBody::set_section);
 	ClassDB::bind_method(D_METHOD("move_stroke", "point"), &SdfBody::move_stroke);
 	ClassDB::bind_method(D_METHOD("end_stroke"), &SdfBody::end_stroke);
 	ClassDB::bind_method(D_METHOD("cancel_stroke"), &SdfBody::cancel_stroke);

@@ -1,7 +1,8 @@
 extends "res://tests/harness.gd"
 
-## Uses the workshop as a person would, through its own pointer methods (each stroke
-## planned with the right button held, then made with a left-drag): pares with the chisel,
+## Uses the workshop as a person would, through its own pointer methods (the chisel's and
+## the saw's strokes planned with the right button held, then made with a left-drag; the
+## sanding tools used directly, with a left-drag alone): pares with the chisel,
 ## saws a kerf, sands a patch with the block, rounds an arris over with the sponge, then
 ## undoes the sponge's work; then saws a strip right off the board, watches it come away,
 ## and undoes that to put it back. Prints what each did and, when rendering, saves
@@ -46,7 +47,7 @@ func _ready() -> void:
 	for i in 16:
 		var a := float(i) * 0.9
 		rub.append(_on_top(-0.03 + 0.02 * cos(a), -0.025 + 0.012 * sin(a)))
-	await _stroke("sanding_block", _on_top(-0.03, -0.025), rub, 2)
+	await _stroke("sanding_block", _on_top(-0.03, -0.025), rub, 2, false)
 	var sand_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits
 	await _shot(out, "sand")
 
@@ -54,7 +55,7 @@ func _ready() -> void:
 	var arris: Array[Vector3] = []
 	for i in 8:
 		arris.append(Vector3(0.035 if i % 2 == 0 else -0.035, 0.025, 0.05))
-	await _stroke("sanding_sponge", Vector3(-0.035, 0.025, 0.05), arris, 4)
+	await _stroke("sanding_sponge", Vector3(-0.035, 0.025, 0.05), arris, 4, false)
 	var sponge_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits - sand_edits
 	await _shot(out, "sponge")
 
@@ -124,23 +125,23 @@ func _on_top(x: float, z: float) -> Vector3:
 	return Vector3(x, 0.025, z)
 
 
-## Picks `tool`, engages it at `start`, drags it through `path` (each leg in `steps`
-## pointer moves, a frame apart) and lets go; then waits for the edits to land.
-## Plans a stroke from `start` towards the first point of `path` (right button held), then
-## makes it: a left-drag through `path`, `steps` moves to each point.
-func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int) -> void:
+## Picks `tool` and makes a stroke from `start` through `path` (each leg in `steps` pointer
+## moves, a frame apart), then waits for the edits to land. `planned`: first planned from
+## `start` towards the first point of `path` (right button held); otherwise a left-drag alone.
+func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, planned := true) -> void:
 	workshop.select_tool(tool)
 	await _frames(8) # the last tool flies back to the bench
 	var cam: Camera3D = workshop.camera
 	var at := cam.unproject_position(start)
 	workshop.hover_screen(at)
 	await _frames(2)
-	workshop.lock(at)
-	workshop.aim(cam.unproject_position(path[0]))
-	if not workshop.is_planning():
-		push_error("workshop drive: %s did not plan at %s" % [tool, at])
-		return
-	await _frames(1)
+	if planned:
+		workshop.lock(at)
+		workshop.aim(cam.unproject_position(path[0]))
+		if not workshop.is_planning():
+			push_error("workshop drive: %s did not plan at %s" % [tool, at])
+			return
+		await _frames(1)
 	workshop.press(at)
 	if not workshop.is_engaged():
 		push_error("workshop drive: %s did not engage at %s" % [tool, at])
@@ -156,7 +157,8 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int) -> 
 			workshop.board.flush()
 			await _shot(_out, tool + "_working")
 	workshop.release()
-	workshop.unlock()
+	if planned:
+		workshop.unlock()
 	workshop.board.flush()
 	await _frames(2)
 

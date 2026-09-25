@@ -61,7 +61,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
 | P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
-| T1 | Every stroke planned first: hold the right button to lock it in and see it hatched on the board and side on in a section inset (the board cut open in orthographic views only), the wheel for its intensity; left-drag makes it along the plan. The tool in hand stays out of the main view until it acts, then fades in. Middle-drag orbits |
+| T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 
@@ -96,18 +96,24 @@ Decided with the user:
   locked path.
 - Middle-drag orbits the camera.
 - The tool is hidden while planning, and a cross-section inset shows the cut side on.
+- Afterwards: a left-drag alone must still use any tool, just without the preview; and the
+  inset goes (it did not help).
 - First round: chisels and gouges, then rasps, a card scraper and a spokeshave. Saw
   variants and planes come later.
 
-### T1 — plan, lock, act; the hidden tool; the section inset: done
+### T1 — plan, lock, act; the hidden tool: done
 - `SdfBody.plan_stroke` runs the stroke along the path without making it. Its cut goes
   into the overlay flagged as planned, and the shader hatches it. The wheel sets
   intensity, Shift+wheel the chisel's angle.
-- The tool in hand is on a render layer only the inset draws. It fades in (a dither,
-  `sdf_opacity`) when it acts.
-- The inset: an orthographic camera across the path, with the board sectioned only in
-  orthographic views (`sdf_section`).
-- `game/tests/tool_planning` checks each step.
+- **Direct strokes.** A left-drag without a plan waits for 2 mm of drag to give its
+  direction, then begins. `SdfBody.begin_stroke` plans a chisel's, gouge's or
+  spokeshave's cut there and then (open-ended: 300 mm, as far as the drag goes; about
+  3 ms) without drawing it, and keeps its report for the line by the pointer. The sanding
+  tools and a chop start on the click.
+- The tool in hand is hidden until it acts, then fades in (a dither, `sdf_opacity`).
+- A section inset (an orthographic camera across the path, the board cut open in
+  orthographic views) was tried and removed.
+- `game/tests/tool_planning` checks each step, planned and direct.
 
 ### T2 — the cutting model, chisels and gouges: done
 - **Wood properties** on `Material`: hardness (Janka: ash 1320 lbf, oak 1290, walnut 1010),
@@ -131,7 +137,7 @@ Decided with the user:
     mallet), skew (18 mm);
   - gouges: #3 and #7 (12 mm), #11 veiner (3 mm), V-tool (60°, 6 mm). With the corners
     out of the wood the chip's sides are free; buried, they tear.
-- The HUD and the inset show the force needed against the force available, the grain,
+- The line by the pointer shows the force needed against the force available, the grain,
   and warnings: skates, stalls, tear-out, corners buried, breakout, needs a mallet.
 
 ### T3 — rasps, card scraper, spokeshave: done

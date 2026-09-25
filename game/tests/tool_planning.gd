@@ -3,16 +3,20 @@ extends "res://tests/harness.gd"
 ## Plans strokes with the right button held and makes them with the left, checking each
 ## step against what the wood allows (core tools/cutting.h):
 ## - a bench chisel in the middle of the ash board: the plan (as deep as asked, while a hand
-##   can push it; drawn hatched; the section inset showing) with the chisel kept out of the
-##   main view; the wheel deepening it; tilted below its bevel it skates and plans nothing;
-##   made, it fades in and cuts as deep as planned, and stops at the plan's end;
+##   can push it; drawn hatched) with the chisel out of sight; the wheel deepening it;
+##   tilted below its bevel it skates and plans nothing; made, it fades in and cuts as deep
+##   as planned, and stops at the plan's end;
 ## - uphill, against the grain, the plan says so;
 ## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
 ## - a #7 gouge goes a millimetre deep there, where the chisel could not;
 ## - a spokeshave takes an even 0.1 mm shaving; a rasp worked back and forth takes what its
 ##   plan says, stroke by stroke;
+## - without a plan, a left-drag uses the tool directly: a chisel goes the way it is
+##   dragged, as deep as the wood lets it and no further than the drag, nothing hatched but
+##   the line by the pointer saying what it comes to; a click without a drag does nothing;
+##   held up to chop, a click strikes a blow; the sanding block rubs at once;
 ## - the camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
-## When rendering, saves the main view and the inset while planning (--out=<dir>).
+## When rendering, saves the view while planning (--out=<dir>).
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -43,8 +47,7 @@ func _ready() -> void:
 	_check(plan.get("slope", 0) == 1 and plan.get("grain", 1.0) < 0.1, "along the grain, downhill")
 	_check(plan.get("force", 0.0) > 0.0 and plan.get("available", 0.0) == 200.0, "the force it takes, of a hand's 200 N")
 	_check(workshop.board.get_stats().get("planned_edits", 0) >= 2, "the plan is drawn on the board")
-	_check(chisel.layers == workshop.LAYER_INSET and chisel.opacity == 0.0, "the chisel is kept out of the main view")
-	_check(workshop._inset.visible, "the section inset shows")
+	_check(not chisel.visible and chisel.opacity == 0.0, "the chisel is out of sight")
 	_check(not cam.wheel_zoom, "the wheel is the plan's")
 	_check(workshop._ui.plan_text().contains(" N"), "the line by the pointer tells the force")
 	workshop.adjust(2, false)
@@ -63,14 +66,13 @@ func _ready() -> void:
 	if out != "" and DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
 		DirAccess.make_dir_recursive_absolute(out)
-		get_viewport().get_texture().get_image().save_png(out.path_join("tool_planning_main.png"))
-		workshop._inset._viewport.get_texture().get_image().save_png(out.path_join("tool_planning_inset.png"))
+		get_viewport().get_texture().get_image().save_png(out.path_join("tool_planning.png"))
 
 	# Act: the chisel appears and follows the plan; the right button can come up meanwhile.
 	workshop.press(cam.unproject_position(start))
 	_check(workshop.is_engaged(), "the chisel sets to work")
 	await get_tree().create_timer(0.25).timeout
-	_check(chisel.opacity == 1.0 and (chisel.layers & workshop.LAYER_MAIN) != 0, "the chisel faded into the main view")
+	_check(chisel.opacity == 1.0 and chisel.visible, "the chisel faded in")
 	for k in 12:
 		workshop.drag_screen(cam.unproject_position(start.lerp(end + Vector3(0.02, 0, 0), float(k + 1) / 12.0)))
 		await _frames(1)
@@ -81,8 +83,8 @@ func _ready() -> void:
 			"letting go of the right button drops the plan")
 	workshop.board.flush()
 	await get_tree().create_timer(0.25).timeout
-	_check(chisel.opacity == 0.0 and chisel.layers == workshop.LAYER_INSET, "the chisel faded out of the main view")
-	_check(not workshop._inset.visible and cam.wheel_zoom, "the inset hides and the wheel zooms again")
+	_check(chisel.opacity == 0.0 and not chisel.visible, "the chisel faded out")
+	_check(cam.wheel_zoom, "the wheel zooms again")
 	var middle := _depth_at(Vector3(-0.005, 0.0, 0.0))
 	var beyond := _depth_at(Vector3(0.02, 0.0, 0.0))
 	print("tool planning: chisel planned 0.40 mm, cut %.2f mm; %.2f mm beyond the plan's end" % [middle, beyond])
@@ -164,6 +166,79 @@ func _ready() -> void:
 	var rasped := _depth_at(Vector3(0.04, 0.0, 0.035))
 	print("tool planning: ten rasp strokes took %.3f mm (%.3f a stroke there and back)" % [rasped, per_stroke])
 	_check(absf(rasped - 5.0 * per_stroke) < 0.02, "the rasp took what its plan said, stroke by stroke")
+
+	# Without a plan: a left-drag uses the chisel directly, the way the drag goes.
+	workshop.select_tool("chisel")
+	workshop.set_setting("chisel", "depth", 0.3)
+	await _frames(4)
+	var direct_from := Vector3(-0.07, 0.025, -0.03)
+	var direct_to := Vector3(-0.03, 0.025, -0.03)
+	var steps: int = workshop.board.get_stats().get("steps", 0)
+	workshop.hover_screen(cam.unproject_position(direct_from))
+	await _frames(2)
+	workshop.press(cam.unproject_position(direct_from))
+	workshop.release()
+	await _frames(1)
+	_check(not workshop.is_engaged() and workshop.board.get_stats().get("steps", 0) == steps,
+			"a click without a drag makes nothing")
+	workshop.press(cam.unproject_position(direct_from))
+	workshop.drag_screen(cam.unproject_position(direct_from + Vector3(0.001, 0, 0)))
+	_check(not workshop.is_engaged() and not workshop.is_planning(), "it waits for the drag to show its way")
+	var began := Time.get_ticks_usec()
+	workshop.drag_screen(cam.unproject_position(direct_from + Vector3(0.004, 0, 0)))
+	var begin_ms := (Time.get_ticks_usec() - began) / 1000.0
+	_check(workshop.is_engaged(), "then it sets to work, unplanned")
+	plan = workshop.get_plan()
+	_check(plan.get("direct", false) and absf(plan.get("depth", 0.0) - 0.3) < 0.01,
+			"it says how deep the wood lets it go (%.3f)" % plan.get("depth", 0.0))
+	_check(workshop.board.get_stats().get("planned_edits", 0) == 0, "nothing is hatched")
+	var line: String = workshop._ui.plan_text()
+	_check(line.contains(" N") and not line.contains("300 mm"), "the line by the pointer tells the force: " + line)
+	for k in 10:
+		workshop.drag_screen(cam.unproject_position(direct_from.lerp(direct_to, float(k + 1) / 10.0)))
+		await _frames(1)
+	workshop.release()
+	workshop.board.flush()
+	var direct_cut := _depth_at(Vector3(-0.05, 0.0, -0.03))
+	var past_drag := _depth_at(direct_to + Vector3(0.01, 0, 0))
+	print("tool planning: an unplanned chisel stroke began in %.1f ms, cut %.2f mm; %.2f mm past where the drag ended"
+			% [begin_ms, direct_cut, past_drag])
+	_check(absf(direct_cut - 0.3) < 0.03, "it cut as deep as it said")
+	_check(past_drag < 0.03, "and stopped where the drag did")
+	_check(workshop.board.get_stats().get("steps", 0) == steps + 1 and workshop.get_plan().is_empty(),
+			"one undo step, and nothing left planned")
+
+	# Held up to chop, a click strikes one blow.
+	workshop.set_setting("chisel", "angle", 90.0)
+	var direct_chop := Vector3(0.065, 0.025, 0.005)
+	workshop.hover_screen(cam.unproject_position(direct_chop))
+	await _frames(2)
+	workshop.press(cam.unproject_position(direct_chop))
+	_check(not workshop.is_engaged() and not workshop.is_planning(), "a click chops at once")
+	workshop.board.flush()
+	var deepest := 0.0
+	for offset in [Vector3.ZERO, Vector3(0.0003, 0, 0), Vector3(-0.0003, 0, 0), Vector3(0, 0, 0.0003), Vector3(0, 0, -0.0003)]:
+		deepest = maxf(deepest, _depth_at(direct_chop + offset))
+	print("tool planning: an unplanned chop, the slit %.2f mm deep" % deepest)
+	_check(deepest > 1.0 and workshop.board.get_stats().get("steps", 0) == steps + 2, "one blow, a slit")
+	workshop.set_setting("chisel", "angle", 30.0)
+
+	# The sanding block rubs as soon as it is pressed, wherever it is dragged.
+	workshop.select_tool("sanding_block")
+	await _frames(4)
+	var rub := Vector3(0.0, 0.025, -0.03)
+	workshop.hover_screen(cam.unproject_position(rub))
+	await _frames(2)
+	var edits: int = workshop.board.get_stats().get("edits", 0)
+	workshop.press(cam.unproject_position(rub))
+	_check(workshop.is_engaged(), "the sanding block sets to work at once")
+	for k in 8:
+		workshop.drag_screen(cam.unproject_position(rub + Vector3(0.02 * sin(k), 0, 0.01 * cos(k))))
+		await _frames(1)
+	workshop.release()
+	workshop.board.flush()
+	_check(workshop.board.get_stats().get("steps", 0) == steps + 3 and workshop.board.get_stats().get("edits", 0) > edits,
+			"it rubbed the board")
 
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw

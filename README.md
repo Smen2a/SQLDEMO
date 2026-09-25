@@ -19,40 +19,42 @@ abrasive.
    working on.
 2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,
    the saw's line, the block's face, the sponge's reach.
-3. **Plan the stroke: hold the right button.** The stroke is locked in where you pressed,
-   and runs from there towards the pointer.
-   - The cut it would make shows on the board, hatched in the tool's colour.
-   - A **section inset** on the right shows it side on, the board cut open along the
-     path: the tool's angle, the cut's depth, and the grain through the wood.
-   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the
-     spokeshave's shaving, the saw's feed, the pressure on the rasp, the scraper and the
-     sanding tools). **Shift+wheel** sets a chisel's or gouge's angle to the work (**C**
-     holds it straight up to chop), or tilts the rasp about its line. **Q / E** skew a
-     chisel's edge, or turn the sanding tools.
-   - A line beside the pointer says what the stroke comes to: for a chisel, how deep the
-     wood lets it go, the force it takes of what a hand can give, how it meets the grain,
-     and what will go wrong. For example: *Bench chisel 12 mm 0.48 mm deep (asked 1.00)
-     30° to the work 40 mm 200 of 200 N, along the grain, downhill; only as deep as a
-     hand can push it.*
-4. **Make it: press the left button and drag** (the right can come up once you have).
-   The tool fades in where the stroke starts and follows the plan as far as you take it:
-   - **Chisel, gouge:** pushed along its path, never back and never past its end, as the
-     wood lets it (see *Chisels and gouges* below), and lifted out when you let go.
-     Chopping, each click is a mallet blow.
+3. **Use it: press the left button on the board and drag.** The tool fades in where you
+   pressed and works the way the drag goes, as the wood lets it:
+   - **Chisel, gouge:** pushed along the drag, never back, as deep as the wood lets it
+     (see *Chisels and gouges* below), and lifted out when you let go. Held up to chop
+     (**C**), each click is a mallet blow.
    - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
      kerf by the feed, until it is through the board.
    - **Rasp, card scraper:** back and forth along their line, taking the surface down
      steadily; see *Shaping and finishing* below.
-   - **Spokeshave:** pushed along its path, taking its shaving.
-   - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits
-     and more pressure. Being a flat block, it flattens: high spots and edges go first,
-     and the edges of the patch feather out.
+   - **Spokeshave:** pushed along the drag, taking its shaving.
+   - **Sanding block:** follows the pointer anywhere and takes the surface down wherever it
+     rubs, faster at coarser grits and more pressure. Being a flat block, it flattens: high
+     spots and edges go first, and the edges of the patch feather out.
    - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It rounds over
      the arrises and ridges within its reach (10 mm) and leaves faces and hollows alone.
      Rub along an edge to ease it; the longer you rub, the rounder it gets.
 
-   Let go of the left button to finish: one undo step. Keep holding the right button and
-   the next pass is planned from the same spot.
+   A line beside the pointer says what a chisel's, gouge's or spokeshave's stroke comes
+   to: how deep the wood lets it go, the force it takes of what a hand can give, how it
+   meets the grain, and what goes wrong. Let go of the left button to finish: one undo
+   step.
+4. **Or plan it first: hold the right button.** The stroke is locked in where you pressed,
+   and runs from there towards the pointer. Nothing is cut yet:
+   - The cut it would make shows on the board, hatched in the tool's colour.
+   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the
+     spokeshave's shaving, the saw's feed, the pressure on the rasp, the scraper and the
+     sanding tools). **Shift+wheel** sets a chisel's or gouge's angle to the work, or
+     tilts the rasp about its line. **Q / E** skew a chisel's edge, or turn the sanding
+     tools. (The panel's sliders set the same things at any time.)
+   - The line beside the pointer says what it comes to. For example: *Bench chisel 12 mm
+     0.48 mm deep (asked 1.00) 30° to the work 40 mm 200 of 200 N, along the grain,
+     downhill; only as deep as a hand can push it.*
+
+   Then press the left button and drag (the right can come up once you have): the tool
+   follows the plan as far as you take it, never past its end. Keep holding the right
+   button and the next pass is planned from the same spot.
 
 Other controls:
 - Esc drops the plan or the stroke in progress.
@@ -68,9 +70,9 @@ Other controls:
 
 | | |
 | --- | --- |
-| ![A chisel stroke planned on the ash board: its cut hatched in yellow, the chisel kept out of sight, the line by the pointer and the section inset on the right](docs/images/workshop_planning.png) | ![The section inset: the board cut open along the stroke, the chisel's blade at its angle over the planned ramp and run, the grain through the wood](docs/images/workshop_section.png) |
-| ![The chisel at work, faded in, the inset following its edge](docs/images/workshop_chisel_working.png) | ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) |
-| ![The sanding sponge rubbed along the board's front top arris](docs/images/workshop_sponge_working.png) | ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) |
+| ![A chisel stroke planned on the ash board: its cut hatched in yellow, the chisel kept out of sight, the line by the pointer saying what it comes to](docs/images/workshop_planning.png) | ![The chisel at work, faded in along its cut](docs/images/workshop_chisel_working.png) |
+| ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) | ![The sanding sponge rubbed along the board's front top arris](docs/images/workshop_sponge_working.png) |
+| ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) | |
 
 (Rendered here on software OpenGL, at about a frame a second; the status line reads the
 GPU time on real hardware.)
@@ -81,14 +83,14 @@ GPU time on real hardware.)
   overlay (below) flagged as planned: the shader hatches the surface wherever a planned
   edit's boundary makes it. Acting carries out the same stroke, so what you see planned is
   what you get, as far as you drag it.
-- **Hiding the tool.** The tool in hand is on its own render layer, which the main camera
-  leaves out and the inset's camera draws. When it acts it joins the main view and fades
-  in through a screen-door dither (`sdf_opacity`), which keeps its depth exact.
-- **The section inset** is a `SubViewport` with an orthographic camera looking across the
-  path. The board cuts itself open along the path's plane only in orthographic views
-  (`sdf_section`): the ray starts on the plane, and hits there take the plane's normal and
-  the wood's colour at that depth. Shadow maps are orthographic too, but they are drawn by
-  the caster material, which never gets the section.
+- **Without a plan** the same thing happens at once: a left-drag waits until the pointer
+  has moved 2 mm, takes that as the stroke's direction, and `SdfBody.begin_stroke` plans
+  a chisel's, gouge's or spokeshave's cut there and then (open-ended, as far as the drag
+  goes) without drawing it. So a direct stroke cuts exactly as a planned one would, and
+  its report is what the line by the pointer shows.
+- **Hiding the tool.** The tool in hand is hidden until it acts. Then it fades in through
+  a screen-door dither (`sdf_opacity`), which keeps its depth exact; shadow maps
+  (orthographic) draw it whole.
 - A tool in use is a *stroke* (`native/src/core/tools/`). It turns the tool's motion into
   edits of the same shapes the tool's model is built from, and gives the cut so far merged
   into as few edits as it takes: the chisel's ramp and flat run, the saw's kerf, the

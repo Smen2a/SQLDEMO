@@ -84,7 +84,9 @@ public:
 	//   "saw"              feed: mm deeper per mm of stroke
 	//   "sanding_block", "sanding_sponge"  grit, pressure
 	// The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on the worker
-	// thread too, and applied as it goes: it has no preview. Drops any plan.
+	// thread too, and applied as it goes: it has no preview. Takes the place of any plan;
+	// get_plan() then reports what a chisel's, gouge's or spokeshave's stroke comes to
+	// (planned now if plan_stroke() did not plan it), until clear_plan().
 	bool begin_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
 			const godot::Vector3 &along, const godot::Dictionary &settings);
 	// Plans a stroke without making it: the tool engaged as begin_stroke() would, then moved
@@ -109,10 +111,6 @@ public:
 	// How much of the body is drawn, 0 to 1 (a tool fading in and out): a dither.
 	void set_opacity(double opacity);
 	double get_opacity() const { return opacity_; }
-	// A section for orthographic views only (the workshop's cross-section inset): the body
-	// is drawn cut open along the plane through `point` (world space), keeping the side
-	// away from `normal`. A zero normal removes it.
-	void set_section(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// The tool moved to `point` (world space, on the plane it was engaged on).
 	void move_stroke(const godot::Vector3 &point);
 	void end_stroke();    // finishes the cut and makes it one undo step
