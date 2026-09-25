@@ -52,12 +52,14 @@ func _ready() -> void:
 	body = ClassDB.instantiate("SdfBody")
 	add_child(body)
 
-	# Chisel: pared 1.5 mm deep along the board and off its end, where the lift-out it adds
-	# on release (not previewed: the chisel is still in the wood) cuts nothing.
+	# Chisel: pared along the board (as deep as a hand pushes it through ash) and off its
+	# end, where the lift-out it adds on release (not previewed: the chisel is still in the
+	# wood) cuts nothing.
 	var push: Array[Vector3] = []
 	for i in 65:
 		push.append(Vector3(-44.0 + 2.0 * i, -20.0, TOP))
-	await _check(out, "chisel", Vector3(-45, -20, TOP), Vector3(1, 0, 0), {"width": 12.0, "depth": 1.5}, push, 3)
+	await _check(out, "chisel", Vector3(-45, -20, TOP), Vector3(1, 0, 0),
+			{"variant": "bench_12", "depth": 1.5, "angle": 30.0, "length": 130.0}, push, 3)
 
 	# Saw: across the board, 12 strokes of 30 mm.
 	var strokes: Array[Vector3] = []

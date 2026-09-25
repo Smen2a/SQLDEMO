@@ -1,13 +1,16 @@
 extends "res://tests/harness.gd"
 
-## Plans a chisel stroke with the right button held and makes it with a left-drag, checking
-## each step: the plan (its depth, drawn hatched on the board, the section inset showing)
-## with the tool in hand kept out of the main view; the wheel deepening it and Shift+wheel
-## tilting the chisel; the tool fading in once it acts; the cut it leaves as deep as
-## planned; the next pass planned from the same spot while the right button stays down;
-## everything dropped when it comes up. Then the camera: middle-drag orbits, Shift+middle-
-## drag pans, the right button leaves it alone. When rendering, saves the main view and the
-## inset while planning (--out=<dir>).
+## Plans strokes with the right button held and makes them with the left, checking each
+## step against what the wood allows (core tools/cutting.h):
+## - a bench chisel in the middle of the ash board: the plan (as deep as asked, while a hand
+##   can push it; drawn hatched; the section inset showing) with the chisel kept out of the
+##   main view; the wheel deepening it; tilted below its bevel it skates and plans nothing;
+##   made, it fades in and cuts as deep as planned, and stops at the plan's end;
+## - uphill, against the grain, the plan says so;
+## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
+## - a #7 gouge goes a millimetre deep there, where the chisel could not;
+## - the camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
+## When rendering, saves the main view and the inset while planning (--out=<dir>).
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -25,30 +28,34 @@ func _ready() -> void:
 	var cam: Camera3D = workshop.camera
 	var chisel = workshop.tools["chisel"]
 	workshop.select_tool("chisel")
-	workshop.set_setting("chisel", "depth", 1.0)
+	workshop.set_setting("chisel", "depth", 0.3)
 	await _frames(8)
 
-	# Plan: locked 30 mm in from the left end, pushed 40 mm to the right.
+	# Plan: locked 30 mm in from the left end, pushed 40 mm to the right (downhill).
 	var start := Vector3(-0.03, 0.025, 0.0)
 	var end := Vector3(0.01, 0.025, 0.0)
-	workshop.hover_screen(cam.unproject_position(start))
-	await _frames(2)
-	workshop.lock(cam.unproject_position(start))
-	workshop.aim(cam.unproject_position(end))
-	var plan: Dictionary = workshop.get_plan()
+	var plan := await _plan(start, end)
 	_check(workshop.is_planning(), "a stroke is planned")
-	_check(absf(plan.get("depth", 0.0) - 1.0) < 0.01, "the plan goes 1.0 mm deep (%.3f)" % plan.get("depth", 0.0))
+	_check(absf(plan.get("depth", 0.0) - 0.3) < 0.01, "the plan goes 0.3 mm deep (%.3f)" % plan.get("depth", 0.0))
 	_check(absf(plan.get("length", 0.0) - 40.0) < 2.0, "the plan runs 40 mm (%.1f)" % plan.get("length", 0.0))
+	_check(plan.get("slope", 0) == 1 and plan.get("grain", 1.0) < 0.1, "along the grain, downhill")
+	_check(plan.get("force", 0.0) > 0.0 and plan.get("available", 0.0) == 200.0, "the force it takes, of a hand's 200 N")
 	_check(workshop.board.get_stats().get("planned_edits", 0) >= 2, "the plan is drawn on the board")
 	_check(chisel.layers == workshop.LAYER_INSET and chisel.opacity == 0.0, "the chisel is kept out of the main view")
-	await _frames(1)
 	_check(workshop._inset.visible, "the section inset shows")
 	_check(not cam.wheel_zoom, "the wheel is the plan's")
-	workshop.adjust(3, false)
-	workshop.adjust(2, true)
+	_check(workshop._ui.plan_text().contains(" N"), "the line by the pointer tells the force")
+	workshop.adjust(2, false)
 	plan = workshop.get_plan()
-	_check(absf(plan.get("depth", 0.0) - 1.3) < 0.01, "three notches deepen it to 1.3 mm (%.3f)" % plan.get("depth", 0.0))
-	_check(absf(workshop.settings.chisel.angle - 24.0) < 0.01, "two Shift notches tilt the chisel to 24 degrees")
+	_check(absf(plan.get("depth", 0.0) - 0.4) < 0.01, "two notches deepen it to 0.4 mm (%.3f)" % plan.get("depth", 0.0))
+	workshop.adjust(-10, true)
+	plan = workshop.get_plan()
+	_check("skates" in plan.get("warnings", PackedStringArray()) and plan.get("edits", -1) == 0,
+			"tilted to 20 degrees, below its bevel, it skates")
+	workshop.adjust(10, true)
+	plan = workshop.get_plan()
+	_check(absf(plan.get("depth", 0.0) - 0.4) < 0.01 and plan.get("warnings", PackedStringArray()).is_empty(),
+			"tipped back to 30 degrees it bites")
 	await _frames(3)
 	var out := user_arg("--out", "")
 	if out != "" and DisplayServer.get_name() != "headless":
@@ -74,13 +81,49 @@ func _ready() -> void:
 	await get_tree().create_timer(0.25).timeout
 	_check(chisel.opacity == 0.0 and chisel.layers == workshop.LAYER_INSET, "the chisel faded out of the main view")
 	_check(not workshop._inset.visible and cam.wheel_zoom, "the inset hides and the wheel zooms again")
-
-	# The cut is as deep as planned, and ends where the plan did (the drag went 20 mm further).
 	var middle := _depth_at(Vector3(-0.005, 0.0, 0.0))
 	var beyond := _depth_at(Vector3(0.02, 0.0, 0.0))
-	print("tool planning: planned 1.30 mm, cut %.2f mm; %.2f mm beyond the plan's end" % [middle, beyond])
-	_check(absf(middle - 1.3) < 0.05, "the cut is as deep as planned")
-	_check(beyond < 0.05, "the stroke stopped at the plan's end")
+	print("tool planning: chisel planned 0.40 mm, cut %.2f mm; %.2f mm beyond the plan's end" % [middle, beyond])
+	_check(absf(middle - 0.4) < 0.03, "the cut is as deep as planned")
+	_check(beyond < 0.03, "the stroke stopped at the plan's end")
+
+	# Uphill: pushed the other way along the grain.
+	plan = await _plan(Vector3(0.03, 0.025, 0.025), Vector3(-0.01, 0.025, 0.025))
+	_check(plan.get("slope", 0) == -1, "pushed the other way it goes uphill, against the grain")
+	workshop.unlock()
+
+	# Chop: straight up, a click is a mallet blow.
+	workshop.set_setting("chisel", "angle", 90.0)
+	var chop := Vector3(0.04, 0.025, -0.02)
+	plan = await _plan(chop, chop + Vector3(0.01, 0, 0))
+	_check(workshop.is_chopping() and plan.get("chop", false), "held straight up, it chops")
+	var blow: float = plan.get("blow", 0.0)
+	_check(blow > 2.0 and blow < 3.0, "a blow across the grain goes 2-3 mm (%.2f)" % blow)
+	_check("slit only" in plan.get("warnings", PackedStringArray()), "in the middle of a face, only a slit")
+	workshop.press(cam.unproject_position(chop))
+	_check(workshop.is_planning() and not workshop.is_engaged(), "the blow is struck at once, and the next planned")
+	workshop.unlock()
+	workshop.board.flush()
+	var slit := _depth_at(chop + Vector3(0.0003, 0, 0))
+	print("tool planning: a chop %.2f mm, the slit %.2f mm deep" % [blow, slit])
+	_check(absf(slit - blow) < 0.1, "the slit is as deep as the blow")
+	workshop.set_setting("chisel", "angle", 30.0)
+
+	# A #7 gouge, corners out, a millimetre deep where the chisel stays shallow.
+	workshop.select_tool("gouge")
+	workshop.set_setting("gouge", "depth", 1.0)
+	await _frames(4)
+	plan = await _plan(Vector3(-0.03, 0.025, -0.03), Vector3(0.0, 0.025, -0.03))
+	var gouge_depth: float = plan.get("depth", 0.0)
+	workshop.unlock()
+	workshop.select_tool("chisel")
+	workshop.set_setting("chisel", "depth", 1.0)
+	await _frames(4)
+	plan = await _plan(Vector3(-0.03, 0.025, -0.03), Vector3(0.0, 0.025, -0.03))
+	var chisel_depth: float = plan.get("depth", 0.0)
+	workshop.unlock()
+	print("tool planning: asked 1 mm, the #7 gouge %.2f mm, the bench chisel %.2f mm" % [gouge_depth, chisel_depth])
+	_check(absf(gouge_depth - 1.0) < 0.01 and chisel_depth < 0.6, "the gouge goes deeper than the chisel")
 
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw
@@ -94,6 +137,18 @@ func _ready() -> void:
 	_check(cam.yaw == yaw and cam.target != target, "a Shift+middle-drag pans")
 	print("tool planning: %s" % ("every step as planned" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
+
+
+## Locks a stroke in at `from` and aims it at `to` (world), and waits for its plan.
+func _plan(from: Vector3, to: Vector3) -> Dictionary:
+	var cam: Camera3D = workshop.camera
+	workshop.board.flush()
+	workshop.hover_screen(cam.unproject_position(from))
+	await _frames(2)
+	workshop.lock(cam.unproject_position(from))
+	workshop.aim(cam.unproject_position(to))
+	await _frames(1)
+	return workshop.get_plan()
 
 
 ## The cut's depth (mm) below the board's top face at a point on it (world, y ignored).

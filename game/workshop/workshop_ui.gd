@@ -3,8 +3,21 @@ extends CanvasLayer
 ## The workshop's controls: tools, their settings, the wood, undo / redo / reset, and a
 ## status line (edits, how long the last edit took to apply and upload, GPU frame time).
 
-const TOOL_LABELS := {"chisel": "1  Chisel", "saw": "2  Saw", "sanding_block": "3  Sanding block",
-		"sanding_sponge": "4  Sanding sponge"}
+const TOOL_LABELS := {"chisel": "1  Chisel", "gouge": "2  Gouge", "saw": "3  Saw", "sanding_block": "4  Sanding block",
+		"sanding_sponge": "5  Sanding sponge"}
+## What stands in a planned cut's way (SdfBody.plan_stroke's warnings), in words.
+const WARNINGS := {
+	"skates": "skates on its bevel: tip it past %d°",
+	"shallow": "only as deep as a hand can push it",
+	"tears out": "tears out: against the grain",
+	"corners buried": "corners buried: its sides tear",
+	"breaks out": "breaks out where it leaves the edge",
+	"not struck": "never struck: pushed by hand, it barely goes in",
+	"slit only": "only a slit: chop near an open face, or pare towards it",
+	"pops off": "the chip pops off",
+	"digs in": "dives steeply: digs in",
+	"splits": "along the grain: the wedge splits it",
+}
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Hold right on the board: plan a stroke (wheel: how hard, Shift+wheel: angle, Q / E: turn)   " + \
 		"then left-drag: make it   Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   " + \
@@ -15,6 +28,7 @@ var workshop
 var _tool_buttons := {}
 var _settings_boxes := {}
 var _sliders := {}  # "tool/key" -> [slider, its value label, format]: what the wheel also sets
+var _variants := {} # family -> its variant OptionButton
 var _undo: Button
 var _redo: Button
 var _wood: OptionButton
@@ -40,12 +54,19 @@ func _ready() -> void:
 		b.toggle_mode = true
 		b.button_group = group
 		_tool_buttons[tool] = b
-	var chisel := VBoxContainer.new()
-	left.add_child(chisel)
-	_choice(chisel, "Width", ["6 mm", "12 mm", "25 mm"], 1,
-			func(i): workshop.set_setting("chisel", "width", [6.0, 12.0, 25.0][i]))
-	_slider(chisel, "chisel", "depth", "Depth", "%.1f mm")
-	_slider(chisel, "chisel", "angle", "Angle", "%.0f°")
+	var edge_boxes := {}
+	for family in ["chisel", "gouge"]:
+		var box := VBoxContainer.new()
+		left.add_child(box)
+		var labels: Array = []
+		for v in workshop.variants.get(family, []):
+			labels.append(v.label)
+		_variants[family] = _choice(box, "Kind", labels, 0, func(i):
+			workshop.set_setting(family, "variant", workshop.variants[family][i].id))
+		_slider(box, family, "depth", "Depth", "%.2f mm")
+		_slider(box, family, "angle", "Angle", "%.0f°")
+		edge_boxes[family] = box
+	var chisel: VBoxContainer = edge_boxes.chisel
 	var saw := VBoxContainer.new()
 	left.add_child(saw)
 	_slider(saw, "saw", "feed", "Feed", "%.3f mm per mm")
@@ -59,7 +80,8 @@ func _ready() -> void:
 	_choice(sponge, "Grit", ["60", "120", "220"], 1,
 			func(i): workshop.set_setting("sanding_sponge", "grit", [60, 120, 220][i]))
 	_slider(sponge, "sanding_sponge", "pressure", "Pressure", "%.2f")
-	_settings_boxes = {"chisel": chisel, "saw": saw, "sanding_block": block, "sanding_sponge": sponge}
+	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "sanding_block": block,
+			"sanding_sponge": sponge}
 
 	# The board, top right.
 	var right := _panel(root, Vector2.ZERO)
@@ -125,7 +147,10 @@ func plan_text() -> String:
 		return ""
 	var tool: String = workshop.current
 	var s: Dictionary = workshop.settings[tool]
-	var parts: Array[String] = [TOOL_LABELS[tool].substr(3)]
+	var named: Dictionary = workshop.variant()
+	var parts: Array[String] = [named.label if not named.is_empty() else TOOL_LABELS[tool].substr(3)]
+	if tool == "chisel" or tool == "gouge":
+		return _edge_text(plan, s, parts)
 	var intensity = workshop.INTENSITY.get(tool)
 	if intensity != null:
 		parts.append(intensity[4] % s[intensity[0]])
@@ -151,6 +176,11 @@ func refresh() -> void:
 	for tool in _tool_buttons:
 		_tool_buttons[tool].set_pressed_no_signal(tool == workshop.current)
 		_settings_boxes[tool].visible = tool == workshop.current
+	for family in _variants:
+		var list: Array = workshop.variants.get(family, [])
+		for i in list.size():
+			if list[i].id == workshop.settings[family].variant:
+				_variants[family].select(i)
 	# The wheel sets these too, while a stroke is planned.
 	for id in _sliders:
 		var parts: PackedStringArray = id.split("/")
@@ -167,7 +197,7 @@ func update_status() -> void:
 	# Beside the pointer: the plan, or how to make one.
 	var line := plan_text()
 	if workshop.is_planning():
-		line += "\nleft-drag: make it"
+		line += "\nclick: strike it" if workshop.is_chopping() else "\nleft-drag: make it"
 	elif line != "" or workshop.is_engaged():
 		pass
 	elif workshop.current != "":
@@ -185,6 +215,34 @@ func update_status() -> void:
 			stats.get("edits", 0), stats.get("steps", 0), stats.get("update_ms", 0.0),
 			str(stats.get("sampler", "cpu")).to_upper(), stats.get("upload_ms", 0.0), state, gpu,
 			Engine.get_frames_per_second()]
+
+
+## A chisel's or gouge's plan: what the wood lets it do.
+func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String:
+	var depth: float = plan.get("depth", 0.0)
+	if plan.get("chop", false):
+		parts.append("chopping: this blow %.1f mm, the slit %.1f mm deep" % [plan.get("blow", 0.0), depth])
+	else:
+		parts.append("%.2f mm deep (asked %.2f)" % [depth, s.depth])
+		parts.append("%.0f° to the work" % s.angle)
+		if absf(s.skew) > 0.5:
+			parts.append("skewed %.0f°" % s.skew)
+		parts.append("%.0f mm" % plan.get("length", 0.0))
+		parts.append("%.0f of %.0f N" % [plan.get("force", 0.0), plan.get("available", 0.0)])
+	var grain: float = plan.get("grain", 0.0)
+	var along := "along the grain" if grain < 0.15 else ("across the grain" if grain < 0.6 else "severing the fibres")
+	var slope: int = plan.get("slope", 0)
+	if slope > 0:
+		along += ", downhill"
+	elif slope < 0:
+		along += ", uphill"
+	var lines: Array[String] = ["   ".join(parts), along]
+	for w in plan.get("warnings", PackedStringArray()):
+		var text: String = WARNINGS.get(w, w)
+		if w == "skates":
+			text = text % int(workshop.variant().get("bevel", 25.0) + 2.0)
+		lines.append("! " + text)
+	return "\n".join(lines)
 
 
 func _panel(parent: Control, at: Vector2) -> VBoxContainer:
@@ -214,7 +272,7 @@ func _button(parent: Control, text: String, pressed: Callable) -> Button:
 	return b
 
 
-func _choice(parent: Control, label: String, items: Array, selected: int, chosen: Callable) -> void:
+func _choice(parent: Control, label: String, items: Array, selected: int, chosen: Callable) -> OptionButton:
 	var row := HBoxContainer.new()
 	parent.add_child(row)
 	var caption := Label.new()
@@ -228,6 +286,7 @@ func _choice(parent: Control, label: String, items: Array, selected: int, chosen
 	option.select(selected)
 	option.item_selected.connect(chosen)
 	row.add_child(option)
+	return option
 
 
 ## A slider for one of a tool's settings, over the range the wheel sets it in while

@@ -375,7 +375,7 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 		const vec3 at = start + t * s;
 		const float probe = std::max(std::max(d, 0.1f), std::min(depth, d + dive * ds));
 		const bool in_wood = work.field(at - n * (0.5f * probe)) < 0.0f;
-		float target = depth;
+		float target = d; // in the air (off the work, over a cut) it holds its depth
 		if (in_wood) {
 			int sides = attached_sides(work, at, n, b, p.width, probe);
 			if (chisel.kind != gl::SDF_TOOL_FLAT && probe <= corners) {
@@ -386,6 +386,10 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 			p.force = std::max(p.force, force(std::min(target, std::min(depth, d + dive * ds)), sides));
 		} else if (exit < 0.0f && d > 0.0f) {
 			exit = s; // the edge has left the work
+		}
+		if (d < target && d + dive * ds > target) {
+			// It levels between samples: exactly where, so the ramp stays one straight piece.
+			p.floor.push_back({s - ds + (target - d) / dive, target});
 		}
 		d = std::min(target, d + dive * ds);
 		p.floor.push_back({s, d});

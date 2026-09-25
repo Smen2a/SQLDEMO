@@ -14,7 +14,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 - As-built details stay in the [README](../README.md) and the commit messages.
 - **Pieces** is under way: P1 (saw through) is done. P2 (islands left by any cut) waits
   on **Tools** (below), which makes the tools behave like their real selves and every
-  stroke planned before it is made: T1 is done, T2 is next.
+  stroke planned before it is made: T1 and T2 are done, T3 is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -62,6 +62,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
 | P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
 | T1 | Every stroke planned first: hold the right button to lock it in and see it hatched on the board and side on in a section inset (the board cut open in orthographic views only), the wheel for its intensity; left-drag makes it along the plan. The tool in hand stays out of the main view until it acts, then fades in. Middle-drag orbits |
+| T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -84,7 +85,7 @@ path needs compute passes.
 | 7 | **Forging**: hot metal deformed by blows | E7 | sampled base grid |
 | 8 | **Scale**: 2 m stone, 100k edits | E8, O3 | everything |
 
-## T. Tools — plan, lock, act; cutting by the wood (current: T1 done, T2 next)
+## T. Tools — plan, lock, act; cutting by the wood (current: T1 and T2 done, T3 next)
 
 **Why.** The tools cut like SDF cutters, not like hand tools: the chisel ramps in to
 whatever depth is set, anywhere, whatever the wood. A stroke starts the moment the button
@@ -107,7 +108,7 @@ Decided with the user:
   orthographic views (`sdf_section`).
 - `game/tests/tool_planning` checks each step.
 
-### T2 — the cutting model, chisels and gouges (next)
+### T2 — the cutting model, chisels and gouges: done
 - **Wood properties** on `Material`: hardness (Janka: ash 1320 lbf, oak 1290, walnut 1010),
   how readily it splits, how readily it tears out, and grain runout.
 - **Fibre direction** from the body's grain, tilted by a smooth runout tied to the ring

@@ -9,12 +9,13 @@ mode. The full design is in the approved plan; this README covers what exists to
 ## The workshop
 
 Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). A board lies on a
-bench with four hand tools beside it: a chisel, a back saw, a sanding block and a sanding
-sponge. Every one is an SDF body, built by the engine in steel, brass, ash, walnut, cork
-and abrasive.
+bench with hand tools beside it: a chisel and a carving gouge (each in several kinds), a
+back saw, a sanding block and a sanding sponge. Every one is an SDF body, built by the
+engine in steel, brass, ash, walnut, cork and abrasive.
 
-1. **Pick up a tool.** Click it on the bench, or press 1 to 4. It stays out of sight while
-   you aim, so it never hides the spot you are working on.
+1. **Pick up a tool.** Click it on the bench, or press 1 to 5; Tab (or the panel) picks
+   its kind. It stays out of sight while you aim, so it never hides the spot you are
+   working on.
 2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,
    the saw's line, the block's face, the sponge's reach.
 3. **Plan the stroke: hold the right button.** The stroke is locked in where you pressed,
@@ -22,15 +23,20 @@ and abrasive.
    - The cut it would make shows on the board, hatched in the tool's colour.
    - A **section inset** on the right shows it side on, the board cut open along the
      path: the tool's angle, the cut's depth, and the grain through the wood.
-   - The **wheel** sets how hard the tool works (the chisel's depth, the saw's feed, the
-     sanding tools' pressure). **Shift+wheel** sets the chisel's angle to the work;
-     **Q / E** turn the sanding tools.
-   - A line beside the pointer sums it up: for example, *Chisel 1.3 mm deep 24° to the
-     work 40 mm*.
+   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the saw's
+     feed, the sanding tools' pressure). **Shift+wheel** sets a chisel's or gouge's angle
+     to the work, and **C** holds it straight up to chop. **Q / E** skew a chisel's edge,
+     or turn the sanding tools.
+   - A line beside the pointer says what the stroke comes to: for a chisel, how deep the
+     wood lets it go, the force it takes of what a hand can give, how it meets the grain,
+     and what will go wrong. For example: *Bench chisel 12 mm 0.48 mm deep (asked 1.00)
+     30° to the work 40 mm 200 of 200 N, along the grain, downhill; only as deep as a
+     hand can push it.*
 4. **Make it: press the left button and drag** (the right can come up once you have).
    The tool fades in where the stroke starts and follows the plan as far as you take it:
-   - **Chisel:** pushed along its path, never back and never past its end. It ramps in at
-     its angle to its depth and lifts out when you let go.
+   - **Chisel, gouge:** pushed along its path, never back and never past its end, as the
+     wood lets it (see *Chisels and gouges* below), and lifted out when you let go.
+     Chopping, each click is a mallet blow.
    - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
      kerf by the feed, until it is through the board.
    - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits
@@ -210,6 +216,76 @@ grid (0.25 mm) and evolved by curvature flow.
 The "sanded" demo (`sdf_render sanded`, `load_demo("sanded")`): a sharp walnut block
 with a chisel groove, sanded by two sponge strokes, one layer each. It is part of the
 GPU/CPU parity set.
+
+### Chisels and gouges cut as the wood lets them
+
+A chisel is not a free cutter. How deep it goes depends on the force behind it, how it
+meets the grain and whether the chip has somewhere to go. The workshop's chisels and
+gouges follow the real tools (researched from woodworking references: see
+[docs/PLAN.md](docs/PLAN.md), "Tools"). Every plan works this out against the board
+before the stroke is made (`native/src/core/tools/cutting.h`), and the line by the
+pointer says what it comes to.
+
+- **Force.** A chip costs force in proportion to its cross-section, the wood's Janka
+  hardness (ash 1320 lbf, oak 1290, walnut 1010) and how the edge meets the fibres:
+  - least cutting along them;
+  - about 1.8 times that across them;
+  - 4.5 times severing them (end grain, or chopping across the grain).
+
+  Each side of the chip still attached to the work adds a strip of shear. A hand pushes
+  about 200 N, less on a flexible paring chisel. Where that is not enough, the cut stays
+  shallower, and the plan shows exactly how shallow.
+- **Clearance.** Held bevel down, an edge bites only when tipped at least 2° past its bevel.
+  Held flatter in the middle of a face, it rides on the bevel and *skates*: nothing is cut.
+  Tipped past, it dives at the difference until it levels at its depth. Diving steeply, it
+  digs in. From an open face (the end of the board, an existing cut) the chip is free in
+  front, and the cut goes in at full depth at once.
+- **Grain.** The board's fibres rise out of its top face towards +x, as its figure shows.
+  Pared that way (downhill) the split running ahead of the edge runs out to the surface,
+  and the cut is clean. Pared the other way (uphill) it follows the fibres down, and tears
+  out below the cut. Across the grain out of an edge, the unsupported fibres break away.
+  Tear-out is seeded, so the plan and the stroke tear the same.
+- **Gouges** keep their corners out of the wood, so the chip's sides are free: a #7 goes a
+  millimetre deep in the middle of a face, where a flat chisel of its width stays at half
+  that. Deeper than its sweep, a gouge's corners bury and its sides tear. A V-tool cutting
+  across the grain tears on its uphill wing.
+- **Chopping.** Press C, or tip the chisel past 60°. Each click is one mallet blow.
+  - The blow drives a thin slit, 2.5 mm across the grain in oak for a 12 mm bench chisel.
+    Along the grain it goes further and splits the wood. Each blow goes less far than the
+    last.
+  - It hollows nothing out. Within reach of an open face on its bevel side, the chip
+    between pops off along the grain: chop near an edge, or chop a line and pare towards it.
+  - A paring chisel is never struck: pushed by hand, it barely goes in.
+- **Skew.** Q / E turn a chisel's edge across its push, and a skewed edge slices for less
+  force.
+
+The variants (Tab cycles them; the panel lists them):
+
+| Tool | Bevel | Force | Mallet | For |
+| --- | --- | --- | --- | --- |
+| Bench chisel 6, 12, 25 mm | 25–27° | 200 N | a bench chisel's blows | paring and light chopping |
+| Paring chisel 25 mm | 20° | 160 N (it flexes) | never struck | fine paring |
+| Mortise chisel 8 mm | 32° | 200 N | 1.5× a bench chisel's | chopping deep |
+| Skew chisel 18 mm | 25°, edge at 30° | 200 N | light | slicing, into corners |
+| Gouge #3 and #7, 12 mm | 22° | 180 N | light | smoothing (#3), scooping (#7) |
+| Veiner #11 3 mm; V-tool 60° 6 mm | 22° | 180 N | light | lines and grooves |
+
+`native/tests/test_cutting.cpp` holds the calibration (12 mm bench chisel by hand unless
+noted):
+
+| Case | Result |
+| --- | --- |
+| Ash, from the end, along the grain | 0.48 mm deep (1 mm asked) |
+| Ash, from the side, across the grain | 0.25 mm |
+| Walnut, from the end, along the grain | 0.61 mm |
+| Middle of the face, held at 20° (bevel 27°) | skates: nothing |
+| The same, tipped to 33° | dives at 6°, levels at 0.3 mm as asked |
+| #7 gouge vs the chisel, mid-face, 1 mm asked | 1.00 mm vs 0.48 mm |
+| Skewed 30°, 0.2 mm | 58 N instead of 83 |
+| Oak, chop across the grain | 2.52 mm; the next blow 1.72 more |
+| Oak, chop along the grain | 6.2 mm, and it splits |
+| Mortise chisel 8 mm vs a bench chisel of 8 mm | 1.5× per blow |
+| Paring chisel, chopped | 0.02 mm: never struck |
 
 ### Pieces: sawn through, the board comes apart
 

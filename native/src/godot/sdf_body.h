@@ -6,6 +6,7 @@
 #include "eval/reference_renderer.h"
 #include "godot/gpu_sampler.h"
 #include "pieces/pieces.h"
+#include "tools/cutting.h"
 #include "tools/tools.h"
 
 #include <godot_cpp/classes/image_texture.hpp>
@@ -69,11 +70,17 @@ public:
 	godot::Dictionary raycast(const godot::Vector3 &from, const godot::Vector3 &direction, double max_distance);
 
 	// Engages a tool at `contact` (world space, on this body's surface) with the surface
-	// `normal` there and the tool facing `along`. tool: "chisel" (settings: width, depth mm,
-	// angle: degrees between blade and work), "saw" (feed: mm deeper per mm of stroke),
-	// "sanding_block" (grit, pressure) or "sanding_sponge" (grit, pressure). The sponge's
-	// work (a smoothing layer, see core tools/smoothing.h) is done on the worker thread too,
-	// and applied as it goes: it has no preview. Drops any plan.
+	// `normal` there and the tool facing `along`. tool:
+	//   "chisel", "gouge"  settings: variant (core tools/catalog.h: "bench_12", "gouge_7_12"...),
+	//                      depth (mm, at most), angle (degrees between blade and work; 60 or
+	//                      more chops), skew (degrees the hand turns the edge), length (mm of
+	//                      path), seed. The stroke makes the plan the cutting model works out
+	//                      against this body (core tools/cutting.h): plan_stroke()'s, if it
+	//                      was this one.
+	//   "saw"              feed: mm deeper per mm of stroke
+	//   "sanding_block", "sanding_sponge"  grit, pressure
+	// The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on the worker
+	// thread too, and applied as it goes: it has no preview. Drops any plan.
 	bool begin_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
 			const godot::Vector3 &along, const godot::Dictionary &settings);
 	// Plans a stroke without making it: the tool engaged as begin_stroke() would, then moved
@@ -81,10 +88,19 @@ public:
 	// pushed that far and lifted out; the block rubbed that far). The cut it would make is
 	// drawn by the shader, hatched in the plan tint, until clear_plan() or begin_stroke().
 	// Returns {"edits": how many, "depth": mm it reaches, "length": mm}; the sponge's work
-	// is a layer, which is not drawn (edits 0).
+	// is a layer, which is not drawn (edits 0). A chisel's or gouge's plan (the cutting
+	// model's) adds {"force", "available" (N), "grain" (0 along the fibres .. 1 severing
+	// them), "slope" (+1 with the grain, -1 against), "warnings" (names: "skates", "shallow",
+	// "tears out", ...), "chop", "blow" (mm this blow goes)}. It reads the body, so while an
+	// edit is being applied it answers with the last plan ({..., "stale": true}) and plans
+	// again once the edit lands (get_plan()).
 	godot::Dictionary plan_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
 			const godot::Vector3 &along, double length, const godot::Dictionary &settings);
+	godot::Dictionary get_plan() const { return plan_report_; } // the current plan's report
 	void clear_plan();
+	// The chisels and gouges there are (core tools/catalog.h): [{id, family ("chisel" or
+	// "gouge"), label, width, bevel, mallet}].
+	static godot::Array tool_catalog();
 	void set_plan_tint(const godot::Color &tint); // colour, and alpha: how strongly
 	// How much of the body is drawn, 0 to 1 (a tool fading in and out): a dither.
 	void set_opacity(double opacity);
@@ -222,6 +238,19 @@ private:
 
 	std::shared_ptr<tools::Stroke> stroke_; // the tool in use, if any (queued work may share it)
 	std::vector<Edit> planned_;             // a planned stroke's cut (drawn hatched), if any
+	// The stroke being planned (plan_stroke's arguments), its chisel or gouge plan, and the
+	// report; stale when it was asked for while an edit was being applied.
+	struct PlanRequest {
+		godot::String tool;
+		godot::Vector3 contact, normal, along;
+		double length = 0.0;
+		godot::Dictionary settings;
+	};
+	std::optional<PlanRequest> plan_request_;
+	std::optional<tools::CutPlan> cut_plan_;
+	godot::Dictionary plan_report_;
+	bool plan_stale_ = false;
+	godot::Dictionary compute_plan();
 	double opacity_ = 1.0;
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed

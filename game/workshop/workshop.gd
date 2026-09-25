@@ -1,18 +1,28 @@
 extends Node3D
 
-## The workshop: a board on a bench and four hand tools, every one an SDF body. Pick a
-## tool (click it on the bench, or 1 to 4) and point at the board: its footprint shows
-## where it would go. Every stroke is planned, then made:
+## The workshop: a board on a bench and five hand tools, every one an SDF body. Pick a
+## tool (click it on the bench, or 1 to 5; Tab for its variants) and point at the board:
+## its footprint shows where it would go. Every stroke is planned, then made:
 ##   plan  hold the right button on the board: the stroke is locked in there, and runs
 ##         towards the pointer. Its cut shows on the board, hatched, and in the section
-##         inset (bottom right) cut open along it. The wheel sets how hard it works (the
-##         chisel's depth, the saw's feed, the sanding tools' pressure); Shift+wheel the
-##         chisel's angle; Q / E turn the sanding tools.
+##         inset (on the right) cut open along it, and a line by the pointer says what it
+##         comes to: how deep the wood lets it go, the force it takes, the grain, and what
+##         will go wrong. The wheel sets how hard it works (a chisel's or gouge's depth, the
+##         saw's feed, the sanding tools' pressure); Shift+wheel the chisel's or gouge's
+##         angle to the work (C: straight up, to chop); Q / E skew a chisel's edge, or turn
+##         the sanding tools.
 ##   act   press the left button (still holding the right) and drag: the tool appears and
 ##         follows the plan as far as you take it. Let go of the left button to finish:
 ##         one undo step. Keep holding the right to plan the next pass from the same spot.
-## The tools:
-##   chisel          pares along its path, ramping in at its angle to its depth
+## The tools cut as the wood lets them (core tools/cutting.h):
+##   chisel          pares along its path, as deep as a hand can push it in this wood and
+##                   grain. From an edge or a cut it goes in at once; in the middle of a
+##                   face it has to be tipped past its bevel, and dives. Against the grain it
+##                   tears out. Chopped (C, then a click for each mallet blow) it drives a
+##                   slit, and near an open face pops the chip off. Variants: bench chisels,
+##                   a paring chisel (never struck), a mortise chisel, a skew chisel
+##   gouge           a carving gouge (#3, #7), a veiner or a V-tool: with its corners out of
+##                   the wood it goes deeper, anywhere, than a chisel
 ##   saw             stroke it back and forth along its line: the kerf deepens as it goes
 ##   sanding block   takes the surface down wherever it rubs, flat
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
@@ -43,31 +53,37 @@ enum { IDLE, PLANNING, ACTING }
 
 ## Per tool, what the wheel sets while planning: [setting, step, lowest, highest, format].
 const INTENSITY := {
-	"chisel": ["depth", 0.1, 0.1, 3.0, "%.1f mm deep"],
+	"chisel": ["depth", 0.05, 0.05, 3.0, "%.2f mm deep"],
+	"gouge": ["depth", 0.05, 0.05, 4.0, "%.2f mm deep"],
 	"saw": ["feed", 0.005, 0.005, 0.1, "feed %.3f mm per mm"],
 	"sanding_block": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_sponge": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 }
-## And what Shift+wheel sets (the chisel's angle to the work).
+## And what Shift+wheel sets (a chisel's or gouge's angle to the work: 60 or more chops).
 const TILT := {
-	"chisel": ["angle", 2.0, 6.0, 60.0, "%.0f° to the work"],
+	"chisel": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
+	"gouge": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
 }
+const CHOP_ANGLE := 60.0
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
-const DEFAULT_LENGTH := {"chisel": 20.0, "saw": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
+const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
 
-const TOOL_NAMES: Array[String] = ["chisel", "saw", "sanding_block", "sanding_sponge"]
+const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "sanding_block", "sanding_sponge"]
 const TOOL_COLOURS := {
 	"chisel": Color(1.0, 0.82, 0.25),
+	"gouge": Color(1.0, 0.58, 0.2),
 	"saw": Color(0.4, 0.85, 1.0),
 	"sanding_block": Color(0.6, 1.0, 0.45),
 	"sanding_sponge": Color(1.0, 0.55, 0.8),
 }
 const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
-## Per tool: chisel width and depth (mm) and angle to the work (degrees); saw feed (mm
-## deeper per mm of stroke); grit and pressure (1: an ordinary hand's worth).
+## Per tool: a chisel's or gouge's variant (SdfBody.tool_catalog()), depth (mm, at most),
+## angle to the work and skew (degrees); saw feed (mm deeper per mm of stroke); grit and
+## pressure (1: an ordinary hand's worth).
 var settings := {
-	"chisel": {"width": 12.0, "depth": 1.0, "angle": 20.0},
+	"chisel": {"variant": "bench_12", "depth": 0.5, "angle": 30.0, "skew": 0.0},
+	"gouge": {"variant": "gouge_7_12", "depth": 1.0, "angle": 30.0, "skew": 0.0},
 	"saw": {"feed": 0.03},
 	"sanding_block": {"grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
@@ -93,6 +109,8 @@ var _right_held := false
 ## tool's facing), "path" (unit, the direction it works in), "length" (mm)}.
 var _lock := {}
 var _plan := {}           # what SdfBody.plan_stroke made of it
+## The chisels and gouges (SdfBody.tool_catalog()): family -> [{id, label, width, ...}].
+var variants := {}
 var _progress := 0.0      # mm a push tool has gone along its path
 var _opacity := 0.0       # of the tool in hand, in the main view
 var _plane := Plane()
@@ -112,6 +130,10 @@ func _ready() -> void:
 	_build_world()
 	board = _new_body()
 	board.load_demo(wood)
+	for v in board.tool_catalog():
+		if not variants.has(v.family):
+			variants[v.family] = []
+		variants[v.family].append(v)
 	board.edited.connect(func(_stats): _ui.refresh())
 	board.separated.connect(_on_separated, CONNECT_DEFERRED)
 	for tool in TOOL_NAMES:
@@ -216,8 +238,9 @@ func lock(position: Vector2) -> void:
 		return
 	var normal: Vector3 = _hit.normal
 	var facing := _along(normal)
+	# The seed makes a plan's chips (tear-out) the same as the stroke's.
 	_lock = {"point": _hit.position, "normal": normal, "plane": Plane(normal, _hit.position), "along": facing,
-			"path": facing, "length": DEFAULT_LENGTH[current]}
+			"path": facing, "length": DEFAULT_LENGTH[current], "seed": randi() % 100000}
 	_state = PLANNING
 	camera.wheel_zoom = false
 	aim(position)
@@ -239,8 +262,8 @@ func aim(position: Vector2) -> void:
 	if d.length() < 3.0 * MM:
 		return
 	_lock.path = d.normalized()
-	# The chisel and the saw face the way they work; the sanding tools can be turned (Q / E).
-	_lock.along = _lock.path if current == "chisel" or current == "saw" else _lock.path.rotated(n, yaw)
+	# Edge tools and the saw face the way they work; the sanding tools can be turned (Q / E).
+	_lock.along = _lock.path if _faces_its_path() else _lock.path.rotated(n, yaw)
 	_lock.length = clampf(d.length() / MM, 3.0, 400.0)
 	_replan()
 
@@ -279,7 +302,8 @@ func press(position: Vector2) -> void:
 		select_tool(picked)
 
 
-## The planned stroke begins: the tool appears where it was set, and drags carry it on.
+## The planned stroke begins: the tool appears where it was set, and drags carry it on. A
+## chop is one mallet blow, made at once.
 func act() -> void:
 	if _state != PLANNING:
 		return
@@ -287,9 +311,12 @@ func act() -> void:
 	_engage_time = Time.get_ticks_msec() / 1000.0
 	_plane = _lock.plane
 	_progress = 0.0
-	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, settings[current])
+	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, _stroke_settings())
 	if _engaged:
 		_state = ACTING
+		if is_chopping():
+			board.move_stroke(_lock.point)
+			release()
 
 
 ## Pointer motion while acting: a push tool (the chisel) goes on along its path as far as
@@ -305,7 +332,7 @@ func drag_screen(position: Vector2) -> void:
 	var start: Vector3 = _lock.point
 	var path: Vector3 = _lock.path
 	match current:
-		"chisel":
+		"chisel", "gouge":
 			_progress = clampf((point - start).dot(path) / MM, _progress, _lock.length)
 			board.move_stroke(start + path * (_progress * MM))
 		"saw":
@@ -341,6 +368,42 @@ func is_planning() -> bool:
 	return _state == PLANNING
 
 
+## Whether the tool in hand is held up to chop (a chisel or gouge at 60 degrees or more).
+func is_chopping() -> bool:
+	return (current == "chisel" or current == "gouge") and settings[current].angle >= CHOP_ANGLE
+
+
+## The variant of the tool in hand (SdfBody.tool_catalog()'s entry), or {}.
+func variant() -> Dictionary:
+	if not variants.has(current):
+		return {}
+	for v in variants[current]:
+		if v.id == settings[current].variant:
+			return v
+	return {}
+
+
+## The next of the tool in hand's variants (Tab).
+func next_variant() -> void:
+	if not variants.has(current):
+		return
+	var list: Array = variants[current]
+	var at := list.find(variant())
+	set_setting(current, "variant", list[(at + 1) % list.size()].id)
+
+
+func _faces_its_path() -> bool:
+	return current == "chisel" or current == "gouge" or current == "saw"
+
+
+## A stroke's settings: the tool's, with the plan's length and seed.
+func _stroke_settings() -> Dictionary:
+	var s: Dictionary = settings[current].duplicate()
+	s["length"] = _lock.length
+	s["seed"] = _lock.seed
+	return s
+
+
 ## What the plan came to (SdfBody.plan_stroke), with the lock: {} when nothing is planned.
 func get_plan() -> Dictionary:
 	if _state == IDLE:
@@ -351,7 +414,7 @@ func get_plan() -> Dictionary:
 
 
 func _replan() -> void:
-	_plan = board.plan_stroke(current, _lock.point, _lock.normal, _lock.along, _lock.length, settings[current])
+	_plan = board.plan_stroke(current, _lock.point, _lock.normal, _lock.along, _lock.length, _stroke_settings())
 	board.set_plan_tint(Color(TOOL_COLOURS[current], 0.55))
 	_ui.refresh()
 
@@ -483,8 +546,9 @@ func reset_board() -> void:
 
 func set_setting(tool: String, key: String, value) -> void:
 	settings[tool][key] = value
-	# The chisel's model has its width and angle; the others' look does not change.
-	if tool == "chisel" and (key == "width" or key == "angle"):
+	# A chisel's or gouge's model is its variant, held at its angle; the others' look does
+	# not change.
+	if (tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle"):
 		tools[tool].load_tool(tool, settings[tool])
 		if tool == current:
 			_show_tool(tool, _opacity)
@@ -526,15 +590,24 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
-			KEY_1, KEY_2, KEY_3, KEY_4:
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 				select_tool(TOOL_NAMES[key.keycode - KEY_1])
+			KEY_TAB:
+				next_variant()
+			KEY_C:
+				if current == "chisel" or current == "gouge":
+					set_setting(current, "angle", 30.0 if is_chopping() else 90.0)
 			KEY_Q, KEY_E:
-				yaw += deg_to_rad(15.0 if key.keycode == KEY_Q else -15.0)
-				if _state == PLANNING:
-					var n: Vector3 = _lock.normal
-					if current != "chisel" and current != "saw":
-						_lock.along = _lock.path.rotated(n, yaw)
-					_replan()
+				var turn := 15.0 if key.keycode == KEY_Q else -15.0
+				if current == "chisel" or current == "gouge":
+					# The hand skews the edge across the push: a slicing cut.
+					set_setting(current, "skew", clampf(settings[current].skew + turn, -45.0, 45.0))
+				else:
+					yaw += deg_to_rad(turn)
+					if _state == PLANNING:
+						if not _faces_its_path():
+							_lock.along = _lock.path.rotated(_lock.normal, yaw)
+						_replan()
 			KEY_ESCAPE:
 				cancel()
 			KEY_Z:
@@ -565,6 +638,11 @@ func _process(delta: float) -> void:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
+	# A plan asked for while an edit was landing is planned again once it has.
+	if _state == PLANNING and _plan.get("stale", false):
+		var fresh: Dictionary = board.get_plan()
+		if not fresh.is_empty() and not fresh.get("stale", false):
+			_plan = fresh
 	# The tool in hand is seen in the main view only while it works, fading in and out.
 	if current != "":
 		var target := 1.0 if _state == ACTING else 0.0
@@ -576,7 +654,8 @@ func _process(delta: float) -> void:
 	else:
 		# Framed on the tool's edge: where the stroke starts, then wherever the tool is.
 		var focus: Vector3 = board.get_tool_pose().origin if _engaged else _lock.point
-		_inset.show_section(_lock.point, _lock.path, _lock.normal, focus, _plan.get("depth", 1.0), _ui.plan_text())
+		_inset.show_section(_lock.point, _lock.path, _lock.normal, focus, _plan.get("depth", 1.0), _ui.plan_text(),
+				_engaged)
 	_draw_outline()
 	_ui.update_status()
 
@@ -594,7 +673,7 @@ func _hover_pose() -> Transform3D:
 ## stroked left and right.
 func _along(normal: Vector3) -> Vector3:
 	normal = normal.normalized() if normal.length() > 1e-6 else Vector3.UP
-	var base := -camera.global_basis.z if current == "chisel" else camera.global_basis.x
+	var base := -camera.global_basis.z if current == "chisel" or current == "gouge" else camera.global_basis.x
 	var along := base - normal * base.dot(normal)
 	if along.length() < 1e-4:
 		along = camera.global_basis.y - normal * camera.global_basis.y.dot(normal)
@@ -644,8 +723,8 @@ func _draw_outline() -> void:
 		# The planned path, from where the stroke was locked.
 		segments.append_array([p, p + _lock.path * (_lock.length * MM)])
 	match current:
-		"chisel":
-			var w: float = settings.chisel.width * 0.5 * MM
+		"chisel", "gouge":
+			var w: float = variant().get("width", 12.0) * 0.5 * MM
 			segments = [p - s * w, p + s * w, p, p + a * 0.012, p + a * 0.012, p + a * 0.009 + s * 0.002,
 					p + a * 0.012, p + a * 0.009 - s * 0.002]
 		"saw":
@@ -693,6 +772,9 @@ func _place_rests() -> void:
 	var chisel := _frame(Vector3(-0.07, 0.0115, 0.1), Vector3.UP, Vector3.LEFT)
 	chisel.basis = chisel.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
 	_rest["chisel"] = chisel
+	var gouge := _frame(Vector3(-0.02, 0.0115, 0.145), Vector3.UP, Vector3.LEFT)
+	gouge.basis = gouge.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
+	_rest["gouge"] = gouge
 	var saw := Transform3D(Basis(Vector3.RIGHT, Vector3.UP, Vector3.BACK) * Basis.from_scale(Vector3.ONE * MM),
 			Vector3(0.0, 0.011, -0.12))
 	_rest["saw"] = saw

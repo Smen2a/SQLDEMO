@@ -16,6 +16,7 @@ var cull_mask := 0xFFFFF   # the layers the inset camera draws
 var _viewport: SubViewport
 var _camera: Camera3D
 var _caption: Label
+var _shown := []  # what it last drew (planning: it draws again only when that changes)
 
 
 func _ready() -> void:
@@ -51,7 +52,10 @@ func _ready() -> void:
 ## in the surface), with the surface's `normal` up: the path runs left to right and the
 ## part of the board nearer the viewer is cut away. The view frames `focus` (where the
 ## tool's edge is) closely enough to see a cut `depth` mm deep, with room above for the tool.
-func show_section(start: Vector3, along: Vector3, normal: Vector3, focus: Vector3, depth: float, caption: String) -> void:
+## `live` (a stroke being made) draws every frame; otherwise (a plan) only when the view,
+## the caption or the board changes, which spares a second raymarch a frame.
+func show_section(start: Vector3, along: Vector3, normal: Vector3, focus: Vector3, depth: float, caption: String,
+		live := true) -> void:
 	var across := along.cross(normal).normalized() # towards the viewer: the side cut away
 	var height := clampf(depth * 3.0 + 10.0, 14.0, 60.0) * 0.001
 	var width := height * float(SIZE.x) / float(SIZE.y)
@@ -62,14 +66,25 @@ func show_section(start: Vector3, along: Vector3, normal: Vector3, focus: Vector
 	_camera.global_transform = Transform3D(Basis(along, normal, across), centre + across * 0.2)
 	board.set_section(start, across)
 	_caption.text = caption
-	if not visible:
-		visible = true
+	visible = true
+	if live:
 		_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_shown = []
+		return
+	var stats: Dictionary = board.get_stats()
+	var now := [_camera.global_transform, height, caption, stats.get("edits", 0), stats.get("overlay_edits", 0),
+			stats.get("update_ms", 0.0)]
+	if now != _shown:
+		_shown = now
+		_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	elif _viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
+		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 
 func hide_section() -> void:
 	if not visible:
 		return
 	visible = false
+	_shown = []
 	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	board.set_section(Vector3.ZERO, Vector3.ZERO)
