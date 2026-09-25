@@ -20,6 +20,13 @@ struct Material {
 	float specular = 0.05f; // strength of the key-light highlight
 	float shininess = 24.0f;
 	float density = 1.0f;   // g/cm^3 (mg/mm^3), for the mass of pieces
+	// How the material takes an edge (woods; see tools/cutting.h). Janka hardness (N), 0
+	// for materials that are not cut; how readily it splits along the grain ahead of an
+	// edge or a wedge, and how readily the split tears out below a cut against the grain
+	// (0 to 1).
+	float hardness = 0.0f;
+	float split = 0.5f;
+	float tearout = 0.5f;
 };
 
 class MaterialTable {

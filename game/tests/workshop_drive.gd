@@ -1,9 +1,10 @@
 extends "res://tests/harness.gd"
 
-## Uses the workshop as a person would, through its own pointer methods: pares with the
-## chisel, saws a kerf, sands a patch with the block, rounds an arris over with the sponge,
-## then undoes the sponge's work; then saws a strip right off the board, watches it come
-## away, and undoes that to put it back. Prints what each did and, when rendering, saves
+## Uses the workshop as a person would, through its own pointer methods (each stroke
+## planned with the right button held, then made with a left-drag): pares with the chisel,
+## saws a kerf, sands a patch with the block, rounds an arris over with the sponge, then
+## undoes the sponge's work; then saws a strip right off the board, watches it come away,
+## and undoes that to put it back. Prints what each did and, when rendering, saves
 ## out/workshop_<tool>.png after each (--out=<dir>).
 
 const Workshop := preload("res://workshop/workshop.tscn")
@@ -124,6 +125,8 @@ func _on_top(x: float, z: float) -> Vector3:
 
 ## Picks `tool`, engages it at `start`, drags it through `path` (each leg in `steps`
 ## pointer moves, a frame apart) and lets go; then waits for the edits to land.
+## Plans a stroke from `start` towards the first point of `path` (right button held), then
+## makes it: a left-drag through `path`, `steps` moves to each point.
 func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int) -> void:
 	workshop.select_tool(tool)
 	await _frames(8) # the last tool flies back to the bench
@@ -131,6 +134,12 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int) -> 
 	var at := cam.unproject_position(start)
 	workshop.hover_screen(at)
 	await _frames(2)
+	workshop.lock(at)
+	workshop.aim(cam.unproject_position(path[0]))
+	if not workshop.is_planning():
+		push_error("workshop drive: %s did not plan at %s" % [tool, at])
+		return
+	await _frames(1)
 	workshop.press(at)
 	if not workshop.is_engaged():
 		push_error("workshop drive: %s did not engage at %s" % [tool, at])
@@ -146,6 +155,7 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int) -> 
 			workshop.board.flush()
 			await _shot(_out, tool + "_working")
 	workshop.release()
+	workshop.unlock()
 	workshop.board.flush()
 	await _frames(2)
 

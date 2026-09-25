@@ -107,6 +107,16 @@ uniform int sdf_max_steps = 512;
 uniform bool sdf_ambient_occlusion = true;
 // Off: exact ADF cells march and shade on their bricks (measurements only).
 uniform bool sdf_exact_cells = true;
+// How much of the body is drawn in perspective views (a tool fading in and out): a
+// screen-door dither, so whatever is drawn keeps its exact depth.
+uniform float sdf_opacity = 1.0;
+// A section (the workshop's cross-section inset): in orthographic views only, the body is
+// drawn cut open along the plane n.p = w (n = xyz, w = w, body space), keeping n.p <= w.
+// n = 0: none. Shadow maps are orthographic too, but the caster material never has one.
+uniform vec4 sdf_section = vec4(0.0);
+// Cuts planned but not yet made (overlay edits flagged SDF_OVERLAY_PLANNED) are tinted:
+// colour, and how strongly.
+uniform vec4 sdf_plan_tint = vec4(1.0, 0.82, 0.25, 0.5);
 
 varying vec3 v_local;
 varying flat vec3 v_eye;     // camera position in body space (perspective)
@@ -331,6 +341,7 @@ vec4 sdf_adf_eval(vec3 p, vec3 lo, float size, vec4 a, vec4 n0) {
 
 const int SDF_OVERLAY_MAX = 16;
 const int SDF_OVERLAY_TEXELS = 8;
+const int SDF_OVERLAY_PLANNED = 2048; // bit 11 of an edit's packed code: a planned cut
 uniform int sdf_overlay_count = 0;
 uniform vec4 sdf_overlay[128]; // SDF_OVERLAY_MAX * SDF_OVERLAY_TEXELS
 uniform vec3 sdf_overlay_lo;   // the union of the edits' boxes
@@ -387,6 +398,28 @@ vec4 sdf_overlay_apply4(vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec4 d) {
 		}
 	}
 	return vec4(r[0], r[1], r[2], r[3]);
+}
+
+// Whether a planned overlay cut makes the surface at p (a surface point): its primitive's
+// boundary passes within `tol` of p.
+bool sdf_overlay_planned_at(vec3 p, float tol) {
+	if (!sdf_overlay_near(p)) {
+		return false;
+	}
+	int count = min(sdf_overlay_count, SDF_OVERLAY_MAX);
+	for (int k = 0; k < count; k++) {
+		int o = k * SDF_OVERLAY_TEXELS;
+		int packed = int(sdf_overlay[o].x);
+		if ((packed & SDF_OVERLAY_PLANNED) == 0 || !sdf_in_box(p, sdf_overlay[o + 6].xyz, sdf_overlay[o + 7].xyz)) {
+			continue;
+		}
+		float pd = sdf_primitive(p, packed & 7, sdf_overlay[o + 1], sdf_overlay[o + 2], sdf_overlay[o + 3],
+				sdf_overlay[o + 4], sdf_overlay[o + 5]);
+		if (abs(pd) < tol) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // --- the field, whichever backend -------------------------------------------------------
@@ -579,8 +612,22 @@ void vertex() {
 	v_scale = 1.0 / length(MODEL_MATRIX[0].xyz);
 }
 
+// 2x2 Bayer threshold (0..3), for the opacity dither.
+int sdf_bayer2(int x, int y) {
+	return ((x ^ y) & 1) * 2 + (y & 1);
+}
+
 void fragment() {
 	bool ortho = PROJECTION_MATRIX[3][3] > 0.5;
+	// The fade is for perspective views: orthographic ones (the workshop's inset, shadow
+	// maps) draw the body whole.
+	if (sdf_opacity < 1.0 && !ortho) {
+		ivec2 q = ivec2(FRAGCOORD.xy);
+		int b = 4 * sdf_bayer2(q.x & 1, q.y & 1) + sdf_bayer2((q.x >> 1) & 1, (q.y >> 1) & 1);
+		if ((float(b) + 0.5) / 16.0 > sdf_opacity) {
+			discard;
+		}
+	}
 	// Angular (perspective) or linear (orthographic, in view units) size of a pixel. The
 	// Compatibility renderer flips y in the projection when drawing into a texture.
 	float pixel = 2.0 / (abs(PROJECTION_MATRIX[1][1]) * VIEWPORT_SIZE.y);
@@ -588,6 +635,21 @@ void fragment() {
 	vec3 ro = ortho ? v_local - rd * dot(v_local - v_eye, rd) : v_eye;
 
 	vec2 span = sdf_clip_box(ro, rd);
+	// A section starts the ray on its plane (or ends it there, looking back through it).
+	bool sectioned = ortho && dot(sdf_section.xyz, sdf_section.xyz) > 0.5;
+	float section_t = -1.0;
+	if (sectioned) {
+		float dn = dot(rd, sdf_section.xyz);
+		float side = dot(ro, sdf_section.xyz) - sdf_section.w;
+		if (abs(dn) < 1.0e-6) {
+			span.y = side > 0.0 ? -1.0 : span.y;
+		} else if (dn < 0.0) {
+			section_t = -side / dn;
+			span.x = max(span.x, section_t);
+		} else {
+			span.y = min(span.y, -side / dn);
+		}
+	}
 #ifdef SDF_SINGLE_PASS
 	// End the ray at the opaque scene in front of it, so hidden parts of the body cost
 	// nothing: t there is the view distance to the scene (along the view axis for
@@ -663,10 +725,16 @@ void fragment() {
 		discard;
 	}
 
+	// A hit on the section plane inside the body is the section's face: it stays there, with
+	// the material there (a solid cell's shortcut above has none).
+	bool on_section = hit && section_t >= 0.0 && s.x < 0.0 && t <= section_t + eps;
+	if (on_section) {
+		s = sdf_sample_near(ro + rd * t, lo, size, n0, a);
+	}
 	// Settle onto the surface, to within a tenth of the epsilon, so shading does not depend
 	// on the step sequence. s ends up as the field at p, material included.
 	float settled = max(0.1 * eps, 1.0e-5);
-	for (int i = 0; i < 4 && hit && abs(s.x) > settled; i++) {
+	for (int i = 0; i < 4 && hit && !on_section && abs(s.x) > settled; i++) {
 		t += s.x;
 		s = sdf_sample_near(ro + rd * t, lo, size, n0, a);
 	}
@@ -691,12 +759,20 @@ void fragment() {
 #else
 		vec3 n = sdf_normal(p, max(eps, 2.0e-3), lo, size, n0, a);
 #endif
+		if (on_section) {
+			n = sdf_section.xyz;
+		}
 		NORMAL = normalize((VIEW_MATRIX * (MODEL_MATRIX * vec4(n, 0.0))).xyz);
 		vec3 albedo = sdf_material_rgb(s.y, p);
 		vec4 props = sdf_texel(sdf_materials, int(s.y + 0.5) * 4 + 3);
 		if (s.w > 0.0) {
 			albedo = mix(albedo, sdf_material_rgb(s.z, p), s.w);
 			props = mix(props, sdf_texel(sdf_materials, int(s.z + 0.5) * 4 + 3), s.w);
+		}
+		// A planned cut's surface, hatched in the tool's colour: not made yet.
+		if (!on_section && sdf_overlay_planned_at(p, max(2.0 * eps, 0.01))) {
+			float hatch = step(0.5, fract((p.x + p.y + p.z) / 1.5));
+			albedo = mix(albedo, sdf_plan_tint.rgb, sdf_plan_tint.a * (0.6 + 0.4 * hatch));
 		}
 		if (sdf_debug_view == SDF_VIEW_NORMALS || sdf_debug_view == SDF_VIEW_ALBEDO) {
 			vec3 shown = sdf_debug_view == SDF_VIEW_NORMALS ? n * 0.5 + vec3(0.5) : albedo;
@@ -715,7 +791,7 @@ void fragment() {
 			// Blinn-Phong exponent to GGX roughness: alpha = sqrt(2 / (n + 2)), roughness = sqrt(alpha).
 			ROUGHNESS = sqrt(sqrt(2.0 / (props.y + 2.0)));
 			SPECULAR = clamp(props.x * 5.0, 0.0, 1.0);
-			if (sdf_ambient_occlusion) {
+			if (sdf_ambient_occlusion && !on_section) {
 				AO = sdf_occlusion(p, n, lo, size, n0, a);
 			}
 		}

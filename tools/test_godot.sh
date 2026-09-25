@@ -6,6 +6,8 @@
 #   - the workshop: each tool, driven through the scene's own pointer methods, cuts, and
 #     undo takes a stroke back
 #   - a stroke previewed by the shader looks the same once committed, for each tool
+#   - a stroke planned with the right button held (hatched, the tool out of view, the
+#     section inset showing) is the cut the left-drag then makes; the camera's buttons
 #   - a strip sawn off the board comes away as a rigid body resting on the bench
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 #   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF
@@ -46,6 +48,7 @@ check live_sphere "Screenshot saved" --render res://tests/live_view.tscn -- --de
 check live_panel "Screenshot saved" --render res://tests/live_view.tscn -- --screenshot="$OUT/live_panel.png"
 check workshop_drive "workshop drive: chisel" --render res://tests/workshop_drive.tscn -- --out="$OUT"
 check stroke_preview "stroke preview: every tool" --render res://tests/stroke_preview.tscn -- --out="$OUT/preview"
+check tool_planning "tool planning: every step as planned" --render res://tests/tool_planning.tscn -- --out="$OUT"
 check offcut_physics "offcut physics:" --render res://tests/offcut_physics.tscn
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn

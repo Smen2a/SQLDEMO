@@ -31,14 +31,31 @@ struct Frame {
 	vec4 rotation() const;
 };
 
-// A bench chisel pared along the surface: bevel down, the handle raised behind the edge.
+// A chisel or carving gouge, held bevel down with the handle raised behind the edge. Its
+// edge's cross-section is flat (chisels), an arc (gouges, by sweep) or a V (V-tools). The
+// catalog (tools/catalog.h) has the workshop's variants; tools/cutting.h what they can do.
 struct Chisel {
 	float width = 12.0f;
 	float thickness = 3.5f;
 	float bevel_deg = 25.0f;
-	float approach_deg = 20.0f; // angle between the blade and the work surface
+	float approach_deg = 20.0f;  // angle between the blade and the work surface
+	float blade_length = 85.0f;
+	float skew_deg = 0.0f;       // a skew chisel's edge, angled across the blade
+	float hand_force = 200.0f;   // N it can be pushed with (a long, flexible blade takes less)
+	float mallet = 1.0f;         // its blows: 0 never struck, 1 a bench chisel's, 1.5 a mortise chisel's
+	int kind = gl::SDF_TOOL_FLAT; // or SDF_TOOL_GOUGE, SDF_TOOL_V
+	float sweep_radius = 0.0f;   // gouges: the arc's radius
+	float v_angle_deg = 60.0f;   // V-tools: the included angle
 
 	Body model() const;
+	// The cross-section of what the edge removes, `height` above its deepest point.
+	ToolProfile profile(float height) const;
+	// How deep the edge goes before its corners enter the work: 0 for a flat edge (its
+	// corners are in from the start), a gouge's sweep, a V-tool's wings.
+	float corner_depth() const;
+	// The area (mm^2) of the chip the edge takes `depth` deep (up to its corners; the
+	// width beyond).
+	float chip_area(float depth) const;
 	// The cut of a push from `start` (a surface point) towards `end` (projected onto the
 	// surface plane there) at `depth` below it: a ramp in at the approach angle, then a flat
 	// run. A push shorter than the ramp is ramp only.
@@ -71,9 +88,10 @@ struct SandingBlock {
 	float breadth = 40.0f;
 	int grit = 120;
 	float feather = 2.0f; // blend radius: how far a pass's rim spreads, and edges round over
+	float pressure = 1.0f; // how hard it is pressed (1: an ordinary hand's worth)
 
 	Body model() const;
-	// Depth removed per millimetre of travel (coarser grits cut faster).
+	// Depth removed per millimetre of travel (coarser grits and more pressure cut faster).
 	float removal_per_mm() const;
 	// Takes `depth` off below the plane over the rectangle [lo, hi] (plane x / y
 	// coordinates) that the block's face covered, feathering out beyond it.
@@ -90,9 +108,10 @@ struct SandingSponge {
 	float thickness = 25.0f;
 	int grit = 120;
 	float reach = 10.0f; // how far round the point it is pressed at it bears on the work
+	float pressure = 1.0f; // how hard it is pressed (1: an ordinary hand's worth)
 
 	Body model() const;
-	// Curvature flow (mm^2) per millimetre of travel at full pressure: coarser grits cut faster.
+	// Curvature flow (mm^2) per millimetre of travel: coarser grits and more pressure cut faster.
 	float rate() const;
 };
 

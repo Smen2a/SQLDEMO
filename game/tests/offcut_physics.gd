@@ -29,6 +29,8 @@ func _ready() -> void:
 	var start := Vector3(0.0, 0.025, 0.03)
 	workshop.hover_screen(cam.unproject_position(start))
 	await _frames(2)
+	workshop.lock(cam.unproject_position(start))
+	workshop.aim(cam.unproject_position(Vector3(-0.03, 0.025, 0.03)))
 	workshop.press(cam.unproject_position(start))
 	var from := start
 	for i in 12:
@@ -38,6 +40,7 @@ func _ready() -> void:
 			await _frames(1)
 		from = to
 	workshop.release()
+	workshop.unlock()
 	workshop.board.flush()
 	for i in 30:
 		if not workshop.offcuts.is_empty():

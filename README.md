@@ -13,29 +13,42 @@ bench with four hand tools beside it: a chisel, a back saw, a sanding block and 
 sponge. Every one is an SDF body, built by the engine in steel, brass, ash, walnut, cork
 and abrasive.
 
-1. **Pick up a tool.** Click it on the bench, or press 1 to 4.
-2. **Point at the board.** The tool floats where it will engage, and an outline marks what
-   it will touch: the chisel's edge and its push direction, the saw's line, the block's
-   face, the sponge's reach.
-3. **Hold the left button and drag.** The cut follows live:
-   - **Chisel:** pares along the drag, at the width and depth set in the panel. It ramps
-     in at its approach angle and lifts out when you let go. It cannot un-cut: pulling
-     back does nothing.
-   - **Saw:** stroke it back and forth along its line. Every millimetre of travel deepens
-     the kerf by the feed, until it is through the board.
-   - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits.
-     Being a flat block, it flattens: high spots and edges go first, and the edges of the
-     patch feather out.
+1. **Pick up a tool.** Click it on the bench, or press 1 to 4. It stays out of sight while
+   you aim, so it never hides the spot you are working on.
+2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,
+   the saw's line, the block's face, the sponge's reach.
+3. **Plan the stroke: hold the right button.** The stroke is locked in where you pressed,
+   and runs from there towards the pointer.
+   - The cut it would make shows on the board, hatched in the tool's colour.
+   - A **section inset** on the right shows it side on, the board cut open along the
+     path: the tool's angle, the cut's depth, and the grain through the wood.
+   - The **wheel** sets how hard the tool works (the chisel's depth, the saw's feed, the
+     sanding tools' pressure). **Shift+wheel** sets the chisel's angle to the work;
+     **Q / E** turn the sanding tools.
+   - A line beside the pointer sums it up: for example, *Chisel 1.3 mm deep 24° to the
+     work 40 mm*.
+4. **Make it: press the left button and drag** (the right can come up once you have).
+   The tool fades in where the stroke starts and follows the plan as far as you take it:
+   - **Chisel:** pushed along its path, never back and never past its end. It ramps in at
+     its angle to its depth and lifts out when you let go.
+   - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
+     kerf by the feed, until it is through the board.
+   - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits
+     and more pressure. Being a flat block, it flattens: high spots and edges go first,
+     and the edges of the patch feather out.
    - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It rounds over
      the arrises and ridges within its reach (10 mm) and leaves faces and hollows alone.
      Rub along an edge to ease it; the longer you rub, the rounder it gets.
 
+   Let go of the left button to finish: one undo step. Keep holding the right button and
+   the next pass is planned from the same spot.
+
 Other controls:
-- Q / E turn the tool; Esc drops the stroke in progress.
+- Esc drops the plan or the stroke in progress.
 - Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit.
-- Right-drag orbits, middle-drag pans, the wheel zooms.
+- Middle-drag orbits, Shift+middle-drag pans, the wheel zooms.
 - The panel switches the wood (ash, oak, walnut), starts a new board, and lets the board
-  cast shadows.
+  cast shadows. Its sliders are the same settings the wheel changes.
 - *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
   and the board applies it once, when you let go. Turned off, every move is applied as it
   happens, for comparison.
@@ -44,14 +57,27 @@ Other controls:
 
 | | |
 | --- | --- |
-| ![The chisel hovering over an ash board where it will engage, with the saw and the sanding block on the bench](docs/images/workshop_chisel.png) | ![The chisel at work, its edge riding in the groove it has pared](docs/images/workshop_chisel_working.png) |
-| ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) | ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) |
-| ![The sanding sponge rubbed along the board's front top arris](docs/images/workshop_sponge_working.png) | |
+| ![A chisel stroke planned on the ash board: its cut hatched in yellow, the chisel kept out of sight, the line by the pointer and the section inset on the right](docs/images/workshop_planning.png) | ![The section inset: the board cut open along the stroke, the chisel's blade at its angle over the planned ramp and run, the grain through the wood](docs/images/workshop_section.png) |
+| ![The chisel at work, faded in, the inset following its edge](docs/images/workshop_chisel_working.png) | ![The back saw stroked across the board, its teeth in the kerf](docs/images/workshop_saw_working.png) |
+| ![The sanding sponge rubbed along the board's front top arris](docs/images/workshop_sponge_working.png) | ![The board afterwards: a paring cut with ramped ends, a kerf the length of the board, and a sanded patch](docs/images/workshop_result.png) |
 
 (Rendered here on software OpenGL, at about a frame a second; the status line reads the
 GPU time on real hardware.)
 
 **How it works:**
+- **Planning** (`SdfBody.plan_stroke`) engages the tool as a stroke would and moves it
+  along the path a millimetre at a time. The cut it comes to goes into the shader's
+  overlay (below) flagged as planned: the shader hatches the surface wherever a planned
+  edit's boundary makes it. Acting carries out the same stroke, so what you see planned is
+  what you get, as far as you drag it.
+- **Hiding the tool.** The tool in hand is on its own render layer, which the main camera
+  leaves out and the inset's camera draws. When it acts it joins the main view and fades
+  in through a screen-door dither (`sdf_opacity`), which keeps its depth exact.
+- **The section inset** is a `SubViewport` with an orthographic camera looking across the
+  path. The board cuts itself open along the path's plane only in orthographic views
+  (`sdf_section`): the ray starts on the plane, and hits there take the plane's normal and
+  the wood's colour at that depth. Shadow maps are orthographic too, but they are drawn by
+  the caster material, which never gets the section.
 - A tool in use is a *stroke* (`native/src/core/tools/`). It turns the tool's motion into
   edits of the same shapes the tool's model is built from, and gives the cut so far merged
   into as few edits as it takes: the chisel's ramp and flat run, the saw's kerf, the

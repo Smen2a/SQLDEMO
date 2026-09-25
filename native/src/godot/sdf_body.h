@@ -69,12 +69,30 @@ public:
 	godot::Dictionary raycast(const godot::Vector3 &from, const godot::Vector3 &direction, double max_distance);
 
 	// Engages a tool at `contact` (world space, on this body's surface) with the surface
-	// `normal` there and the tool facing `along`. tool: "chisel" (settings: width, depth mm),
-	// "saw" (feed: mm deeper per mm of stroke), "sanding_block" (grit) or "sanding_sponge"
-	// (grit). The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on
-	// the worker thread too, and applied as it goes: it has no preview.
+	// `normal` there and the tool facing `along`. tool: "chisel" (settings: width, depth mm,
+	// angle: degrees between blade and work), "saw" (feed: mm deeper per mm of stroke),
+	// "sanding_block" (grit, pressure) or "sanding_sponge" (grit, pressure). The sponge's
+	// work (a smoothing layer, see core tools/smoothing.h) is done on the worker thread too,
+	// and applied as it goes: it has no preview. Drops any plan.
 	bool begin_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
 			const godot::Vector3 &along, const godot::Dictionary &settings);
+	// Plans a stroke without making it: the tool engaged as begin_stroke() would, then moved
+	// `length` mm along `along` (the saw forth and back: one stroke of its blade; the chisel
+	// pushed that far and lifted out; the block rubbed that far). The cut it would make is
+	// drawn by the shader, hatched in the plan tint, until clear_plan() or begin_stroke().
+	// Returns {"edits": how many, "depth": mm it reaches, "length": mm}; the sponge's work
+	// is a layer, which is not drawn (edits 0).
+	godot::Dictionary plan_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,
+			const godot::Vector3 &along, double length, const godot::Dictionary &settings);
+	void clear_plan();
+	void set_plan_tint(const godot::Color &tint); // colour, and alpha: how strongly
+	// How much of the body is drawn, 0 to 1 (a tool fading in and out): a dither.
+	void set_opacity(double opacity);
+	double get_opacity() const { return opacity_; }
+	// A section for orthographic views only (the workshop's cross-section inset): the body
+	// is drawn cut open along the plane through `point` (world space), keeping the side
+	// away from `normal`. A zero normal removes it.
+	void set_section(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// The tool moved to `point` (world space, on the plane it was engaged on).
 	void move_stroke(const godot::Vector3 &point);
 	void end_stroke();    // finishes the cut and makes it one undo step
@@ -169,6 +187,9 @@ private:
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
+	// A tool's stroke engaged at p (body space), or null (with an error) for an unknown tool.
+	std::unique_ptr<tools::Stroke> make_stroke(const godot::String &tool, vec3 p, vec3 n, vec3 a,
+			const godot::Dictionary &settings) const;
 	void queue(Command c);
 	void queue_all(std::vector<Command> commands); // in one batch
 	// The overlay: previewed strokes not yet uploaded, then the stroke in progress (if
@@ -200,6 +221,8 @@ private:
 	bool exact_cells_ = true;
 
 	std::shared_ptr<tools::Stroke> stroke_; // the tool in use, if any (queued work may share it)
+	std::vector<Edit> planned_;             // a planned stroke's cut (drawn hatched), if any
+	double opacity_ = 1.0;
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed
 	bool refine_when_idle_ = true;

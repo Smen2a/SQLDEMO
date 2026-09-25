@@ -60,9 +60,21 @@ MaterialTable MaterialTable::standard() {
 		m.density = density;
 		return m;
 	};
-	t.add(with_density(wood("ash", {0.86f, 0.77f, 0.61f}, {0.70f, 0.56f, 0.39f}, 3.2f, 0.35f, 0.22f), 0.67f));
-	t.add(with_density(wood("oak", {0.78f, 0.63f, 0.43f}, {0.58f, 0.43f, 0.27f}, 2.4f, 0.25f, 0.30f), 0.75f));
-	t.add(with_density(wood("walnut", {0.44f, 0.31f, 0.21f}, {0.28f, 0.18f, 0.12f}, 2.8f, 0.30f, 0.25f), 0.64f));
+	// Janka hardness (white ash 1320 lbf, red oak 1290, black walnut 1010); ash splits
+	// readily (it is the wood for cleaving), open-pored oak tears out most, walnut carves
+	// cleanly.
+	auto cut_as = [](Material m, float hardness_lbf, float split, float tearout) {
+		m.hardness = hardness_lbf * 4.448f;
+		m.split = split;
+		m.tearout = tearout;
+		return m;
+	};
+	t.add(with_density(cut_as(wood("ash", {0.86f, 0.77f, 0.61f}, {0.70f, 0.56f, 0.39f}, 3.2f, 0.35f, 0.22f), 1320.0f,
+			0.7f, 0.5f), 0.67f));
+	t.add(with_density(cut_as(wood("oak", {0.78f, 0.63f, 0.43f}, {0.58f, 0.43f, 0.27f}, 2.4f, 0.25f, 0.30f), 1290.0f,
+			0.6f, 0.65f), 0.75f));
+	t.add(with_density(cut_as(wood("walnut", {0.44f, 0.31f, 0.21f}, {0.28f, 0.18f, 0.12f}, 2.8f, 0.30f, 0.25f), 1010.0f,
+			0.45f, 0.3f), 0.64f));
 	t.add(with_density(plain("putty", {0.86f, 0.84f, 0.79f}), 1.7f));
 	t.add(with_density(metal("brass", {0.80f, 0.63f, 0.28f}, 0.18f, 0.55f, 40.0f), 8.5f));
 	t.add(with_density(metal("steel", {0.56f, 0.58f, 0.60f}, 0.12f, 0.45f, 60.0f), 7.85f));

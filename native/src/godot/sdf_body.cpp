@@ -32,6 +32,7 @@ constexpr int kMaterialTexels = 4;
 // The shader's overlay (sdf_live.gdshaderinc): SDF_OVERLAY_MAX edits of SDF_OVERLAY_TEXELS.
 constexpr int kOverlayMax = 16;
 constexpr int kOverlayTexels = 8;
+constexpr int kOverlayPlanned = 2048; // SDF_OVERLAY_PLANNED: bit 11 of an overlay edit's code
 // How far past its bounds an overlay edit is still applied: it can change the field's
 // value (never its sign) inside the body there, which settling and normal taps within a
 // millimetre of the surface read.
@@ -326,7 +327,11 @@ void SdfBody::add_random_strokes(int count, int seed) {
 }
 
 void SdfBody::rebuild() {
-	// A new body: no pieces of the last one.
+	// A new body: no pieces of the last one, and no plan on it.
+	if (!planned_.empty()) {
+		planned_.clear();
+		update_overlay();
+	}
 	clips_.clear();
 	unclipped_bounds_.clear();
 	sides_.reset();
@@ -382,17 +387,15 @@ Dictionary SdfBody::raycast(const Vector3 &from, const Vector3 &direction, doubl
 	return last_hit_;
 }
 
-bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vector3 &normal, const Vector3 &along,
-		const Dictionary &settings) {
-	if (stroke_) {
-		end_stroke();
-	}
-	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal)), a = to_body_direction(along);
+std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, vec3 n, vec3 a,
+		const Dictionary &settings) const {
 	if (tool == "chisel") {
 		tools::Chisel chisel;
 		chisel.width = float(double(settings.get("width", 12.0)));
-		stroke_ = tools::chisel_stroke(chisel, p, n, a, float(double(settings.get("depth", 1.0))));
-	} else if (tool == "saw") {
+		chisel.approach_deg = float(double(settings.get("angle", double(chisel.approach_deg))));
+		return tools::chisel_stroke(chisel, p, n, a, float(double(settings.get("depth", 1.0))));
+	}
+	if (tool == "saw") {
 		// Deep enough to go right through the body, no deeper.
 		float through = 0.0f;
 		for (int c = 0; c < 8; ++c) {
@@ -400,19 +403,35 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 					c & 4 ? bounds_.hi.z : bounds_.lo.z);
 			through = std::max(through, gl::dot(p - corner, n));
 		}
-		stroke_ = tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))), through + 1.0f);
-	} else if (tool == "sanding_block") {
+		return tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))), through + 1.0f);
+	}
+	if (tool == "sanding_block") {
 		tools::SandingBlock block;
 		block.grit = int(settings.get("grit", 120));
-		stroke_ = tools::sanding_stroke(block, p, n, a);
-	} else if (tool == "sanding_sponge") {
+		block.pressure = float(double(settings.get("pressure", 1.0)));
+		return tools::sanding_stroke(block, p, n, a);
+	}
+	if (tool == "sanding_sponge") {
 		tools::SandingSponge sponge;
 		sponge.grit = int(settings.get("grit", 120));
-		stroke_ = tools::hand_sanding_stroke(sponge, p, n, a);
-	} else {
-		UtilityFunctions::push_error("SdfBody: unknown tool ", tool);
+		sponge.pressure = float(double(settings.get("pressure", 1.0)));
+		return tools::hand_sanding_stroke(sponge, p, n, a);
+	}
+	UtilityFunctions::push_error("SdfBody: unknown tool ", tool);
+	return nullptr;
+}
+
+bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vector3 &normal, const Vector3 &along,
+		const Dictionary &settings) {
+	if (stroke_) {
+		end_stroke();
+	}
+	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal)), a = to_body_direction(along);
+	stroke_ = make_stroke(tool, p, n, a, settings);
+	if (!stroke_) {
 		return false;
 	}
+	planned_.clear(); // the stroke takes the plan's place
 	// A deferred stroke's work is a layer, which the shader cannot draw: it is applied as it goes.
 	previewing_ = stroke_preview_ && !stroke_->deferred();
 	std::size_t pending = 0;
@@ -426,6 +445,70 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		flush();
 	}
 	return true;
+}
+
+Dictionary SdfBody::plan_stroke(const String &tool, const Vector3 &contact, const Vector3 &normal,
+		const Vector3 &along, double length, const Dictionary &settings) {
+	Dictionary report;
+	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal));
+	const vec3 a = tools::Frame::at(p, n, to_body_direction(along)).x;
+	std::unique_ptr<tools::Stroke> stroke = make_stroke(tool, p, n, a, settings);
+	if (!stroke) {
+		return report;
+	}
+	// Moved as the hand would, a millimetre at a time (a chisel's ramp shows its direction
+	// first, then its run grows), and the saw back again: one stroke of its blade.
+	const float mm = std::max(float(length), 0.0f);
+	const int steps = std::max(1, int(std::ceil(mm)));
+	for (int i = 1; i <= steps; ++i) {
+		stroke->move_to(p + a * (mm * float(i) / float(steps)));
+	}
+	if (tool == "saw") {
+		for (int i = steps - 1; i >= 0; --i) {
+			stroke->move_to(p + a * (mm * float(i) / float(steps)));
+		}
+	}
+	planned_ = stroke->edits();
+	for (const Edit &e : stroke->finish()) {
+		planned_.push_back(e);
+	}
+	// How deep it goes: the deepest point of its tool's pose (where the edge or teeth are).
+	const tools::Frame f = stroke->pose();
+	report["edits"] = int64_t(planned_.size());
+	report["depth"] = double(std::max(0.0f, -gl::dot(f.origin - p, n)));
+	report["length"] = double(mm);
+	update_overlay();
+	return report;
+}
+
+void SdfBody::clear_plan() {
+	if (planned_.empty()) {
+		return;
+	}
+	planned_.clear();
+	update_overlay();
+}
+
+void SdfBody::set_plan_tint(const Color &tint) {
+	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
+		m->set_shader_parameter("sdf_plan_tint", Vector4(tint.r, tint.g, tint.b, tint.a));
+	}
+}
+
+void SdfBody::set_opacity(double opacity) {
+	opacity_ = std::clamp(opacity, 0.0, 1.0);
+	for (const Ref<ShaderMaterial> &m : {material_, caster_material_}) {
+		m->set_shader_parameter("sdf_opacity", float(opacity_));
+	}
+}
+
+void SdfBody::set_section(const Vector3 &point, const Vector3 &normal) {
+	if (normal.length_squared() < 1e-12) {
+		material_->set_shader_parameter("sdf_section", Vector4());
+		return;
+	}
+	const vec3 n = gl::normalize(to_body_direction(normal));
+	material_->set_shader_parameter("sdf_section", Vector4(n.x, n.y, n.z, gl::dot(n, to_body(point))));
 }
 
 void SdfBody::move_stroke(const Vector3 &point) {
@@ -832,12 +915,15 @@ void SdfBody::update_overlay() {
 			edits.push_back(e);
 		}
 	}
+	const std::size_t planned_from = edits.size(); // the plan's edits come last, flagged
+	edits.insert(edits.end(), planned_.begin(), planned_.end());
 	overlay_.resize(kOverlayMax * kOverlayTexels);
 	overlay_.fill(Vector4());
 	overlay_count_ = 0;
 	overlay_box_ = Aabb();
 	overlay_lipschitz_ = 1.0f;
-	for (const Edit &e : edits) {
+	for (std::size_t k = 0; k < edits.size(); ++k) {
+		const Edit &e = edits[k];
 		// The body would refuse what it does not accept, and the shader only cuts (a piece's
 		// half-space too: an intersection).
 		if (overlay_count_ == kOverlayMax || !Body::accepts(e) || (e.op != Op::Subtract && e.op != Op::Intersect)) {
@@ -845,7 +931,8 @@ void SdfBody::update_overlay() {
 		}
 		const Aabb box = e.bounds().expanded(kOverlayMargin);
 		const int o = overlay_count_ * kOverlayTexels;
-		const int code = int(e.prim.type) | int(e.op) << 3 | int(e.blend) << 6 | int(e.shape) << 9;
+		const int code = int(e.prim.type) | int(e.op) << 3 | int(e.blend) << 6 | int(e.shape) << 9 |
+				(k >= planned_from ? kOverlayPlanned : 0);
 		overlay_.set(o, Vector4(float(code), e.r, e.r2, float(e.material)));
 		for (int i = 0; i < 5; ++i) {
 			overlay_.set(o + 1 + i, to_godot(e.prim.p[i]));
@@ -860,6 +947,7 @@ void SdfBody::update_overlay() {
 		apply_overlay(m);
 	}
 	stats_["overlay_edits"] = overlay_count_;
+	stats_["planned_edits"] = int64_t(planned_.size());
 }
 
 void SdfBody::apply_overlay(const Ref<ShaderMaterial> &material) const {
@@ -1109,6 +1197,7 @@ void SdfBody::apply_parameters(const Ref<ShaderMaterial> &material) {
 	material->set_shader_parameter("sdf_grain_axis", to_godot(body.grain_axis));
 	material->set_shader_parameter("sdf_debug_view", debug_view_);
 	material->set_shader_parameter("sdf_exact_cells", exact_cells_);
+	material->set_shader_parameter("sdf_opacity", float(opacity_));
 	apply_overlay(material);
 }
 
@@ -1159,6 +1248,13 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("raycast", "from", "direction", "max_distance"), &SdfBody::raycast);
 	ClassDB::bind_method(D_METHOD("begin_stroke", "tool", "contact", "normal", "along", "settings"), &SdfBody::begin_stroke,
 			DEFVAL(Dictionary()));
+	ClassDB::bind_method(D_METHOD("plan_stroke", "tool", "contact", "normal", "along", "length", "settings"),
+			&SdfBody::plan_stroke, DEFVAL(Dictionary()));
+	ClassDB::bind_method(D_METHOD("clear_plan"), &SdfBody::clear_plan);
+	ClassDB::bind_method(D_METHOD("set_plan_tint", "tint"), &SdfBody::set_plan_tint);
+	ClassDB::bind_method(D_METHOD("set_opacity", "opacity"), &SdfBody::set_opacity);
+	ClassDB::bind_method(D_METHOD("get_opacity"), &SdfBody::get_opacity);
+	ClassDB::bind_method(D_METHOD("set_section", "point", "normal"), &SdfBody::set_section);
 	ClassDB::bind_method(D_METHOD("move_stroke", "point"), &SdfBody::move_stroke);
 	ClassDB::bind_method(D_METHOD("end_stroke"), &SdfBody::end_stroke);
 	ClassDB::bind_method(D_METHOD("cancel_stroke"), &SdfBody::cancel_stroke);
@@ -1201,6 +1297,7 @@ void SdfBody::_bind_methods() {
 			"get_live_source");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "exact_cells"), "set_exact_cells", "get_exact_cells");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "stroke_preview"), "set_stroke_preview", "get_stroke_preview");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "opacity", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_opacity", "get_opacity");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "refine_when_idle"), "set_refine_when_idle", "get_refine_when_idle");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gpu_bricks"), "set_gpu_bricks", "get_gpu_bricks");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));

@@ -81,28 +81,57 @@ vec4 Frame::rotation() const {
 
 Body Chisel::model() const {
 	// The blade's own frame: u from the edge towards the handle, rising at the approach
-	// angle; v is the blade's face normal. The flat back lies at v = 0, the bevel on top.
+	// angle; v its face normal, away from the work. Held bevel down: the flat back is the
+	// upper face, through the edge (v = 0); the blade lies below it, and the bevel is ground
+	// back from the edge underneath.
 	const float a = approach_deg * kDegToRad;
 	const vec3 u(-std::cos(a), 0.0f, std::sin(a));
 	const vec3 v(std::sin(a), 0.0f, std::cos(a));
 	const Frame blade = Frame::at(vec3(0.0f), v, u); // x = u, y = -Y, z = v
-	const float blade_length = 85.0f, ferrule = 12.0f, handle = 108.0f;
+	const float ferrule = 12.0f, handle = 108.0f;
 
 	Body b;
-	b.base = Primitive::box(blade.point({blade_length * 0.5f, 0.0f, thickness * 0.5f}),
-			{blade_length * 0.5f, width * 0.5f, thickness * 0.5f}, 0.0f, blade.rotation());
 	b.base_material = mat::Steel;
+	if (kind == gl::SDF_TOOL_FLAT) {
+		b.base = Primitive::box(blade.point({blade_length * 0.5f, 0.0f, -thickness * 0.5f}),
+				{blade_length * 0.5f, width * 0.5f, thickness * 0.5f}, 0.0f, blade.rotation());
+		if (skew_deg > 0.0f) {
+			// The edge angled across the blade (one corner leading): all ahead of it goes.
+			const float sk = skew_deg * kDegToRad;
+			const vec3 along_edge = blade.direction({std::sin(sk), std::cos(sk), 0.0f});
+			const vec3 ahead = blade.direction({-std::cos(sk), std::sin(sk), 0.0f});
+			const Frame tip = axes(ahead * 60.0f, ahead, along_edge, gl::cross(ahead, along_edge));
+			b.add(cut(Primitive::box(tip.origin, {60.0f, 60.0f, 60.0f}, 0.0f, tip.rotation())));
+		}
+	} else {
+		// A gouge's curved plate (or a V-tool's two): its inside is the edge's own section,
+		// its outside that `thickness` further out; both run the blade's length.
+		const vec3 p0 = blade.point({0.0f, 0.0f, 0.0f}), p1 = blade.point({blade_length, 0.0f, 0.0f});
+		const float height = corner_depth() + thickness + 1.0f;
+		ToolProfile outside;
+		vec3 drop;
+		if (kind == gl::SDF_TOOL_GOUGE) {
+			outside = ToolProfile::gouge(sweep_radius + thickness, width + 2.0f * thickness, height);
+			drop = v * thickness;
+		} else {
+			outside = ToolProfile::v_tool(v_angle_deg, height);
+			drop = v * (thickness / std::sin(0.5f * v_angle_deg * kDegToRad));
+		}
+		b.base = Primitive::sweep(p0 - drop, p1 - drop, v, outside);
+		b.add(cut(Primitive::sweep(p0 - u * 2.0f, p1 + u * 2.0f, v, profile(height + 5.0f))));
+	}
 
-	// The bevel: everything above a plane through the edge rising at the bevel angle.
+	// The bevel: everything below a plane through the edge falling back at the bevel angle.
 	const float bev = bevel_deg * kDegToRad;
-	const vec3 along_bevel = blade.direction({std::cos(bev), 0.0f, std::sin(bev)});
-	const vec3 above_bevel = blade.direction({-std::sin(bev), 0.0f, std::cos(bev)});
-	const Frame wedge = axes(blade.point({0, 0, 0}) + along_bevel * 8.0f + above_bevel * 10.0f, along_bevel, blade.y, above_bevel);
-	b.add(cut(Primitive::box(wedge.origin, {20.0f, width, 10.0f}, 0.0f, wedge.rotation())));
+	const vec3 along_bevel = blade.direction({std::cos(bev), 0.0f, -std::sin(bev)});
+	const vec3 below_bevel = blade.direction({-std::sin(bev), 0.0f, -std::cos(bev)});
+	const Frame wedge = axes(along_bevel * 20.0f + below_bevel * 20.0f, along_bevel, blade.y,
+			gl::cross(along_bevel, blade.y));
+	b.add(cut(Primitive::box(wedge.origin, {20.0f, width + 2.0f * thickness + 4.0f, 20.0f}, 0.0f, wedge.rotation())));
 
 	// Cylinders run along their local y: frames with y along the blade.
 	const Frame shaft = axes(vec3(0.0f), v, u, gl::cross(v, u));
-	const vec3 axis_at = blade.point({0.0f, 0.0f, thickness * 0.5f});
+	const vec3 axis_at = blade.point({0.0f, 0.0f, -thickness * 0.5f});
 	const float ferrule_mid = blade_length + ferrule * 0.5f - 2.0f;
 	b.add(join(Primitive::cylinder(axis_at + u * ferrule_mid, 5.5f, ferrule * 0.5f, 0.6f, shaft.rotation()), mat::Brass));
 	const float handle_mid = blade_length + ferrule - 2.0f + handle * 0.5f;
@@ -111,6 +140,45 @@ Body Chisel::model() const {
 	b.grain_origin = axis_at + vec3(0.0f, 30.0f, 0.0f);
 	b.grain_axis = u;
 	return b;
+}
+
+ToolProfile Chisel::profile(float height) const {
+	if (kind == gl::SDF_TOOL_GOUGE) {
+		return ToolProfile::gouge(sweep_radius, width, height);
+	}
+	if (kind == gl::SDF_TOOL_V) {
+		return ToolProfile::v_tool(v_angle_deg, height);
+	}
+	return ToolProfile::flat(width, height);
+}
+
+float Chisel::corner_depth() const {
+	const float half = 0.5f * width;
+	if (kind == gl::SDF_TOOL_GOUGE) {
+		// A U (a veiner: half the width is the radius) has straight sides as tall again.
+		return half >= sweep_radius * 0.999f ? 2.0f * sweep_radius
+											 : sweep_radius - std::sqrt(sweep_radius * sweep_radius - half * half);
+	}
+	if (kind == gl::SDF_TOOL_V) {
+		return half / std::tan(0.5f * v_angle_deg * kDegToRad);
+	}
+	return 0.0f;
+}
+
+float Chisel::chip_area(float depth) const {
+	depth = std::max(depth, 0.0f);
+	const float corners = corner_depth();
+	const float within = std::min(depth, corners), beyond = std::max(depth - corners, 0.0f);
+	if (kind == gl::SDF_TOOL_GOUGE) {
+		const float r = sweep_radius, d = std::min(within, r);
+		// A circular segment d deep, then straight sides (a U) up to its corners.
+		const float segment = r * r * std::acos((r - d) / r) - (r - d) * std::sqrt(std::max(2.0f * r * d - d * d, 0.0f));
+		return segment + std::min(width, 2.0f * r) * (within - d) + width * beyond;
+	}
+	if (kind == gl::SDF_TOOL_V) {
+		return within * within * std::tan(0.5f * v_angle_deg * kDegToRad) + width * beyond;
+	}
+	return width * depth;
 }
 
 std::vector<Edit> Chisel::paring(vec3 start, vec3 end, vec3 normal, float depth) const {
@@ -125,7 +193,7 @@ std::vector<Edit> Chisel::paring(vec3 start, vec3 end, vec3 normal, float depth)
 	const float slope = std::tan(approach_deg * kDegToRad);
 	const float ramp = depth / slope;
 	// The profile reaches from the cutting edge to well above the surface.
-	const ToolProfile profile = ToolProfile::flat(width, depth + 2.0f);
+	const ToolProfile profile = this->profile(depth + 2.0f);
 	const vec3 entry = start + n * 0.2f;
 	if (length <= ramp) {
 		return {cut(Primitive::sweep(entry, start + t * length - n * (length * slope), n, profile))};
@@ -153,7 +221,7 @@ Edit Chisel::lift_out(vec3 end, vec3 direction, vec3 normal, float depth) const 
 	t = gl::dot(t, t) > 1e-12f ? gl::normalize(t) : Frame::at(end, n, vec3(1, 0, 0)).x;
 	const float slope = std::tan(approach_deg * kDegToRad);
 	const vec3 out = end + t * (depth / slope) + n * (depth + 0.2f);
-	return cut(Primitive::sweep(end, out, n, ToolProfile::flat(width, depth + 2.0f)));
+	return cut(Primitive::sweep(end, out, n, profile(depth + 2.0f)));
 }
 
 // --- saw -------------------------------------------------------------------------------
@@ -205,7 +273,7 @@ Body SandingBlock::model() const {
 }
 
 float SandingBlock::removal_per_mm() const {
-	return 0.6f / float(std::max(grit, 24));
+	return 0.6f * pressure / float(std::max(grit, 24));
 }
 
 Edit SandingBlock::pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const {
@@ -233,7 +301,7 @@ Body SandingSponge::model() const {
 }
 
 float SandingSponge::rate() const {
-	return 0.8f / float(std::max(grit, 24));
+	return 0.8f * pressure / float(std::max(grit, 24));
 }
 
 // --- strokes ---------------------------------------------------------------------------
@@ -279,8 +347,7 @@ public:
 		// field, only a bound inside the union, drops to half the overlap. A seam thinner
 		// than the hit epsilon would show as a wall; 2 mm keeps it deeper than the floor.
 		const float from = std::max(run_from_ - kOverlap, ramp_end_);
-		u.edits.push_back(cut(Primitive::sweep(point_at(from), point_at(reached_), n_,
-				ToolProfile::flat(chisel_.width, depth_ + 2.0f))));
+		u.edits.push_back(cut(Primitive::sweep(point_at(from), point_at(reached_), n_, chisel_.profile(depth_ + 2.0f))));
 		open_ = reached_ - run_from_ < 10.0f;
 		if (!open_) {
 			run_from_ = reached_;

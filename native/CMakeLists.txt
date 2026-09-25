@@ -35,6 +35,8 @@ add_library(sdf_core STATIC
 	src/core/eval/query.cpp
 	src/core/eval/reference_renderer.cpp
 	src/core/pieces/pieces.cpp
+	src/core/tools/catalog.cpp
+	src/core/tools/cutting.cpp
 	src/core/tools/smoothing.cpp
 	src/core/tools/tools.cpp
 )
@@ -77,6 +79,7 @@ if(ZLIB_FOUND)
 		tests/test_session.cpp
 		tests/test_pieces.cpp
 		tests/test_smoothing.cpp
+		tests/test_cutting.cpp
 	)
 	target_link_libraries(sdf_tests PRIVATE sdf_core sdf_demo sdf_io)
 	target_compile_definitions(sdf_tests PRIVATE SDF_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")

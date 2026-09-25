@@ -12,8 +12,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - The first plan's lasting design sections and its detailed E4 (bake) design are archived
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
-- **Pieces** is under way: P1 (saw through) is done, and P2 (islands left by any cut) is
-  next.
+- **Pieces** is under way: P1 (saw through) is done. P2 (islands left by any cut) waits
+  on **Tools** (below), which makes the tools behave like their real selves and every
+  stroke planned before it is made: T1 is done, T2 is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -60,6 +61,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
 | P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
+| T1 | Every stroke planned first: hold the right button to lock it in and see it hatched on the board and side on in a section inset (the board cut open in orthographic views only), the wheel for its intensity; left-drag makes it along the plan. The tool in hand stays out of the main view until it acts, then fades in. Middle-drag orbits |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -72,6 +74,7 @@ path needs compute passes.
 ## Roadmap
 | # | Capability | Replaces | Builds on |
 | --- | --- | --- | --- |
+| T | **Tools**: plan, lock, act; cutting by the wood | the fixed-depth tools of W1 | the overlay (W2a) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
 | 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
@@ -81,7 +84,63 @@ path needs compute passes.
 | 7 | **Forging**: hot metal deformed by blows | E7 | sampled base grid |
 | 8 | **Scale**: 2 m stone, 100k edits | E8, O3 | everything |
 
-## 1. Pieces — bodies that come apart (current: P1 done, P2 next)
+## T. Tools — plan, lock, act; cutting by the wood (current: T1 done, T2 next)
+
+**Why.** The tools cut like SDF cutters, not like hand tools: the chisel ramps in to
+whatever depth is set, anywhere, whatever the wood. A stroke starts the moment the button
+goes down, with nothing to see first, and the tool in hand hides what it is aimed at.
+Decided with the user:
+- Hold the right button to lock a stroke in and see it. Left-drag makes it along the
+  locked path.
+- Middle-drag orbits the camera.
+- The tool is hidden while planning, and a cross-section inset shows the cut side on.
+- First round: chisels and gouges, then rasps, a card scraper and a spokeshave. Saw
+  variants and planes come later.
+
+### T1 — plan, lock, act; the hidden tool; the section inset: done
+- `SdfBody.plan_stroke` runs the stroke along the path without making it. Its cut goes
+  into the overlay flagged as planned, and the shader hatches it. The wheel sets
+  intensity, Shift+wheel the chisel's angle.
+- The tool in hand is on a render layer only the inset draws. It fades in (a dither,
+  `sdf_opacity`) when it acts.
+- The inset: an orthographic camera across the path, with the board sectioned only in
+  orthographic views (`sdf_section`).
+- `game/tests/tool_planning` checks each step.
+
+### T2 — the cutting model, chisels and gouges (next)
+- **Wood properties** on `Material`: hardness (Janka: ash 1320 lbf, oak 1290, walnut 1010),
+  how readily it splits, how readily it tears out, and grain runout.
+- **Fibre direction** from the body's grain, tilted by a smooth runout tied to the ring
+  field (the figure hints at which way is downhill).
+- **Force per mm² of chip** grows with hardness and with the angle to the fibres: least
+  along them, about 1.8× across them, about 4.5× into end grain. Add shear for each side
+  of the chip still attached, and less when the edge is skewed. Pushed by hand (about
+  200 N) or struck (mallet blows); where the force isn't there, the plan stalls or stays
+  shallow, and says so.
+- **Entry and clearance.** Bevel down, the edge bites only past bevel + 2°, then dives until
+  levelled. From an edge or an existing cut the chip is free and the cut can start at
+  full depth. In the middle of a face a flat chisel's sides are held: a shaving at most.
+- **Tear-out** where the fibres run down into the wood ahead of the edge (seeded chips
+  below the cut, the same in plan and result); breakout at an end-grain exit.
+- **Chopping:** a mallet blow drives a slit (2–3 mm across the grain in oak for a 12 mm
+  bench chisel). Near an open face on the bevel side, the chip pops off along the fibres.
+- **The catalog:**
+  - chisels: bench (6, 12, 25 mm), paring (25 mm, never struck), mortise (8 mm, heavy
+    mallet), skew (18 mm);
+  - gouges: #3 and #7 (12 mm), #11 veiner (3 mm), V-tool (60°, 6 mm). With the corners
+    out of the wood the chip's sides are free; buried, they tear.
+- The HUD and the inset show the force needed against the force available, the grain,
+  and warnings: skates, stalls, tear-out, corners buried, breakout, needs a mallet.
+
+### T3 — rasps, card scraper, spokeshave
+- **Rasp:** removal set by coarseness, pressure and hardness; never tears; flat or
+  half-round (which hollows); tilted to chamfer an arris.
+- **Card scraper:** about 0.01 mm a pass, no tear-out; cleans up.
+- **Spokeshave:** a short sole following the surface at a set depth. An even shaving on a
+  flat face, it follows convex curves, and it tears out against the grain at half a
+  chisel's rate.
+
+## 1. Pieces — bodies that come apart (current: P1 done, P2 after Tools)
 
 **Why one capability.** Sawing through, a failing joint and a fracture all end with one
 body becoming several that move on their own. Build it once:

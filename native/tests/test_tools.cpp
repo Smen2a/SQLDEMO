@@ -4,6 +4,7 @@
 #include "compile/octree.h"
 #include "demo/gallery.h"
 #include "eval/query.h"
+#include "tools/catalog.h"
 #include "tools/tools.h"
 
 #include <algorithm>
@@ -153,10 +154,26 @@ TEST(tool_models_are_made_of_their_materials) {
 	const Body c = chisel.model();
 	const float a = chisel.approach_deg * 3.14159265f / 180.0f;
 	const vec3 u(-std::cos(a), 0, std::sin(a)), v(std::sin(a), 0, std::cos(a));
-	CHECK(material_at(c, u * 40.0f + v * (chisel.thickness * 0.5f)) == mat::Steel);
-	CHECK(material_at(c, u * 150.0f + v * (chisel.thickness * 0.5f)) == mat::Ash);
-	CHECK(c.sample(u * 0.3f + v * (chisel.thickness * 0.9f)).d > 0.0f); // ground away by the bevel
+	// Held bevel down: the blade below its flat back, the bevel ground away under the edge.
+	CHECK(material_at(c, u * 40.0f - v * (chisel.thickness * 0.5f)) == mat::Steel);
+	CHECK(material_at(c, u * 150.0f - v * (chisel.thickness * 0.5f)) == mat::Ash);
+	CHECK(c.sample(u * 0.3f - v * (chisel.thickness * 0.9f)).d > 0.0f);
+	CHECK(c.sample(u * 0.3f - v * 0.1f).d < 0.0f); // the edge itself
 	CHECK(c.bounds().hi.z > 60.0f); // the handle rises behind the edge
+	// Every variant is steel at its blade and ash at its handle, its edge at the origin.
+	for (const tools::ChiselVariant &variant : tools::chisel_catalog()) {
+		const Body m = variant.chisel.model();
+		const float va = variant.chisel.approach_deg * 3.14159265f / 180.0f;
+		const vec3 vu(-std::cos(va), 0, std::sin(va)), vv(std::sin(va), 0, std::cos(va));
+		const float centre = variant.chisel.kind == gl::SDF_TOOL_FLAT ? 0.5f * variant.chisel.thickness : 0.0f;
+		const vec3 blade_at = vu * 40.0f - vv * (centre + (variant.chisel.kind == gl::SDF_TOOL_FLAT ? 0.0f : 0.5f * variant.chisel.thickness));
+		const Sample steel = m.sample(blade_at);
+		CHECK(steel.d < 0.0f && int(steel.t < 0.5f ? steel.m0 : steel.m1) == mat::Steel);
+		CHECK(m.bounds().lo.x < -variant.chisel.blade_length * std::cos(va) + 5.0f);
+		if (steel.d >= 0.0f) {
+			std::printf("    %s: no steel at the blade (%.2f)\n", variant.id.c_str(), double(steel.d));
+		}
+	}
 
 	const Body s = tools::Saw{}.model();
 	CHECK(material_at(s, {0, 0, 30}) == mat::Steel);

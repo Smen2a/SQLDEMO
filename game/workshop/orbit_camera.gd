@@ -1,6 +1,7 @@
 extends Camera3D
 
-## Orbits a target point: right-drag turns, middle-drag pans, the wheel zooms.
+## Orbits a target point: middle-drag turns, Shift+middle-drag pans, the wheel zooms (the
+## right button is the workshop's: it locks a stroke in).
 
 @export var target := Vector3.ZERO
 @export var distance := 0.4          ## metres from the target
@@ -8,6 +9,8 @@ extends Camera3D
 @export var pitch := -0.75           ## radians; negative looks down
 @export var min_distance := 0.05
 @export var max_distance := 3.0
+## Whether the wheel zooms (the workshop takes it while a stroke is being planned).
+var wheel_zoom := true
 
 var _turning := false
 var _panning := false
@@ -21,15 +24,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
 		match button.button_index:
-			MOUSE_BUTTON_RIGHT:
-				_turning = button.pressed
 			MOUSE_BUTTON_MIDDLE:
-				_panning = button.pressed
+				_turning = button.pressed and not button.shift_pressed
+				_panning = button.pressed and button.shift_pressed
 			MOUSE_BUTTON_WHEEL_UP:
-				if button.pressed:
+				if button.pressed and wheel_zoom:
 					distance = max(distance * 0.9, min_distance)
 			MOUSE_BUTTON_WHEEL_DOWN:
-				if button.pressed:
+				if button.pressed and wheel_zoom:
 					distance = min(distance / 0.9, max_distance)
 		_apply()
 	elif event is InputEventMouseMotion:
