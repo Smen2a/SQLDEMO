@@ -126,7 +126,9 @@ func hover_screen(position: Vector2) -> void:
 ## groove under the pointer does not turn the tool on its side.
 func _surface_at(position: Vector2) -> Dictionary:
 	var hit: Dictionary = board.raycast(camera.project_ray_origin(position), camera.project_ray_normal(position), 10.0)
-	if hit.is_empty():
+	if hit.is_empty() or hit.get("stale", false):
+		# While an edit is being applied the body answers every ray with its last hit, so
+		# there is nothing to fit a plane to: keep that hit's own normal.
 		return hit
 	var pixel := 2.0 * float(hit.distance) * tan(deg_to_rad(camera.fov) * 0.5) / get_viewport().get_visible_rect().size.y
 	var k: float = 4.0 * MM / maxf(pixel, 1e-6)
@@ -137,7 +139,10 @@ func _surface_at(position: Vector2) -> Dictionary:
 		if h.is_empty():
 			return hit # at the board's edge: the point's own normal
 		around.append(h.position)
-	var n := (around[0] - around[1]).cross(around[2] - around[3]).normalized()
+	var n := (around[0] - around[1]).cross(around[2] - around[3])
+	if n.length() < 1e-12:
+		return hit # the hits around coincide (stale, or a sliver): the point's own normal
+	n = n.normalized()
 	if n.dot(hit.normal) < 0.0:
 		n = -n
 	hit.normal = n
@@ -367,6 +372,7 @@ func _hover_pose() -> Transform3D:
 ## the saw, the block and the sponge lie across the view, so the saw is seen side on and
 ## stroked left and right.
 func _along(normal: Vector3) -> Vector3:
+	normal = normal.normalized() if normal.length() > 1e-6 else Vector3.UP
 	var base := -camera.global_basis.z if current == "chisel" else camera.global_basis.x
 	var along := base - normal * base.dot(normal)
 	if along.length() < 1e-4:
