@@ -270,6 +270,29 @@ bool edge_tool(const String &tool) {
 	return tool == "chisel" || tool == "gouge";
 }
 
+// Tools whose stroke is planned by the cutting model (a CutPlan: core tools/cutting.h).
+bool planned_tool(const String &tool) {
+	return edge_tool(tool) || tool == "spokeshave";
+}
+
+// Tools whose stroke reads the body (its wood, its shape): only while no edit is applied.
+bool reads_body(const String &tool) {
+	return planned_tool(tool) || tool == "rasp" || tool == "scraper";
+}
+
+// Worked back and forth along their line: planned as one stroke there and back.
+bool reciprocates(const String &tool) {
+	return tool == "saw" || tool == "rasp" || tool == "scraper";
+}
+
+tools::Rasp rasp_from(const Dictionary &settings) {
+	const tools::RaspVariant *v = tools::find_rasp(String(settings.get("variant", "rasp_cabinet")).utf8().get_data());
+	tools::Rasp r = v != nullptr ? v->rasp : tools::Rasp{};
+	r.pressure = float(double(settings.get("pressure", 1.0)));
+	r.tilt_deg = float(double(settings.get("tilt", 0.0)));
+	return r;
+}
+
 // A chisel's or gouge's variant (core tools/catalog.h), held at its settings' angle.
 tools::Chisel chisel_from(const String &tool, const Dictionary &settings) {
 	const String fallback = tool == "gouge" ? "gouge_7_12" : "bench_12";
@@ -288,6 +311,12 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	Body model;
 	if (edge_tool(name)) {
 		model = chisel_from(name, settings).model();
+	} else if (name == "rasp") {
+		model = rasp_from(settings).model();
+	} else if (name == "scraper") {
+		model = tools::CardScraper{}.model();
+	} else if (name == "spokeshave") {
+		model = tools::Spokeshave{}.model();
 	} else if (name == "saw") {
 		model = tools::Saw{}.model();
 	} else if (name == "sanding_block") {
@@ -316,6 +345,16 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	return true;
 }
 
+tools::CutPlan SdfBody::plan_for(const String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a, float length,
+		const Dictionary &s) {
+	const std::uint32_t seed = std::uint32_t(int64_t(s.get("seed", 1)));
+	if (tool == "spokeshave") {
+		return tools::plan_spokeshave(tools::Spokeshave{}, work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
+	}
+	return tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 1.0))),
+			float(double(s.get("skew", 0.0))), seed);
+}
+
 Array SdfBody::tool_catalog() {
 	Array out;
 	for (const tools::ChiselVariant &v : tools::chisel_catalog()) {
@@ -326,6 +365,16 @@ Array SdfBody::tool_catalog() {
 		d["width"] = double(v.chisel.width);
 		d["bevel"] = double(v.chisel.bevel_deg);
 		d["mallet"] = double(v.chisel.mallet);
+		out.push_back(d);
+	}
+	for (const tools::RaspVariant &v : tools::rasp_catalog()) {
+		Dictionary d;
+		d["id"] = String(v.id.c_str());
+		d["family"] = "rasp";
+		d["label"] = String::utf8(v.label.c_str());
+		d["width"] = double(v.rasp.width);
+		d["coarseness"] = double(v.rasp.coarseness);
+		d["round"] = v.rasp.round;
 		out.push_back(d);
 	}
 	return out;
@@ -421,12 +470,19 @@ Dictionary SdfBody::raycast(const Vector3 &from, const Vector3 &direction, doubl
 
 std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, vec3 n, vec3 a,
 		const Dictionary &settings) const {
-	if (edge_tool(tool)) {
-		// Worked out against the body: only while no edit is being applied to it.
-		const tools::Work work{session_.body(), session_.octree(), materials_};
-		return tools::planned_stroke(tools::plan_cut(chisel_from(tool, settings), work, p, n, a,
-				float(double(settings.get("length", 40.0))), float(double(settings.get("depth", 1.0))),
-				float(double(settings.get("skew", 0.0))), std::uint32_t(int64_t(settings.get("seed", 1)))));
+	// These read the body: only while no edit is being applied to it.
+	const tools::Work work{session_.body(), session_.octree(), materials_};
+	const float length = float(double(settings.get("length", 40.0)));
+	if (planned_tool(tool)) {
+		return tools::planned_stroke(plan_for(tool, work, p, n, a, length, settings));
+	}
+	if (tool == "rasp") {
+		return tools::rasp_stroke(rasp_from(settings), work.wood(p - n * 0.5f), p, n, a, length);
+	}
+	if (tool == "scraper") {
+		tools::CardScraper scraper;
+		scraper.pressure = float(double(settings.get("pressure", 1.0)));
+		return tools::scraper_stroke(scraper, work.wood(p - n * 0.5f), p, n, a, length);
 	}
 	if (tool == "saw") {
 		// Deep enough to go right through the body, no deeper.
@@ -460,15 +516,15 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		end_stroke();
 	}
 	const vec3 p = to_body(contact), n = gl::normalize(to_body_direction(normal)), a = to_body_direction(along);
-	if (edge_tool(tool) && cut_plan_ && plan_request_ && plan_request_->tool == tool &&
+	if (planned_tool(tool) && cut_plan_ && plan_request_ && plan_request_->tool == tool &&
 			plan_request_->contact.distance_to(contact) < 1e-6) {
 		if (plan_stale_) {
 			flush(); // lands the edit and plans again against it
 		}
 		stroke_ = tools::planned_stroke(*cut_plan_); // the plan it was shown
 	} else {
-		if (edge_tool(tool)) {
-			flush(); // the cutting model reads the body
+		if (reads_body(tool)) {
+			flush(); // these read the body
 		}
 		stroke_ = make_stroke(tool, p, n, a, settings);
 	}
@@ -486,7 +542,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		pending += edits.size();
 	}
 	// A stroke merges to at most 3 edits; a chisel's or gouge's with its chips, 14.
-	const std::size_t needs = edge_tool(tool) ? 14 : 4;
+	const std::size_t needs = planned_tool(tool) ? 14 : 4;
 	if (previewing_ && pending + needs > std::size_t(kOverlayMax)) {
 		// No room in the overlay for another stroke until the strokes before it are applied.
 		// Only a burst of strokes during slow updates gets here.
@@ -509,19 +565,16 @@ Dictionary SdfBody::compute_plan() {
 	const PlanRequest &r = *plan_request_;
 	const vec3 p = to_body(r.contact), n = gl::normalize(to_body_direction(r.normal));
 	const vec3 a = tools::Frame::at(p, n, to_body_direction(r.along)).x;
-	if (edge_tool(r.tool)) {
-		if (job_.valid()) {
-			// The body is being changed: the last plan stands until the edit lands.
-			plan_stale_ = true;
-			report = plan_report_.duplicate();
-			report["stale"] = true;
-			return report;
-		}
+	if (reads_body(r.tool) && job_.valid()) {
+		// The body is being changed: the last plan stands until the edit lands.
+		plan_stale_ = true;
+		report = plan_report_.duplicate();
+		report["stale"] = true;
+		return report;
+	}
+	if (planned_tool(r.tool)) {
 		const tools::Work work{session_.body(), session_.octree(), materials_};
-		const Dictionary &s = r.settings;
-		cut_plan_ = tools::plan_cut(chisel_from(r.tool, s), work, p, n, a, float(r.length),
-				float(double(s.get("depth", 1.0))), float(double(s.get("skew", 0.0))),
-				std::uint32_t(int64_t(s.get("seed", 1))));
+		cut_plan_ = plan_for(r.tool, work, p, n, a, float(r.length), r.settings);
 		const tools::CutPlan &c = *cut_plan_;
 		planned_ = c.edits();
 		report["edits"] = int64_t(planned_.size());
@@ -557,7 +610,7 @@ Dictionary SdfBody::compute_plan() {
 	for (int i = 1; i <= steps; ++i) {
 		stroke->move_to(p + a * (mm * float(i) / float(steps)));
 	}
-	if (tool == "saw") {
+	if (reciprocates(tool)) {
 		for (int i = steps - 1; i >= 0; --i) {
 			stroke->move_to(p + a * (mm * float(i) / float(steps)));
 		}

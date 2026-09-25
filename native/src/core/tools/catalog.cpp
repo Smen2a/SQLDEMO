@@ -56,4 +56,31 @@ const ChiselVariant *find_chisel(const std::string &id) {
 	return nullptr;
 }
 
+const std::vector<RaspVariant> &rasp_catalog() {
+	static const std::vector<RaspVariant> catalog = [] {
+		auto rasp = [](float coarseness, bool round) {
+			Rasp r;
+			r.coarseness = coarseness;
+			r.round = round;
+			return r;
+		};
+		return std::vector<RaspVariant>{
+				{"rasp_wood", "Wood rasp, coarse", rasp(1.0f, false)},
+				{"rasp_cabinet", "Cabinet rasp", rasp(0.5f, false)},
+				{"rasp_cabinet_round", "Cabinet rasp, round face", rasp(0.5f, true)},
+				{"rasp_pattern", "Patternmaker's rasp, fine", rasp(0.25f, false)},
+		};
+	}();
+	return catalog;
+}
+
+const RaspVariant *find_rasp(const std::string &id) {
+	for (const RaspVariant &v : rasp_catalog()) {
+		if (v.id == id) {
+			return &v;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace sdf::tools

@@ -1,7 +1,7 @@
 extends Node3D
 
-## The workshop: a board on a bench and five hand tools, every one an SDF body. Pick a
-## tool (click it on the bench, or 1 to 5; Tab for its variants) and point at the board:
+## The workshop: a board on a bench and eight hand tools, every one an SDF body. Pick a
+## tool (click it on the bench, or 1 to 8; Tab for its variants) and point at the board:
 ## its footprint shows where it would go. Every stroke is planned, then made:
 ##   plan  hold the right button on the board: the stroke is locked in there, and runs
 ##         towards the pointer. Its cut shows on the board, hatched, and in the section
@@ -9,8 +9,8 @@ extends Node3D
 ##         comes to: how deep the wood lets it go, the force it takes, the grain, and what
 ##         will go wrong. The wheel sets how hard it works (a chisel's or gouge's depth, the
 ##         saw's feed, the sanding tools' pressure); Shift+wheel the chisel's or gouge's
-##         angle to the work (C: straight up, to chop); Q / E skew a chisel's edge, or turn
-##         the sanding tools.
+##         angle to the work (C: straight up, to chop), or a rasp's tilt about its line;
+##         Q / E skew a chisel's edge, or turn the sanding tools.
 ##   act   press the left button (still holding the right) and drag: the tool appears and
 ##         follows the plan as far as you take it. Let go of the left button to finish:
 ##         one undo step. Keep holding the right to plan the next pass from the same spot.
@@ -24,6 +24,11 @@ extends Node3D
 ##   gouge           a carving gouge (#3, #7), a veiner or a V-tool: with its corners out of
 ##                   the wood it goes deeper, anywhere, than a chisel
 ##   saw             stroke it back and forth along its line: the kerf deepens as it goes
+##   rasp            back and forth along its line: takes the surface down steadily and never
+##                   tears the grain; tilted, chamfers an arris; its round face hollows
+##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
+##                   flat face, over a curve, bridging hollows shorter than its sole
+##   card scraper    back and forth: a whisper a stroke, for cleaning up tear-out
 ##   sanding block   takes the surface down wherever it rubs, flat
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
@@ -56,6 +61,9 @@ const INTENSITY := {
 	"chisel": ["depth", 0.05, 0.05, 3.0, "%.2f mm deep"],
 	"gouge": ["depth", 0.05, 0.05, 4.0, "%.2f mm deep"],
 	"saw": ["feed", 0.005, 0.005, 0.1, "feed %.3f mm per mm"],
+	"rasp": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
+	"spokeshave": ["depth", 0.02, 0.02, 0.5, "%.2f mm shaving"],
+	"scraper": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_block": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_sponge": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 }
@@ -63,16 +71,25 @@ const INTENSITY := {
 const TILT := {
 	"chisel": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
 	"gouge": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
+	"rasp": ["tilt", 5.0, -60.0, 60.0, "tilted %.0f°"],
 }
 const CHOP_ANGLE := 60.0
+## The least height (mm) the section inset frames round the tool in hand: big tools need
+## more to be seen whole.
+const INSET_FRAME := {"saw": 20.0, "rasp": 24.0, "spokeshave": 40.0, "scraper": 24.0}
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
-const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
+const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.0, "spokeshave": 40.0,
+		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
 
-const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "sanding_block", "sanding_sponge"]
+const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper", "sanding_block",
+		"sanding_sponge"]
 const TOOL_COLOURS := {
 	"chisel": Color(1.0, 0.82, 0.25),
 	"gouge": Color(1.0, 0.58, 0.2),
 	"saw": Color(0.4, 0.85, 1.0),
+	"rasp": Color(0.8, 0.8, 0.95),
+	"spokeshave": Color(0.45, 0.95, 0.8),
+	"scraper": Color(0.95, 0.95, 0.55),
 	"sanding_block": Color(0.6, 1.0, 0.45),
 	"sanding_sponge": Color(1.0, 0.55, 0.8),
 }
@@ -85,6 +102,9 @@ var settings := {
 	"chisel": {"variant": "bench_12", "depth": 0.5, "angle": 30.0, "skew": 0.0},
 	"gouge": {"variant": "gouge_7_12", "depth": 1.0, "angle": 30.0, "skew": 0.0},
 	"saw": {"feed": 0.03},
+	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
+	"spokeshave": {"depth": 0.1},
+	"scraper": {"pressure": 1.0},
 	"sanding_block": {"grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
 }
@@ -189,6 +209,7 @@ func select_tool(tool: String) -> void:
 	_opacity = 0.0
 	if current != "":
 		_show_tool(current, 0.0)
+	_inset.set_tool(tools.get(current))
 	_ui.refresh()
 
 
@@ -332,10 +353,10 @@ func drag_screen(position: Vector2) -> void:
 	var start: Vector3 = _lock.point
 	var path: Vector3 = _lock.path
 	match current:
-		"chisel", "gouge":
+		"chisel", "gouge", "spokeshave":
 			_progress = clampf((point - start).dot(path) / MM, _progress, _lock.length)
 			board.move_stroke(start + path * (_progress * MM))
-		"saw":
+		"saw", "rasp", "scraper":
 			board.move_stroke(start + path * (point - start).dot(path))
 		_:
 			board.move_stroke(point)
@@ -393,7 +414,7 @@ func next_variant() -> void:
 
 
 func _faces_its_path() -> bool:
-	return current == "chisel" or current == "gouge" or current == "saw"
+	return current in ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper"]
 
 
 ## A stroke's settings: the tool's, with the plan's length and seed.
@@ -590,7 +611,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8:
 				select_tool(TOOL_NAMES[key.keycode - KEY_1])
 			KEY_TAB:
 				next_variant()
@@ -655,7 +676,7 @@ func _process(delta: float) -> void:
 		# Framed on the tool's edge: where the stroke starts, then wherever the tool is.
 		var focus: Vector3 = board.get_tool_pose().origin if _engaged else _lock.point
 		_inset.show_section(_lock.point, _lock.path, _lock.normal, focus, _plan.get("depth", 1.0), _ui.plan_text(),
-				_engaged)
+				_engaged, INSET_FRAME.get(current, 14.0))
 	_draw_outline()
 	_ui.update_status()
 
@@ -731,6 +752,11 @@ func _draw_outline() -> void:
 			var l := 0.07
 			segments = [p - a * l, p + a * l, p - a * l - s * 0.003, p - a * l + s * 0.003,
 					p + a * l - s * 0.003, p + a * l + s * 0.003]
+		"rasp", "scraper", "spokeshave":
+			# Its face or blade across the stroke, as wide as it is.
+			var half: float = {"rasp": 12.5, "scraper": 30.0, "spokeshave": 25.0}[current] * MM
+			segments.append_array([p - s * half, p + s * half, p - s * half, p - s * half + a * 0.006,
+					p + s * half, p + s * half + a * 0.006])
 		"sanding_block":
 			var hl := 0.035
 			var hb := 0.020
@@ -775,6 +801,10 @@ func _place_rests() -> void:
 	var gouge := _frame(Vector3(-0.02, 0.0115, 0.145), Vector3.UP, Vector3.LEFT)
 	gouge.basis = gouge.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
 	_rest["gouge"] = gouge
+	_rest["rasp"] = _frame(Vector3(0.02, 0.0, -0.2), Vector3.UP, Vector3.LEFT)
+	_rest["spokeshave"] = _frame(Vector3(-0.15, 0.0, -0.06), Vector3.UP, Vector3.FORWARD)
+	# The scraper stands on its edge against nothing: it lies flat, on its face.
+	_rest["scraper"] = _frame(Vector3(0.16, 0.0004, 0.1), Vector3.RIGHT, Vector3.FORWARD)
 	var saw := Transform3D(Basis(Vector3.RIGHT, Vector3.UP, Vector3.BACK) * Basis.from_scale(Vector3.ONE * MM),
 			Vector3(0.0, 0.011, -0.12))
 	_rest["saw"] = saw

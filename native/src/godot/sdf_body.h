@@ -77,6 +77,10 @@ public:
 	//                      path), seed. The stroke makes the plan the cutting model works out
 	//                      against this body (core tools/cutting.h): plan_stroke()'s, if it
 	//                      was this one.
+	//   "spokeshave"       depth (mm below its sole), length, seed: planned like a chisel
+	//   "rasp"             variant ("rasp_cabinet"...), pressure, tilt (degrees about its line),
+	//                      length: worked back and forth along its line
+	//   "scraper"          pressure, length: the same
 	//   "saw"              feed: mm deeper per mm of stroke
 	//   "sanding_block", "sanding_sponge"  grit, pressure
 	// The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on the worker
@@ -98,8 +102,8 @@ public:
 			const godot::Vector3 &along, double length, const godot::Dictionary &settings);
 	godot::Dictionary get_plan() const { return plan_report_; } // the current plan's report
 	void clear_plan();
-	// The chisels and gouges there are (core tools/catalog.h): [{id, family ("chisel" or
-	// "gouge"), label, width, bevel, mallet}].
+	// The tools with variants (core tools/catalog.h): [{id, family ("chisel", "gouge" or
+	// "rasp"), label, width, ...}].
 	static godot::Array tool_catalog();
 	void set_plan_tint(const godot::Color &tint); // colour, and alpha: how strongly
 	// How much of the body is drawn, 0 to 1 (a tool fading in and out): a dither.
@@ -251,6 +255,9 @@ private:
 	godot::Dictionary plan_report_;
 	bool plan_stale_ = false;
 	godot::Dictionary compute_plan();
+	// A chisel's, gouge's or spokeshave's plan against `work`, from its settings.
+	static tools::CutPlan plan_for(const godot::String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a,
+			float length, const godot::Dictionary &settings);
 	double opacity_ = 1.0;
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed

@@ -12,9 +12,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - The first plan's lasting design sections and its detailed E4 (bake) design are archived
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
-- **Pieces** is under way: P1 (saw through) is done. P2 (islands left by any cut) waits
-  on **Tools** (below), which makes the tools behave like their real selves and every
-  stroke planned before it is made: T1 and T2 are done, T3 is next.
+- **Tools** (below) is done: the tools behave like their real selves, and every stroke is
+  planned before it is made (T1 to T3).
+- **Pieces** is under way: P1 (saw through) is done, P2 (islands left by any cut) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -63,6 +63,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
 | T1 | Every stroke planned first: hold the right button to lock it in and see it hatched on the board and side on in a section inset (the board cut open in orthographic views only), the wheel for its intensity; left-drag makes it along the plan. The tool in hand stays out of the main view until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
+| T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -85,7 +86,7 @@ path needs compute passes.
 | 7 | **Forging**: hot metal deformed by blows | E7 | sampled base grid |
 | 8 | **Scale**: 2 m stone, 100k edits | E8, O3 | everything |
 
-## T. Tools — plan, lock, act; cutting by the wood (current: T1 and T2 done, T3 next)
+## T. Tools — plan, lock, act; cutting by the wood: done (T1 to T3)
 
 **Why.** The tools cut like SDF cutters, not like hand tools: the chisel ramps in to
 whatever depth is set, anywhere, whatever the wood. A stroke starts the moment the button
@@ -133,7 +134,7 @@ Decided with the user:
 - The HUD and the inset show the force needed against the force available, the grain,
   and warnings: skates, stalls, tear-out, corners buried, breakout, needs a mallet.
 
-### T3 — rasps, card scraper, spokeshave
+### T3 — rasps, card scraper, spokeshave: done
 - **Rasp:** removal set by coarseness, pressure and hardness; never tears; flat or
   half-round (which hollows); tilted to chamfer an arris.
 - **Card scraper:** about 0.01 mm a pass, no tear-out; cleans up.
@@ -141,7 +142,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-## 1. Pieces — bodies that come apart (current: P1 done, P2 after Tools)
+## 1. Pieces — bodies that come apart (current: P1 done, P2 next)
 
 **Why one capability.** Sawing through, a failing joint and a fracture all end with one
 body becoming several that move on their own. Build it once:

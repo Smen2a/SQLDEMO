@@ -3,8 +3,8 @@ extends CanvasLayer
 ## The workshop's controls: tools, their settings, the wood, undo / redo / reset, and a
 ## status line (edits, how long the last edit took to apply and upload, GPU frame time).
 
-const TOOL_LABELS := {"chisel": "1  Chisel", "gouge": "2  Gouge", "saw": "3  Saw", "sanding_block": "4  Sanding block",
-		"sanding_sponge": "5  Sanding sponge"}
+const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
+		"spokeshave": "5 Spokeshave", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge"}
 ## What stands in a planned cut's way (SdfBody.plan_stroke's warnings), in words.
 const WARNINGS := {
 	"skates": "skates on its bevel: tip it past %d°",
@@ -19,9 +19,9 @@ const WARNINGS := {
 	"splits": "along the grain: the wedge splits it",
 }
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
-const HINTS := "Hold right on the board: plan a stroke (wheel: how hard, Shift+wheel: angle, Q / E: turn)   " + \
-		"then left-drag: make it   Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   " + \
-		"Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+const HINTS := "Hold right on the board: plan a stroke (wheel: how hard, Shift+wheel: angle, Q / E: skew or " + \
+		"turn, C: chop, Tab: variant), then left-drag: make it\nEsc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, " + \
+		"redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 
 var workshop
 
@@ -67,6 +67,21 @@ func _ready() -> void:
 		_slider(box, family, "angle", "Angle", "%.0f°")
 		edge_boxes[family] = box
 	var chisel: VBoxContainer = edge_boxes.chisel
+	var rasp := VBoxContainer.new()
+	left.add_child(rasp)
+	var rasp_labels: Array = []
+	for v in workshop.variants.get("rasp", []):
+		rasp_labels.append(v.label)
+	_variants["rasp"] = _choice(rasp, "Kind", rasp_labels, 1, func(i):
+		workshop.set_setting("rasp", "variant", workshop.variants.rasp[i].id))
+	_slider(rasp, "rasp", "pressure", "Pressure", "%.2f")
+	_slider(rasp, "rasp", "tilt", "Tilt", "%.0f°")
+	var shave := VBoxContainer.new()
+	left.add_child(shave)
+	_slider(shave, "spokeshave", "depth", "Depth", "%.2f mm")
+	var scraper := VBoxContainer.new()
+	left.add_child(scraper)
+	_slider(scraper, "scraper", "pressure", "Pressure", "%.2f")
 	var saw := VBoxContainer.new()
 	left.add_child(saw)
 	_slider(saw, "saw", "feed", "Feed", "%.3f mm per mm")
@@ -80,8 +95,8 @@ func _ready() -> void:
 	_choice(sponge, "Grit", ["60", "120", "220"], 1,
 			func(i): workshop.set_setting("sanding_sponge", "grit", [60, 120, 220][i]))
 	_slider(sponge, "sanding_sponge", "pressure", "Pressure", "%.2f")
-	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "sanding_block": block,
-			"sanding_sponge": sponge}
+	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "rasp": rasp, "spokeshave": shave,
+			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge}
 
 	# The board, top right.
 	var right := _panel(root, Vector2.ZERO)
@@ -148,8 +163,8 @@ func plan_text() -> String:
 	var tool: String = workshop.current
 	var s: Dictionary = workshop.settings[tool]
 	var named: Dictionary = workshop.variant()
-	var parts: Array[String] = [named.label if not named.is_empty() else TOOL_LABELS[tool].substr(3)]
-	if tool == "chisel" or tool == "gouge":
+	var parts: Array[String] = [named.label if not named.is_empty() else TOOL_LABELS[tool].substr(2)]
+	if tool == "chisel" or tool == "gouge" or tool == "spokeshave":
 		return _edge_text(plan, s, parts)
 	var intensity = workshop.INTENSITY.get(tool)
 	if intensity != null:
@@ -160,6 +175,8 @@ func plan_text() -> String:
 	match tool:
 		"saw":
 			parts.append("%.0f mm strokes, %.2f mm deeper each" % [plan.length, plan.get("depth", 0.0)])
+		"rasp", "scraper":
+			parts.append("%.0f mm strokes, %.3f mm off each" % [plan.length, plan.get("depth", 0.0)])
 		"sanding_block":
 			parts.append("%.0f mm rub takes %.3f mm" % [plan.length, plan.get("depth", 0.0)])
 		"sanding_sponge":
@@ -224,8 +241,9 @@ func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String
 		parts.append("chopping: this blow %.1f mm, the slit %.1f mm deep" % [plan.get("blow", 0.0), depth])
 	else:
 		parts.append("%.2f mm deep (asked %.2f)" % [depth, s.depth])
-		parts.append("%.0f° to the work" % s.angle)
-		if absf(s.skew) > 0.5:
+		if s.has("angle"):
+			parts.append("%.0f° to the work" % s.angle)
+		if absf(s.get("skew", 0.0)) > 0.5:
 			parts.append("skewed %.0f°" % s.skew)
 		parts.append("%.0f mm" % plan.get("length", 0.0))
 		parts.append("%.0f of %.0f N" % [plan.get("force", 0.0), plan.get("available", 0.0)])

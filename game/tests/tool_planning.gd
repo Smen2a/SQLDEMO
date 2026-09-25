@@ -9,6 +9,8 @@ extends "res://tests/harness.gd"
 ## - uphill, against the grain, the plan says so;
 ## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
 ## - a #7 gouge goes a millimetre deep there, where the chisel could not;
+## - a spokeshave takes an even 0.1 mm shaving; a rasp worked back and forth takes what its
+##   plan says, stroke by stroke;
 ## - the camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 ## When rendering, saves the main view and the inset while planning (--out=<dir>).
 
@@ -124,6 +126,44 @@ func _ready() -> void:
 	workshop.unlock()
 	print("tool planning: asked 1 mm, the #7 gouge %.2f mm, the bench chisel %.2f mm" % [gouge_depth, chisel_depth])
 	_check(absf(gouge_depth - 1.0) < 0.01 and chisel_depth < 0.6, "the gouge goes deeper than the chisel")
+
+	# A spokeshave on the flat top: its sole sets an even 0.1 mm shaving from the start.
+	workshop.select_tool("spokeshave")
+	await _frames(4)
+	var shave_from := Vector3(-0.06, 0.025, 0.035)
+	var shave_to := Vector3(-0.02, 0.025, 0.035)
+	plan = await _plan(shave_from, shave_to)
+	_check(absf(plan.get("depth", 0.0) - 0.1) < 0.005 and not ("shallow" in plan.get("warnings", PackedStringArray())),
+			"the spokeshave plans an even 0.1 mm shaving (%.3f)" % plan.get("depth", 0.0))
+	workshop.press(cam.unproject_position(shave_from))
+	for k in 8:
+		workshop.drag_screen(cam.unproject_position(shave_from.lerp(shave_to, float(k + 1) / 8.0)))
+		await _frames(1)
+	workshop.release()
+	workshop.unlock()
+	workshop.board.flush()
+	var shaved := _depth_at(Vector3(-0.04, 0.0, 0.035))
+	print("tool planning: the spokeshave took %.3f mm" % shaved)
+	_check(absf(shaved - 0.1) < 0.02, "the spokeshave took its shaving")
+
+	# A cabinet rasp worked ten strokes along 40 mm of ash: five times one stroke's plan.
+	workshop.select_tool("rasp")
+	await _frames(4)
+	var rasp_from := Vector3(0.02, 0.025, 0.035)
+	var rasp_to := Vector3(0.06, 0.025, 0.035)
+	plan = await _plan(rasp_from, rasp_to)
+	var per_stroke: float = plan.get("depth", 0.0)
+	_check(per_stroke > 0.01 and per_stroke < 0.05, "a rasp stroke there and back takes a few hundredths (%.3f)" % per_stroke)
+	workshop.press(cam.unproject_position(rasp_from))
+	for k in 10:
+		workshop.drag_screen(cam.unproject_position(rasp_to if k % 2 == 0 else rasp_from))
+		await _frames(1)
+	workshop.release()
+	workshop.unlock()
+	workshop.board.flush()
+	var rasped := _depth_at(Vector3(0.04, 0.0, 0.035))
+	print("tool planning: ten rasp strokes took %.3f mm (%.3f a stroke there and back)" % [rasped, per_stroke])
+	_check(absf(rasped - 5.0 * per_stroke) < 0.02, "the rasp took what its plan said, stroke by stroke")
 
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw

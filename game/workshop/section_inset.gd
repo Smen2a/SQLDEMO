@@ -4,13 +4,20 @@ extends PanelContainer
 ## open along its path, so the tool's angle and the cut's depth show as they would in a
 ## sectioned drawing (and the grain, which the wood's colour follows through its depth).
 ## An orthographic camera in a SubViewport sharing the workshop's world looks across the
-## path; the board draws itself cut open only in orthographic views (SdfBody.set_section),
-## and the tool in hand, hidden from the main view while a stroke is planned, is on a
-## layer this camera sees.
+## path; the board and the tool in hand draw themselves cut open along it only in
+## orthographic views (SdfBody.set_section), so the tool shows its profile (a chisel's
+## bevel, a spokeshave's blade in its mouth) and nothing in front hides the cut. The tool
+## in hand, hidden from the main view while a stroke is planned, is on a layer this camera
+## sees; the camera starts drawing just short of the section, so tools lying on the bench
+## in front of the board stay out of it.
 
 const SIZE := Vector2i(360, 240)
 
+const REACH := 0.2        # m from the camera to the section plane
+const IN_FRONT := 0.04    # m in front of the plane it still draws
+
 var board                  # SdfBody, cut open while the inset shows
+var tool                   # the SdfBody in hand, cut open with it (or null)
 var cull_mask := 0xFFFFF   # the layers the inset camera draws
 
 var _viewport: SubViewport
@@ -40,7 +47,7 @@ func _ready() -> void:
 	container.add_child(_viewport)
 	_camera = Camera3D.new()
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.near = 0.001
+	_camera.near = REACH - IN_FRONT
 	_camera.far = 1.0
 	_camera.cull_mask = cull_mask
 	_viewport.add_child(_camera)
@@ -53,18 +60,21 @@ func _ready() -> void:
 ## part of the board nearer the viewer is cut away. The view frames `focus` (where the
 ## tool's edge is) closely enough to see a cut `depth` mm deep, with room above for the tool.
 ## `live` (a stroke being made) draws every frame; otherwise (a plan) only when the view,
-## the caption or the board changes, which spares a second raymarch a frame.
+## the caption or the board changes, which spares a second raymarch a frame. `least` (mm):
+## the least height it frames (a big tool needs more to be seen whole).
 func show_section(start: Vector3, along: Vector3, normal: Vector3, focus: Vector3, depth: float, caption: String,
-		live := true) -> void:
+		live := true, least := 14.0) -> void:
 	var across := along.cross(normal).normalized() # towards the viewer: the side cut away
-	var height := clampf(depth * 3.0 + 10.0, 14.0, 60.0) * 0.001
+	var height := clampf(depth * 3.0 + 10.0, least, 60.0) * 0.001
 	var width := height * float(SIZE.x) / float(SIZE.y)
 	# The edge a third of the way in, the surface a little above the middle.
 	focus -= across * (focus - start).dot(across)
 	var centre := focus + along * (width * 0.2) + normal * (height * 0.1 - depth * 0.0005)
 	_camera.size = height
-	_camera.global_transform = Transform3D(Basis(along, normal, across), centre + across * 0.2)
+	_camera.global_transform = Transform3D(Basis(along, normal, across), centre + across * REACH)
 	board.set_section(start, across)
+	if tool != null:
+		tool.set_section(start, across)
 	_caption.text = caption
 	visible = true
 	if live:
@@ -88,3 +98,12 @@ func hide_section() -> void:
 	_shown = []
 	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	board.set_section(Vector3.ZERO, Vector3.ZERO)
+	if tool != null:
+		tool.set_section(Vector3.ZERO, Vector3.ZERO)
+
+
+## The tool in hand (null for none): cut open with the board from now on.
+func set_tool(body) -> void:
+	if tool != null and tool != body:
+		tool.set_section(Vector3.ZERO, Vector3.ZERO)
+	tool = body

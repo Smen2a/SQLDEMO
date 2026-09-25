@@ -10,10 +10,11 @@ mode. The full design is in the approved plan; this README covers what exists to
 
 Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). A board lies on a
 bench with hand tools beside it: a chisel and a carving gouge (each in several kinds), a
-back saw, a sanding block and a sanding sponge. Every one is an SDF body, built by the
-engine in steel, brass, ash, walnut, cork and abrasive.
+back saw, a rasp, a spokeshave, a card scraper, a sanding block and a sanding sponge.
+Every one is an SDF body, built by the engine in steel, brass, ash, walnut, cork and
+abrasive.
 
-1. **Pick up a tool.** Click it on the bench, or press 1 to 5; Tab (or the panel) picks
+1. **Pick up a tool.** Click it on the bench, or press 1 to 8; Tab (or the panel) picks
    its kind. It stays out of sight while you aim, so it never hides the spot you are
    working on.
 2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,
@@ -23,10 +24,11 @@ engine in steel, brass, ash, walnut, cork and abrasive.
    - The cut it would make shows on the board, hatched in the tool's colour.
    - A **section inset** on the right shows it side on, the board cut open along the
      path: the tool's angle, the cut's depth, and the grain through the wood.
-   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the saw's
-     feed, the sanding tools' pressure). **Shift+wheel** sets a chisel's or gouge's angle
-     to the work, and **C** holds it straight up to chop. **Q / E** skew a chisel's edge,
-     or turn the sanding tools.
+   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the
+     spokeshave's shaving, the saw's feed, the pressure on the rasp, the scraper and the
+     sanding tools). **Shift+wheel** sets a chisel's or gouge's angle to the work (**C**
+     holds it straight up to chop), or tilts the rasp about its line. **Q / E** skew a
+     chisel's edge, or turn the sanding tools.
    - A line beside the pointer says what the stroke comes to: for a chisel, how deep the
      wood lets it go, the force it takes of what a hand can give, how it meets the grain,
      and what will go wrong. For example: *Bench chisel 12 mm 0.48 mm deep (asked 1.00)
@@ -39,6 +41,9 @@ engine in steel, brass, ash, walnut, cork and abrasive.
      Chopping, each click is a mallet blow.
    - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
      kerf by the feed, until it is through the board.
+   - **Rasp, card scraper:** back and forth along their line, taking the surface down
+     steadily; see *Shaping and finishing* below.
+   - **Spokeshave:** pushed along its path, taking its shaving.
    - **Sanding block:** takes the surface down wherever it rubs, faster at coarser grits
      and more pressure. Being a flat block, it flattens: high spots and edges go first,
      and the edges of the patch feather out.
@@ -286,6 +291,28 @@ noted):
 | Oak, chop along the grain | 6.2 mm, and it splits |
 | Mortise chisel 8 mm vs a bench chisel of 8 mm | 1.5× per blow |
 | Paring chisel, chopped | 0.02 mm: never struck |
+
+### Shaping and finishing: rasps, a card scraper, a spokeshave
+
+`native/src/core/tools/shaping.h`:
+- **Rasps** (a coarse wood rasp, a cabinet rasp flat or round, a fine patternmaker's) take
+  a tiny bite with each tooth, so they never tear the grain, whichever way they go.
+  - They remove steadily, faster the coarser they are and the harder they are pressed,
+    slower in harder wood. A cabinet rasp takes about 0.03 mm of ash per 40 mm stroke there
+    and back, 0.24 mm in ten 60 mm strokes.
+  - The flat face lowers what it is rubbed over. Tilted about its line (Shift+wheel) along
+    an arris, it takes a chamfer off it. The round face hollows.
+- **The card scraper**, flexed, takes a whisper: about 0.006 mm a 100 mm stroke, feathered
+  at its sides, and it cannot tear out. It is for cleaning up tear-out and tool marks.
+- **The spokeshave** is a plane with a 40 mm sole.
+  - Its sole rests on the work, the lowest line lying on the surface under it: the surface
+    itself where it is convex, bridging hollows shorter than the sole.
+  - Its blade takes a shaving that far below: an even 0.1 mm on a flat face from its first
+    millimetre (where a chisel has to dive in), following a curve, leaving a groove alone.
+  - Two hands push it (250 N). Against the grain it tears out as a chisel does, at half
+    the rate: its mouth keeps the split short.
+- `native/tests/test_shaping.cpp` checks each of these, and `game/tests/tool_planning`
+  makes a spokeshave pass and ten rasp strokes in the workshop.
 
 ### Pieces: sawn through, the board comes apart
 

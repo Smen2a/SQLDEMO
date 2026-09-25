@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tools/shaping.h"
 #include "tools/tools.h"
 
 #include <string>
@@ -17,6 +18,8 @@
 //                               a U-shaped veiner; a V-tool (60 degrees) for lines
 // Sweep radii follow the Sheffield list at 12 mm: #3 about 1.8 widths, #7 about 0.6, #11
 // half the width (a U).
+// And rasps, coarse to fine: a wood rasp, a cabinet rasp (flat or half-round face) and a
+// patternmaker's rasp.
 namespace sdf::tools {
 
 struct ChiselVariant {
@@ -29,5 +32,14 @@ struct ChiselVariant {
 const std::vector<ChiselVariant> &chisel_catalog();
 // The variant with `id`, or null.
 const ChiselVariant *find_chisel(const std::string &id);
+
+struct RaspVariant {
+	std::string id;    // e.g. "rasp_cabinet"
+	std::string label; // e.g. "Cabinet rasp"
+	Rasp rasp;
+};
+
+const std::vector<RaspVariant> &rasp_catalog();
+const RaspVariant *find_rasp(const std::string &id);
 
 } // namespace sdf::tools
