@@ -47,8 +47,9 @@ This revision merges those into shared capabilities and keeps finished work to o
    - Separate parts are separate bodies.
 5. **Every step ends green, committed and pushed:**
    - native tests (GCC and Clang);
-   - `tools/test_godot.sh`: Compatibility, plus Forward+ on Vulkan (Mesa's lavapipe without a GPU);
-   - GPU/CPU parity;
+   - `tools/test_godot.sh`: the headless tier (logic, plus a one-frame shader compile check);
+   - `tools/test_godot.sh --gpu` where there is a GPU: renders, image checks, GPU/CPU parity,
+     Forward+ on Vulkan;
    - benches (`sdf_bench`), with numbers in the README;
    - a zip at each milestone.
 

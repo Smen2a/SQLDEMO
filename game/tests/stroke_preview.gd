@@ -2,10 +2,11 @@ extends "res://tests/harness.gd"
 
 ## A stroke previewed by the shader (SdfBody.stroke_preview: its edits drawn on top of the
 ## body while the tool moves) must look like the same stroke once it is committed. For each
-## tool, on a fresh board, strokes through SdfBody's own calls and renders the preview, lifts
-## the tool off, waits for the commit to land and renders again, then compares the two as
-## tools/parity.sh compares images. Also checks that previewing applies nothing to the body
-## and that the overlay empties once the commit lands. User args (after `--`):
+## tool, on a fresh board, strokes through SdfBody's own calls and checks that previewing
+## draws an overlay and applies nothing to the body, lifts the tool off, and checks that the
+## commit lands as the edits expected and the overlay empties. Rendered (tools/run.sh
+## --render), it also renders the preview and the commit and compares the two as
+## tools/parity.sh compares images; headless, it checks only the edits. User args (after `--`):
 ##   --out=<dir>   writes <dir>/preview_<tool>_<view>_{preview,committed,diff}.png
 
 const VIEWS := {"normals": 1, "albedo": 3, "shaded": 0}
@@ -18,18 +19,16 @@ const TOP := 12.5 # the board's top face (body millimetres, z up)
 
 var body
 var _failed := false
+var _render := DisplayServer.get_name() != "headless"
 
 
 func _ready() -> void:
-	if DisplayServer.get_name() == "headless":
-		printerr("stroke preview needs a renderer: run it with tools/run.sh --render")
-		get_tree().quit(1)
-		return
 	get_tree().create_timer(float(user_arg("--timeout", "900"))).timeout.connect(func():
 		push_error("stroke preview: timed out")
 		get_tree().quit(1))
 	var out := user_arg("--out", "")
-	DirAccess.make_dir_recursive_absolute(out)
+	if _render and out != "":
+		DirAccess.make_dir_recursive_absolute(out)
 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -75,7 +74,8 @@ func _ready() -> void:
 	await _check(out, "sanding_block", Vector3(-30, 20, TOP), Vector3(1, 0, 0), {"grit": 80}, rub, 1)
 
 	if not _failed:
-		print("stroke preview: every tool's preview matches its commit")
+		print("stroke preview: every tool's %s" % ("preview matches its commit" if _render else
+				"preview commits as previewed (not rendered)"))
 	get_tree().quit(1 if _failed else 0)
 
 
@@ -88,24 +88,31 @@ func _check(out: String, tool: String, contact: Vector3, along: Vector3, setting
 	for p in path:
 		body.move_stroke(p)
 	var stats: Dictionary = body.get_stats()
-	if stats.edits != 0 or body.is_busy() or stats.overlay_edits == 0:
-		_fail("%s: previewing applied edits (%d) or drew none (%d)" % [tool, stats.edits, stats.overlay_edits])
-	var preview := await _render_views()
+	var drawn: int = stats.overlay_edits
+	if stats.edits != 0 or body.is_busy() or drawn == 0:
+		_fail("%s: previewing applied edits (%d) or drew none (%d)" % [tool, stats.edits, drawn])
+	var preview := {}
+	if _render:
+		preview = await _render_views()
 	body.end_stroke()
 	body.flush()
 	stats = body.get_stats()
 	if stats.edits != merged_edits or stats.overlay_edits != 0:
 		_fail("%s: committed %d edits (expected %d), %d left in the overlay" % [
 				tool, stats.edits, merged_edits, stats.overlay_edits])
+	if not _render:
+		print("%-14s %d edits previewed, %d committed" % [tool, drawn, stats.edits])
+		return
 	var committed := await _render_views()
 	for view in VIEWS:
 		var a: Image = preview[view]
 		var b: Image = committed[view]
 		var result := _compare(a, b)
-		var name := "%s/preview_%s_%s" % [out, tool, view]
-		a.save_png(name + "_preview.png")
-		b.save_png(name + "_committed.png")
-		result.diff.save_png(name + "_diff.png")
+		if out != "":
+			var name := "%s/preview_%s_%s" % [out, tool, view]
+			a.save_png(name + "_preview.png")
+			b.save_png(name + "_committed.png")
+			result.diff.save_png(name + "_diff.png")
 		var ok: bool = result.mean <= MAX_MEAN and result.over <= MAX_OVER
 		print("%s  %-14s %-8s mean %.3f (max %.1f), %.3f%% over %d (max %.1f%%)" % [
 				"ok  " if ok else "FAIL", tool, view, result.mean, MAX_MEAN, result.over * 100.0, THRESHOLD,

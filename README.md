@@ -686,15 +686,32 @@ native/build/sdf_tests            # property tests (exactness, compact support, 
                                   # and golden images of the demo scenes
 native/build/sdf_gallery out 2 2  # re-render the gallery images at 2x, 2x2 supersampled
 
-GODOT=/path/to/godot tools/test_godot.sh   # shader compile checks, the extension, live
-                                           # renders, the workshop, stroke previews and
-                                           # GPU/CPU parity (needs xvfb-run and Mesa;
-                                           # several minutes on llvmpipe); with a Vulkan
-                                           # driver, also GPU brick sampling (Forward+)
+GODOT=/path/to/godot tools/test_godot.sh        # headless tier: the Godot-side logic
+GODOT=/path/to/godot tools/test_godot.sh --gpu  # GPU tier: renders, images, parity
 GODOT=/path/to/godot tools/run.sh --vulkan res://tests/gpu_bricks.tscn   # GPU vs CPU bricks,
                                            # with build and refinement times
 native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, any view
 ```
+
+The Godot tests come in two tiers:
+- **Headless** (`tools/test_godot.sh`, under a minute on a CPU):
+  - the extension loads;
+  - the workshop's tools cut and undo;
+  - stroke previews commit as previewed;
+  - planned and direct strokes;
+  - offcuts and islands come away and settle.
+
+  One frame is rendered in software to check that the Live shader and the shared includes
+  compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.
+- **GPU** (`tools/test_godot.sh --gpu`): everything that looks at images:
+  - live renders;
+  - the workshop and planning drives with screenshots in `out/`;
+  - stroke previews compared with their commits image by image;
+  - GPU/CPU parity (`tools/parity.sh`);
+  - with a Vulkan driver, GPU brick sampling (Forward+).
+
+  It needs xvfb-run. It runs on Mesa's software drivers too, but at about 2 s a frame on
+  llvmpipe that takes around half an hour.
 
 After editing anything in `native/src/core/shared/`, run `tools/sync_shaders.sh`; the
 test suite fails if the Godot copies drift. After an intended visual change, rewrite the
