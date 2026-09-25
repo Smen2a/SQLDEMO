@@ -39,7 +39,10 @@ extends Node3D
 ##
 ## A saw cut that goes right through leaves the board in two pieces: the smaller one comes
 ## away as a rigid body and slides off the kerf, the larger stays on the bench as the
-## board. Undo straight after puts them back together.
+## board. So does a piece that cuts meeting leave free (a rebate sawn off the end: one cut
+## down, one in from the end): it shows as its own body once it has been cut out, then
+## falls or rests as it will on the board, whose collider follows its surface from then on.
+## Undo straight after puts them back together.
 ##
 ## The world is in metres with y up. Bodies are in millimetres with z up: each body node is
 ## scaled by 0.001 and turned -90 degrees about x.
@@ -50,6 +53,9 @@ const OrbitCamera := preload("res://workshop/orbit_camera.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
+const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
+const SETTLE_INTO := 0.00018 # m it starts into that (the solver's slop is 0.2 mm)
+const SHAPE_MARGIN := 0.0001 # m: islands' and the hollowed board's shapes, sharp to a tenth of a mm
 
 ## IDLE: pointing. PLANNING: a stroke locked in with the right button. ARMED: a direct
 ## stroke (the left button, no plan) waiting for its drag to show which way it goes.
@@ -526,6 +532,9 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 	var piece = board.split(point, normal)
 	if piece == null:
 		return
+	# An island (no plane: cuts meeting left it) is hidden until it has taken in its region;
+	# its rigid body waits frozen till then.
+	var island := normal == Vector3.ZERO
 	# The rigid body sits at the piece's centre of mass (Godot's own follows shape origins).
 	var body := RigidBody3D.new()
 	add_child(body)
@@ -533,7 +542,12 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 	body.global_transform = Transform3D(Basis.IDENTITY, centre)
 	piece.transform = Transform3D(board.global_basis, board.global_position - centre)
 	body.add_child(piece)
-	body.add_child(_collider_for(piece))
+	var collider := _collider_for(piece)
+	if island:
+		# An island rests in the board's hollows, on convex pieces: both sharp (Godot's default
+		# margin, 4 cm, rounds millimetre shapes away).
+		collider.shape.margin = SHAPE_MARGIN
+	body.add_child(collider)
 	body.mass = maxf(piece.get_mass(), 0.005)
 	# Sanded wood on a bench top. Below the width-to-height ratio of a sawn strip, so it
 	# slides off the kerf rather than toppling over.
@@ -542,11 +556,30 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 	body.physics_material_override = surface
 	# As the last saw stroke would: a nudge off the kerf (about 6 mm of slide).
 	body.linear_velocity = normal * 0.25
+	body.freeze = island and not piece.visible
 	# The board's step count once its half-space lands (undo then rejoins the pieces).
 	offcuts.append({"body": body, "piece": piece, "steps": board.get_stats().get("steps", 0) + 1,
-			"spawn": body.global_transform})
-	_update_board_collider()
+			"spawn": body.global_transform, "island": island})
+	if not body.freeze:
+		_update_board_collider()
 	_ui.refresh()
+
+
+## Lowers a piece about to be let go onto what it rests on (within 3 mm below), and says
+## whether there was anything: just into it, within the solver's slop. Let go a kerf's
+## width above a surface, a body's first physics step has no contact yet and it falls
+## 2.7 mm into it (and out of the far side of a thin one); touching, the contact holds.
+func _settle(body: RigidBody3D) -> bool:
+	var collider: CollisionShape3D = body.get_child(body.get_child_count() - 1)
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = collider.shape
+	query.transform = body.global_transform * collider.transform
+	query.motion = Vector3(0.0, -SETTLE_REACH, 0.0)
+	query.exclude = [body.get_rid()]
+	var safe: PackedFloat32Array = get_world_3d().direct_space_state.cast_motion(query)
+	if safe[0] < 1.0:
+		body.global_position.y -= SETTLE_REACH * safe[0] + SETTLE_INTO
+	return safe[0] < 1.0
 
 
 ## A collider for a piece (a child of its rigid body, placed by piece.transform).
@@ -579,12 +612,32 @@ func _update_board_collider() -> void:
 		return
 	_board_collider = StaticBody3D.new()
 	add_child(_board_collider)
+	if offcuts.any(func(o): return o.island):
+		# Where islands came out the board is hollowed (a rebate, a notch): convex pieces round
+		# where they were, not one hull that would fill the hollows they sit in.
+		# The seams between pieces fall a little outside each island (less than half a kerf),
+		# so that it does not settle on one and catch on its neighbour's side.
+		var holes := []
+		for offcut in offcuts:
+			if offcut.island:
+				holes.append(offcut.piece.get_body_bounds().grow(0.3))
+		for points in board.get_collision_hulls(holes):
+			var hull := ConvexPolygonShape3D.new()
+			var placed := PackedVector3Array()
+			for p in points:
+				placed.push_back(board.transform * p)
+			hull.points = placed
+			hull.margin = SHAPE_MARGIN
+			var piece_collider := CollisionShape3D.new()
+			piece_collider.shape = hull
+			_board_collider.add_child(piece_collider)
+		return
+	var collider := CollisionShape3D.new()
 	var hull := ConvexPolygonShape3D.new()
 	var points := PackedVector3Array()
 	for p in board.get_hull_points():
 		points.push_back(board.transform * p)
 	hull.points = points
-	var collider := CollisionShape3D.new()
 	collider.shape = hull
 	_board_collider.add_child(collider)
 
@@ -698,6 +751,24 @@ func _process(delta: float) -> void:
 		if _opacity != target:
 			_opacity = move_toward(_opacity, target, delta / FADE_TIME)
 			_show_tool(current, _opacity)
+	# An island's piece shows once its region is in: the board's collider follows its surface
+	# as it now is, and a few physics steps later (once the collider is among the bodies it
+	# can meet) the island is set down on what is under it, and let go.
+	for offcut in offcuts:
+		if offcut.body.freeze and offcut.piece.visible:
+			if not offcut.has("release"):
+				_update_board_collider()
+				offcut.release = Engine.get_physics_frames() + 3
+				offcut.settled = false
+			elif not offcut.settled and Engine.get_physics_frames() >= offcut.release - 1:
+				# A step before it is let go, so that the step sees it there.
+				offcut.resting = _settle(offcut.body)
+				offcut.settled = true
+			elif offcut.settled and Engine.get_physics_frames() >= offcut.release:
+				offcut.body.freeze = false
+				# Set down on something, it lies there until something moves it (it would rock on
+				# the few points a board's sampled surface gives it); with nothing under it, it falls.
+				offcut.body.sleeping = offcut.resting
 	_draw_outline()
 	_ui.update_status()
 

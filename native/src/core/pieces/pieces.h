@@ -49,6 +49,7 @@ struct PieceSides {
 	double volume[2] = {0.0, 0.0}; // behind the cut, in front of it (mm^3)
 	vec3 centre[2];                // centres of volume
 	std::vector<vec3> hull[2];     // hull_points() of each
+	Aabb island_bounds;            // with a region: the island's
 };
 // With `smaller_in_front`, the cut is turned so that its front is the smaller side (the
 // piece that comes away).

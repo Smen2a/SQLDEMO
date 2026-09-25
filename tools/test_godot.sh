@@ -10,6 +10,8 @@
 #     cut the left-drag then makes; a left-drag without a plan cuts as the wood lets it;
 #     the camera's buttons
 #   - a strip sawn off the board comes away as a rigid body resting on the bench
+#   - a rebate sawn off the end (two cuts meeting, no plane) comes away as an island, shown
+#     once cut out, resting in the rebate on the board's own surface
 #   - GPU/CPU parity over every demo (tools/parity.sh)
 #   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF
 #     bricks sampled by the GPU sampler agree with CPU-sampled ones, and the workshop drive
@@ -51,6 +53,7 @@ check workshop_drive "workshop drive: chisel" --render res://tests/workshop_driv
 check stroke_preview "stroke preview: every tool" --render res://tests/stroke_preview.tscn -- --out="$OUT/preview"
 check tool_planning "tool planning: every step as planned" --render res://tests/tool_planning.tscn -- --out="$OUT"
 check offcut_physics "offcut physics:" --render res://tests/offcut_physics.tscn
+check island_split "island split: the rebate came away" --render res://tests/island_split.tscn
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

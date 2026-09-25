@@ -394,6 +394,7 @@ PieceSides measure_island(const Adf &adf, const Parts &parts, int island, std::s
 			[box](vec3 lo, float size) { return Aabb{lo, lo + vec3(size)}.overlaps(box); },
 			[r](vec3 p) { return r->label(p) == Region::Island; });
 	s.hull[0] = hull_points(adf, nullptr, [r](vec3 p) { return r->label(p) != Region::Island; });
+	s.island_bounds = part.bounds;
 	s.region = std::move(region);
 	return s;
 }

@@ -40,6 +40,10 @@ constexpr int kOverlayPlanned = 2048; // SDF_OVERLAY_PLANNED: bit 11 of an overl
 // value (never its sign) inside the body there, which settling and normal taps within a
 // millimetre of the surface read.
 constexpr float kOverlayMargin = 1.0f;
+// Islands: the least that counts as a piece (mm^3; smaller crumbs stay), and how far round
+// a cut to look for one first (mm).
+constexpr double kLeastIsland = 1.0;
+constexpr float kIslandMargin = 2.0f;
 
 Vector3 to_godot(vec3 v) {
 	return Vector3(v.x, v.y, v.z);
@@ -524,7 +528,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 	} else if (planned_tool(tool)) {
 		// Not planned first: planned now, against the body as it is, and made without a
 		// preview (its report still says what it comes to).
-		flush();
+		settle_body();
 		plan_request_ = PlanRequest{tool, contact, normal, along, double(settings.get("length", 40.0)), settings.duplicate()};
 		compute_plan();
 		if (cut_plan_) {
@@ -532,7 +536,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		}
 	} else {
 		if (reads_body(tool)) {
-			flush(); // these read the body
+			settle_body(); // these read the body
 		}
 		stroke_ = make_stroke(tool, p, n, a, settings);
 	}
@@ -576,7 +580,7 @@ Dictionary SdfBody::compute_plan() {
 	const PlanRequest &r = *plan_request_;
 	const vec3 p = to_body(r.contact), n = gl::normalize(to_body_direction(r.normal));
 	const vec3 a = tools::Frame::at(p, n, to_body_direction(r.along)).x;
-	if (reads_body(r.tool) && job_.valid()) {
+	if (reads_body(r.tool) && !body_settled()) {
 		// The body is being changed: the last plan stands until the edit lands.
 		plan_stale_ = true;
 		report = plan_report_.duplicate();
@@ -754,8 +758,8 @@ void SdfBody::redo() {
 }
 
 void SdfBody::queue(Command c) {
-	if (c.kind != Command::REFINE) {
-		sides_.reset(); // the body is about to change (refining changes no surface)
+	if (c.kind != Command::REFINE && c.kind != Command::CHECK) {
+		sides_.reset(); // the body is about to change (refining and looking change no surface)
 	}
 	queue_.push_back(std::move(c));
 	if (!job_.valid()) {
@@ -803,9 +807,10 @@ void SdfBody::start_job() {
 	job_refines_ = true;
 	job_clips_ = true;
 	job_separated_.reset();
+	job_check_ = Aabb();
 	for (const Command &c : batch) {
 		job_previews_ += c.previewed;
-		job_refines_ = job_refines_ && c.kind == Command::REFINE;
+		job_refines_ = job_refines_ && (c.kind == Command::REFINE || c.kind == Command::CHECK);
 		job_clips_ = job_clips_ && c.clip;
 	}
 	job_ = std::async(std::launch::async, [this, batch = std::move(batch)]() {
@@ -822,19 +827,48 @@ void SdfBody::start_job() {
 					}
 					break;
 				}
-				case Command::COMMIT:
+				case Command::COMMIT: {
+					// Where the stroke cut (within the body), to look there for islands later.
+					const Body &body = session_.body();
+					Aabb cut;
+					for (std::size_t i = body.edits().size() - session_.stroke_edits(); i < body.edits().size(); ++i) {
+						cut.include(body.edits()[i].bounds());
+					}
+					const Aabb within = body.bounds().expanded(1.0f);
+					cut = {gl::max(cut.lo, within.lo), gl::min(cut.hi, within.hi)};
 					session_.commit();
+					bool through = false;
 					if (c.separation) {
 						// Cut clean through: are the parts on either side still joined anywhere?
 						// If not, measure both here, so that split() has nothing to read.
 						const auto t0 = std::chrono::steady_clock::now();
-						const Body &body = session_.body();
 						if (plane_clear(body, session_.octree(), c.separation->plane, body.bounds())) {
 							job_separated_ = measure_sides(session_.adf(), *c.separation, true);
+							through = true;
 						}
 						separation_ms_ = ms_since(t0);
 					}
+					if (!c.clip && !through && !cut.empty()) {
+						job_check_.include(cut);
+					}
 					break;
+				}
+				case Command::CHECK: {
+					// Did the cuts leave an island? If so, cut it out and measure both sides.
+					const auto t0 = std::chrono::steady_clock::now();
+					const Island found = find_island(session_.body(), session_.octree(), session_.adf(), c.region, kLeastIsland);
+					job_island_failed_ = nullptr;
+					if (found.island >= 0) {
+						const CutOut out = cut_out(session_.body(), session_.octree(), session_.adf(), found.parts, found.island);
+						if (out.region) {
+							job_separated_ = measure_island(session_.adf(), found.parts, found.island, out.region);
+						} else {
+							job_island_failed_ = out.failed;
+						}
+					}
+					island_ms_ = ms_since(t0);
+					break;
+				}
 				case Command::DROP:
 					session_.drop_last_step();
 					break;
@@ -874,13 +908,22 @@ void SdfBody::finish_job() {
 	}
 	update_overlay();
 	upload_ms_ = ms_since(start);
+	if (reveal_ && job_clips_) {
+		reveal_ = false; // its region is in: it draws the island alone now
+		set_visible(true);
+	}
 	if (job_refines_) {
 		refine_ms_ = job_ms_;
+		island_failed_ = job_island_failed_ ? String(job_island_failed_) : String();
 		refresh_stats();
 		if (plan_stale_) {
 			compute_plan();
 		}
+		report_separation();
 		return;
+	}
+	if (!job_clips_) {
+		check_region_.include(job_check_);
 	}
 	last_update_ms_ = job_ms_;
 	if (!job_clips_) { // the body changed (a split's half-space leaves what split() measured)
@@ -892,14 +935,24 @@ void SdfBody::finish_job() {
 	if (plan_stale_) {
 		compute_plan(); // against the body as it is now
 	}
-	if (job_separated_) {
-		sides_ = std::move(job_separated_);
-		job_separated_.reset();
-		hold_refine_ = true;
-		const sdf::Plane plane = sides_->cut.plane;
-		const Transform3D xf = get_global_transform();
-		emit_signal("separated", xf.xform(to_godot(plane.point)), xf.basis.xform(to_godot(plane.normal)).normalized());
+	report_separation();
+}
+
+void SdfBody::report_separation() {
+	if (!job_separated_) {
+		return;
 	}
+	sides_ = std::move(job_separated_);
+	job_separated_.reset();
+	hold_refine_ = true;
+	const Transform3D xf = get_global_transform();
+	if (sides_->region) {
+		// An island: where it is, and no plane.
+		emit_signal("separated", xf.xform(to_godot(sides_->centre[1])), Vector3());
+		return;
+	}
+	const sdf::Plane plane = sides_->cut.plane;
+	emit_signal("separated", xf.xform(to_godot(plane.point)), xf.basis.xform(to_godot(plane.normal)).normalized());
 }
 
 // --- pieces ------------------------------------------------------------------------------
@@ -925,8 +978,22 @@ void SdfBody::unshare_textures() {
 	textures_ = std::make_shared<char>();
 }
 
+void SdfBody::clip(std::shared_ptr<const Region> region, std::uint8_t side, const sdf::Aabb &bounds) {
+	clips_.push_back({Plane{}, region, side});
+	unclipped_bounds_.push_back(bounds_);
+	bounds_ = bounds;
+	set_proxy();
+	std::vector<Command> commands;
+	commands.push_back({Command::STROKE, 0, {Edit::keep(std::move(region), side)}});
+	commands.push_back({Command::COMMIT, 0, {}});
+	for (Command &c : commands) {
+		c.clip = true;
+	}
+	queue_all(std::move(commands));
+}
+
 void SdfBody::clip(const sdf::Plane &plane) {
-	clips_.push_back(plane);
+	clips_.push_back({plane, nullptr, 0});
 	unclipped_bounds_.push_back(bounds_);
 	bounds_ = clip_box(bounds_, plane);
 	set_proxy();
@@ -949,11 +1016,21 @@ SdfBody *SdfBody::split(const Vector3 &point, const Vector3 &normal) {
 		UtilityFunctions::push_error("SdfBody.split: needs an ADF body with no tool engaged");
 		return nullptr;
 	}
-	const sdf::Plane plane{to_body(point), gl::normalize(to_body_direction(normal))};
-	// What the worker measured, if this is the plane separated() reported (either way round).
+	const bool island = normal.length_squared() < 1e-12;
+	if (island && !(sides_ && sides_->region)) {
+		UtilityFunctions::push_error("SdfBody.split: no island to split off (separated() reports one)");
+		return nullptr;
+	}
+	const sdf::Plane plane{to_body(point), island ? vec3(0, 0, 1) : gl::normalize(to_body_direction(normal))};
+	// What the worker measured, if this is the plane separated() reported (either way round),
+	// or the island.
 	std::optional<PieceSides> sides = std::move(sides_);
 	sides_.reset();
-	if (sides) {
+	if (sides && sides->region) {
+		if (!island) {
+			sides.reset();
+		}
+	} else if (sides) {
 		const float turn = gl::dot(sides->cut.plane.normal, plane.normal);
 		if (std::fabs(sides->cut.plane.distance(plane.point)) > 1e-3f || std::fabs(std::fabs(turn) - 1.0f) > 1e-4f) {
 			sides.reset();
@@ -1013,8 +1090,23 @@ SdfBody *SdfBody::split(const Vector3 &point, const Vector3 &normal) {
 	piece->update_material();
 	refresh_stats();
 	piece->refresh_stats();
-	clip(cut.behind());
-	piece->clip(cut.front());
+	if (island) {
+		// The island's body shows nothing until its region is in (the shader cannot draw one
+		// before); this one shows the island until its own is.
+		// The island's bounds from its surface's extremes (tight: a box collider is made from
+		// them); its samples' bounds are only good to a voxel.
+		Aabb tight;
+		for (const vec3 &p : piece->hull_) {
+			tight.include(p);
+		}
+		clip(sides->region, Region::Rest, bounds_);
+		piece->clip(sides->region, Region::Island, tight.empty() ? sides->island_bounds : tight);
+		piece->reveal_ = true;
+		piece->set_visible(false);
+	} else {
+		clip(cut.behind());
+		piece->clip(cut.front());
+	}
 	split_ms_ = ms_since(start);
 	stats_["split_ms"] = split_ms_;
 	return piece;
@@ -1034,10 +1126,15 @@ void SdfBody::rejoin() {
 	queue({Command::DROP, 0, {}});
 }
 
+const sdf::Plane *SdfBody::last_plane() const {
+	// (A region leaves nothing of the other side once in, and flush() has put it in.)
+	return clips_.empty() || clips_.back().region ? nullptr : &clips_.back().plane;
+}
+
 PackedVector3Array SdfBody::get_hull_points() {
 	if (hull_.empty() && session_.has_adf()) {
 		flush();
-		hull_ = hull_points(session_.adf(), clips_.empty() ? nullptr : &clips_.back());
+		hull_ = hull_points(session_.adf(), last_plane());
 	}
 	PackedVector3Array out;
 	for (const vec3 &p : hull_) {
@@ -1046,11 +1143,92 @@ PackedVector3Array SdfBody::get_hull_points() {
 	return out;
 }
 
+Array SdfBody::get_collision_hulls(const Array &holes) {
+	Array out;
+	if (!session_.has_adf()) {
+		return out;
+	}
+	flush();
+	const Adf &adf = session_.adf();
+	const Body &body = session_.body();
+	const Octree &octree = session_.octree();
+	std::vector<Aabb> gaps;
+	for (int64_t i = 0; i < holes.size(); ++i) {
+		const AABB b = holes[i];
+		gaps.push_back({vec3(float(b.position.x), float(b.position.y), float(b.position.z)),
+				vec3(float(b.position.x + b.size.x), float(b.position.y + b.size.y), float(b.position.z + b.size.z))});
+	}
+	// The bounds cut into boxes by the holes' faces.
+	std::vector<float> cuts[3];
+	for (int a = 0; a < 3; ++a) {
+		const float lo = a == 0 ? bounds_.lo.x : (a == 1 ? bounds_.lo.y : bounds_.lo.z);
+		const float hi = a == 0 ? bounds_.hi.x : (a == 1 ? bounds_.hi.y : bounds_.hi.z);
+		cuts[a] = {lo, hi};
+		for (const Aabb &g : gaps) {
+			for (const float c : {a == 0 ? g.lo.x : (a == 1 ? g.lo.y : g.lo.z), a == 0 ? g.hi.x : (a == 1 ? g.hi.y : g.hi.z)}) {
+				if (c > lo && c < hi) {
+					cuts[a].push_back(c);
+				}
+			}
+		}
+		std::sort(cuts[a].begin(), cuts[a].end());
+		cuts[a].erase(std::unique(cuts[a].begin(), cuts[a].end()), cuts[a].end());
+	}
+	for (std::size_t i = 0; i + 1 < cuts[0].size(); ++i) {
+		for (std::size_t j = 0; j + 1 < cuts[1].size(); ++j) {
+			for (std::size_t k = 0; k + 1 < cuts[2].size(); ++k) {
+				const Aabb box{vec3(cuts[0][i], cuts[1][j], cuts[2][k]), vec3(cuts[0][i + 1], cuts[1][j + 1], cuts[2][k + 1])};
+				const vec3 c = box.centre();
+				if (std::any_of(gaps.begin(), gaps.end(), [&](const Aabb &g) {
+						return c.x > g.lo.x && c.x < g.hi.x && c.y > g.lo.y && c.y < g.hi.y && c.z > g.lo.z && c.z < g.hi.z;
+					})) {
+					continue; // a hole: left empty
+				}
+				// The surface's points in the box, and points of its faces in the material (where
+				// the box cuts through it).
+				std::vector<vec3> points = hull_points(
+						adf, [&](vec3 lo, float size) { return Aabb{lo, lo + vec3(size)}.overlaps(box); },
+						[&](vec3 p) {
+							return p.x >= box.lo.x && p.y >= box.lo.y && p.z >= box.lo.z && p.x <= box.hi.x && p.y <= box.hi.y &&
+									p.z <= box.hi.z;
+						},
+						128);
+				constexpr int kFace = 6;
+				for (int axis = 0; axis < 3; ++axis) {
+					for (int side = 0; side < 2; ++side) {
+						for (int u = 0; u <= kFace; ++u) {
+							for (int w = 0; w <= kFace; ++w) {
+								float t[3];
+								t[axis] = float(side);
+								t[(axis + 1) % 3] = float(u) / float(kFace);
+								t[(axis + 2) % 3] = float(w) / float(kFace);
+								const vec3 p = box.lo + vec3(t[0], t[1], t[2]) * box.size();
+								if (adf.distance(body, octree, p) < 0.0f) {
+									points.push_back(p);
+								}
+							}
+						}
+					}
+				}
+				if (points.size() < 4) {
+					continue;
+				}
+				PackedVector3Array hull;
+				for (const vec3 &p : points) {
+					hull.push_back(to_godot(p));
+				}
+				out.push_back(hull);
+			}
+		}
+	}
+	return out;
+}
+
 double SdfBody::get_mass() {
 	if (mass_ < 0.0 && session_.has_adf()) {
 		flush();
 		// mm^3 x g/cm^3 = 1e-3 g = 1e-6 kg.
-		volume_ = volume(session_.adf(), clips_.empty() ? nullptr : &clips_.back(), &centre_);
+		volume_ = volume(session_.adf(), last_plane(), &centre_);
 		mass_ = volume_ * double(materials_[session_.body().base_material].density) * 1e-6;
 	}
 	return std::max(mass_, 0.0);
@@ -1122,6 +1300,18 @@ void SdfBody::apply_overlay(const Ref<ShaderMaterial> &material) const {
 	material->set_shader_parameter("sdf_overlay_lipschitz", overlay_lipschitz_);
 }
 
+bool SdfBody::body_settled() const {
+	// Refining and looking for islands read the body and change only the ADF (which strokes
+	// and plans never read): the body stands while they run.
+	return queue_.empty() && (!job_.valid() || job_refines_);
+}
+
+void SdfBody::settle_body() {
+	if (!body_settled()) {
+		flush();
+	}
+}
+
 void SdfBody::flush() {
 	while (job_.valid() || !queue_.empty()) {
 		if (job_.valid()) {
@@ -1141,7 +1331,14 @@ void SdfBody::_process(double) {
 	if (!job_.valid() && !queue_.empty()) {
 		start_job();
 	}
-	if (!job_.valid() && queue_.empty() && !stroke_ && refine_when_idle_ && !hold_refine_ && session_.needs_refine()) {
+	if (!job_.valid() && queue_.empty() && !stroke_ && !hold_refine_ && session_.has_adf() && !check_region_.empty()) {
+		// Idle after cutting: did the cuts leave an island? (Before refining: sooner.)
+		Command c{Command::CHECK, 0, {}};
+		c.region = check_region_.expanded(kIslandMargin);
+		check_region_ = Aabb();
+		queue(std::move(c));
+	} else if (!job_.valid() && queue_.empty() && !stroke_ && refine_when_idle_ && !hold_refine_ &&
+			session_.needs_refine()) {
 		queue({Command::REFINE, 0, {}});
 	}
 	hold_refine_ = false;
@@ -1390,6 +1587,8 @@ void SdfBody::refresh_stats() {
 	d["separation_ms"] = separation_ms_; // the worker's last check whether a cut left two parts (and measuring them)
 	d["split_ms"] = split_ms_;           // the last split(), on the main thread
 	d["pieces_split"] = int64_t(clips_.size());
+	d["island_ms"] = island_ms_;         // the worker's last look for an island left by cuts (and cutting it out)
+	d["island_failed"] = island_failed_; // why the island it found could not be cut out, if so
 	d["sampler"] = gpu_ ? "gpu" : "cpu"; // where ADF bricks are sampled
 	d["gpu_ms"] = job_gpu_ms_;           // the last batch's time on the GPU sampler (with transfers)
 	d["gpu_bricks"] = int64_t(job_gpu_jobs_);
@@ -1434,6 +1633,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);
 	ClassDB::bind_method(D_METHOD("split", "point", "normal"), &SdfBody::split);
 	ClassDB::bind_method(D_METHOD("rejoin"), &SdfBody::rejoin);
+	ClassDB::bind_method(D_METHOD("get_collision_hulls", "holes"), &SdfBody::get_collision_hulls);
 	ClassDB::bind_method(D_METHOD("get_hull_points"), &SdfBody::get_hull_points);
 	ClassDB::bind_method(D_METHOD("get_mass"), &SdfBody::get_mass);
 	ClassDB::bind_method(D_METHOD("get_centre_of_mass"), &SdfBody::get_centre_of_mass);

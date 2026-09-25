@@ -69,8 +69,9 @@ Parts find_parts(const Body &body, const Octree &octree, const Adf &adf, const A
 
 // A part of at least `least` mm^3 come away from the rest, looked for round `near` (where a
 // cut was just made): if the material there is in one piece, nothing came away; if a part
-// lies wholly inside `near`, with `margin` mm to spare, that is the island; otherwise the
-// whole body is looked at, and the island is its smallest part.
+// lies wholly inside `near`, with `margin` mm to spare, that is the island; if not, once
+// more with `near` grown to hold the smaller parts found; otherwise the whole body is
+// looked at, and the island is its smallest part.
 struct Island {
 	Parts parts;      // of the last region looked at
 	Aabb region;

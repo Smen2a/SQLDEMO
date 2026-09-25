@@ -152,6 +152,14 @@ public:
 	// worker (an undo step, previewed until it lands). Both stay editable. Given the plane
 	// separated() reported (either way round), split() takes the worker's measures and
 	// reads nothing else from the body; given any other, it measures there and then.
+	// Any other cut may leave an island no plane separates (a corner cut off by two saw
+	// cuts meeting, a chip chiselled free): once the body is idle after a commit, the worker
+	// looks round the cut (pieces/parts.h), cuts the island out with a region proved apart
+	// and measures both sides, and separated(point, zero) reports it, with the island's
+	// centre. split(point, zero) then makes the island a body of its own: each side takes
+	// its region into its edit list (an undo step), and the island's body stays hidden until
+	// its own lands (the shader cannot draw a region before), while this one shows the island
+	// until then.
 	SdfBody *split(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// Undoes a split's half-space here (the other piece is the caller's to free), leaving
 	// nothing to redo.
@@ -159,6 +167,12 @@ public:
 	// Points on this body's surface (body space, mm) for a convex physics hull: at most
 	// 256 extremes, on this piece's side of its last split.
 	godot::PackedVector3Array get_hull_points();
+	// Its material as convex pieces for physics, where one hull would fill a hollow (a board
+	// that pieces came out of): its bounds cut into boxes by the faces of `holes` (AABBs, body
+	// space, mm: where the pieces were, left out), each box's piece the points of the surface
+	// in it and of its faces in the material (hull points, body space). After any queued
+	// edits land. No piece reaches into a hole, whatever its hull, as each stays in its box.
+	godot::Array get_collision_hulls(const godot::Array &holes);
 	// The body's mass (kg), from its volume and its base material's density, and its centre
 	// of mass (body space, mm).
 	double get_mass();
@@ -195,13 +209,14 @@ protected:
 private:
 	// An edit-session command, queued on the main thread and applied on a worker.
 	struct Command {
-		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO, REFINE, DROP } kind;
+		enum Kind { STROKE, WORK, COMMIT, CANCEL, UNDO, REDO, REFINE, DROP, CHECK } kind;
 		std::size_t drop = 0;    // STROKE: drop the stroke's last `drop` edits,
 		std::vector<Edit> edits; // then append these
 		bool previewed = false;  // COMMIT: of a previewed stroke (the oldest in committing_)
 		std::shared_ptr<tools::Stroke> stroke = nullptr; // WORK: a deferred stroke's recorded motion to work
 		std::optional<Separation> separation = std::nullopt; // COMMIT: where the stroke cut clean through
 		bool clip = false; // a split's half-space (which leaves the piece's measures standing)
+		sdf::Aabb region = {}; // CHECK: where to look for an island
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
@@ -264,14 +279,26 @@ private:
 	std::shared_ptr<GpuSampler> gpu_; // while the session samples on it
 	std::optional<PieceSides> job_separated_; // the batch found the body in two parts, measured
 	double separation_ms_ = 0, split_ms_ = 0;
+	// Where committed cuts were since the body was last looked at for islands (CHECK, once it
+	// is idle), and where the running batch's were.
+	sdf::Aabb check_region_, job_check_;
+	double island_ms_ = 0;              // the last CHECK's
+	godot::String island_failed_;       // why its island could not be cut out, if it could not
+	const char *job_island_failed_ = nullptr;
+	bool reveal_ = false;               // hidden until the batch taking in its region lands
 	// The parts separated() last reported, for split(), until the body changes. Refining
 	// waits a frame after the signal, so that split() (deferred to the frame's end) finds
 	// the worker idle and the session free to copy.
 	std::optional<PieceSides> sides_;
 	bool hold_refine_ = false;
-	// This piece's side of each split it came out of (undone by rejoin()), and its bounds
-	// before each.
-	std::vector<Plane> clips_;
+	// This piece's side of each split it came out of (undone by rejoin()): a half-space, or a
+	// side of a region; and its bounds before each.
+	struct Clip {
+		Plane plane;
+		std::shared_ptr<const Region> region;
+		std::uint8_t side = 0;
+	};
+	std::vector<Clip> clips_;
 	std::vector<sdf::Aabb> unclipped_bounds_;
 	// get_hull_points() and get_mass(), once computed (dropped when an edit other than a
 	// split's half-space lands): split() sets them, so that nothing reads the session while
@@ -281,6 +308,13 @@ private:
 	double volume_ = 0.0; // mm^3, with mass_
 	vec3 centre_{0.0f};  // of mass, with mass_
 	void clip(const Plane &plane);
+	const Plane *last_plane() const; // the half-space of the last split, if it was one
+	void report_separation();        // emits separated() for what the batch found
+	// Whether nothing queued or running changes the body (as refining and looking for islands
+	// do not), so that it can be read on the main thread; settle_body() waits until it is.
+	bool body_settled() const;
+	void settle_body();
+	void clip(std::shared_ptr<const Region> region, std::uint8_t side, const sdf::Aabb &bounds);
 	void set_proxy();
 	// Held by every piece drawing this body's textures (they share them after a split, until
 	// one uploads): the first of them to upload makes new ones, leaving the rest in place.
@@ -290,7 +324,7 @@ private:
 	std::size_t job_gpu_jobs_ = 0, gpu_jobs_total_ = 0;
 	void collect_gpu_stats(); // the GPU sampler's work since the last call (shared by bodies)
 	bool job_refines_ = false;              // the running batch only refines (the body is unchanged)
-	bool job_clips_ = false;                // the running batch only takes in split half-spaces
+	bool job_clips_ = false;                // the running batch only takes in split half-spaces (or regions)
 	std::vector<Command> queue_;            // not yet applied
 	std::future<void> job_;                 // the batch being applied, if any
 	std::vector<std::uint32_t> job_bricks_, job_materials_; // slots the batch rewrote

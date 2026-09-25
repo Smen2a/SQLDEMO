@@ -12,9 +12,10 @@ This revision merges those into shared capabilities and keeps finished work to o
 - The first plan's lasting design sections and its detailed E4 (bake) design are archived
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
-- **Tools** (below) is done: the tools behave like their real selves, and every stroke is
+- **Tools** (below) is done: the tools behave like their real selves, and a stroke can be
   planned before it is made (T1 to T3).
-- **Pieces** is under way: P1 (saw through) is done, P2 (islands left by any cut) is next.
+- **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut). Debris (2) is
+  next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -63,6 +64,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
 | T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
+| P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
@@ -148,7 +150,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-## 1. Pieces — bodies that come apart (current: P1 done, P2 next)
+## 1. Pieces — bodies that come apart (current: P1 and P2 done)
 
 **Why one capability.** Sawing through, a failing joint and a fracture all end with one
 body becoming several that move on their own. Build it once:
@@ -221,18 +223,44 @@ The details are in the README ("Pieces").
   - The board drops its Intersect and its clip, through `EditSession::drop_last_step` (new:
     an undo without a redo entry).
 
-### P2 — islands left by any cut
+### P2 — islands left by any cut: done
 - The chisel through a thin bridge, the saw at an angle, many cuts meeting: a split no
   single plane describes.
-- **Connectivity of the inside:** union-find over ADF inside samples, with solid leaves as
-  single nodes.
-  - Adjacent inside samples a, b a step h apart join when |a| + |b| > L·h.
-  - Otherwise the exact field along the edge decides, which catches kerfs thinner than a
-    voxel.
-  - It runs on the worker after commits, only for components the commit's region touches.
-- **Cutting an island out:** an Intersect with a sampled mask. The layer machinery can hold
-  it: a sampled grid with bounds and pruning ranges. Its design is settled after P1, with
-  the measured cost of the connectivity pass.
+- **Connectivity** (`pieces/parts`), as designed: union-find over ADF inside samples, solid
+  leaves as single nodes. As built:
+  - each brick's samples are joined on their own, in parallel, into groups; the groups and
+    solid leaves are joined across the faces between leaves (the octree face procedure);
+  - plain bricks are trusted as drawn: a gap they would draw has samples in it (their
+    reconstruction matches the field near the surface, where a gap would show). In exact
+    leaves the brick strays by up to its error bound, so there the exact tape along the
+    segment decides (the middle, then the quarters): a 0.1 mm slot parts the board;
+  - it runs after commits, once the body is idle (a CHECK job, before refining; strokes
+    and plans read the body meanwhile, as it only reads). It looks round the cut first:
+    one piece there means nothing came away; a part wholly inside is the island (a chip,
+    about 10 ms). Otherwise once more with the region grown round the smaller parts, then
+    the whole board: about 35 ms for its 7,300 bricks.
+- **Cutting an island out** (`Region`, `Op::Keep`, `cut_out`): not a sampled mask field but
+  a labelled octree: island cubes (its material and the air near it), rest cubes, free
+  cubes (clear of every surface by 0.05 mm, from the exact field). Cubes split where both
+  sides' samples share one, and where an island cube meets a rest cube across a face that
+  is not clear, down to 0.05 mm. When none meet, the island is proved apart: a web too thin
+  for the samples is refused. `Op::Keep` drops one side as `max(d, 0.1 - d)`; free cubes
+  make the switch continuous; the octree takes keep-nothing cells for empty; tapes holding
+  a region never make exact leaves (the GPU takes it for the identity), and the island's
+  body is hidden until its region lands.
+- **Measured** (the rebate: 1,800 mm² between the sides): about 600 ms on the worker,
+  most of it the region's 160,000 cubes (they resolve the gap all along it); 3.5 ms of the
+  frame to split. The island's own ADF costs 1.7 times the bricks its surface had in the
+  board's. Planar saw cuts still take P1's plane, which costs far less.
+- **Physics.** The hollowed board's collider is convex pieces: its bounds cut into boxes by
+  the faces of each island's box (0.3 mm outside), a hull per box. At millimetre scale the
+  engine needed sharp shapes (0.1 mm margins), and the island set down just into what is
+  under it and let go asleep (a body's first step finds no contact; on a sampled surface
+  it rocks). A surface mesh was tried and dropped: the engine discards 1–2 mm triangles as
+  degenerate. Meshes come with the Bake (4).
+- **Left for later:** cheaper regions for long interfaces (anisotropic cubes, or a plane
+  where one fits the gap), several islands at once (one per check today), and debris for
+  crumbs under 1 mm³ (they stay in the body).
 
 ### Verification
 - **Native** (new `tests/test_pieces.cpp`):
@@ -301,7 +329,8 @@ The details are in the README ("Pieces").
   - wood splits along the grain;
   - stone breaks in conchoidal chips;
   - metal fails ductile.
-- The crack is the cutter for Pieces (P2's mask); fragments below the threshold are Debris.
+- The crack is the cutter for Pieces (P2's region, `Op::Keep`); fragments below the
+  threshold are Debris.
 
 ## 7. Forging
 - A sampled base grid under the edit list, a temperature field, and hammer blows as

@@ -137,7 +137,7 @@ TEST(an_island_is_found_round_the_cut_that_freed_it) {
 	const Island found = find_island(cut.body, cut.octree, cut.adf, second.bounds().expanded(2.0f));
 	std::printf("    the corner: part %d of %d after %d looks, %.1f ms (the whole board: %.1f ms)\n", found.island,
 			int(found.parts.parts.size()), found.passes, found.ms, cut.parts().ms);
-	CHECK(found.island >= 0 && found.passes == 2);
+	CHECK(found.island >= 0 && found.passes >= 2);
 	if (found.island >= 0) {
 		const Parts::Part &corner = found.parts.parts[std::size_t(found.island)];
 		CHECK(near(corner.volume, (80.0 - 60.4) * (50.0 - 30.4) * 25.0, 0.03));
@@ -288,3 +288,4 @@ TEST(a_web_too_thin_to_sample_is_not_taken_for_a_gap) {
 	std::printf("    cut out: %s after %zu evaluations\n", out.region ? "yes" : out.failed, out.evaluations);
 	CHECK(out.region == nullptr);
 }
+

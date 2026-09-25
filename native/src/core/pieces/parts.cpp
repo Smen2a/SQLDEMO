@@ -512,9 +512,13 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 	if (adf.nodes().empty() || near.empty()) {
 		return out;
 	}
-	for (const bool whole : {false, true}) {
-		out.parts = find_parts(body, octree, adf, whole ? nullptr : &near, finest);
-		out.region = whole ? Aabb::infinite() : near;
+	// Round the cut; then, if parts there reach beyond it, grown to hold them (a chip cut free
+	// is usually a little larger than the last cut round it); then the whole body.
+	Aabb looking = near;
+	for (int look = 0; look < 3; ++look) {
+		const bool whole = look == 2;
+		out.parts = find_parts(body, octree, adf, whole ? nullptr : &looking, finest);
+		out.region = whole ? Aabb::infinite() : looking;
 		++out.passes;
 		out.ms += out.parts.ms;
 		if (out.parts.count(least) <= 1) {
@@ -532,6 +536,19 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 				out.island = p;
 				return out;
 			}
+		}
+		if (look == 0) {
+			Aabb grown = looking;
+			for (std::size_t p = 1; p < out.parts.parts.size(); ++p) {
+				if (out.parts.parts[p].volume >= least) {
+					grown.include(out.parts.parts[p].bounds.expanded(2.0f * margin));
+				}
+			}
+			const vec3 was = looking.size(), now = grown.size();
+			if (now.x * now.y * now.z <= was.x * was.y * was.z * 1.0001f) {
+				look = 1; // it cannot grow: the whole body next
+			}
+			looking = grown;
 		}
 	}
 	return out;

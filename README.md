@@ -379,6 +379,60 @@ Fracture and failing joints will split bodies the same way later
   Both handle it. Box3D's friction combines differently, hence the shorter slide. It is
   still alpha, as is its Godot extension, so the default stays Jolt.
 
+### Islands: cuts meeting, no plane
+
+Cuts that meet can free a piece no single plane separates: a rebate sawn off the end (one
+cut down from the top, one in from the end), a corner cut off by two slots, a chip
+chiselled free. That piece comes away too, and it rests where it lies.
+- **Finding it** (`native/src/core/pieces/parts.h`). Once the board is idle after a commit,
+  its worker looks round the cut for parts of the material that no longer hold together
+  (`find_parts`). The ADF's inside samples are joined, in parallel within each brick, then
+  across the faces between leaves (the octree face procedure):
+  - plain bricks are trusted as drawn (a gap they would show has samples in it);
+  - in exact leaves, where the brick strays from the field, the exact tape along the
+    segment between two samples decides, so a slot a tenth of a millimetre wide still
+    parts the board.
+
+  If the material round the cut is one piece, nothing came away (the body was one piece
+  before, and any path round the cut can go round inside the region). If a part lies
+  wholly inside the region, it is the island: a chip is found this way in about 10 ms.
+  Otherwise the region grows once to hold the smaller parts, then the whole board is
+  looked at (about 35 ms for its 7,300 bricks).
+- **Cutting it out, proved apart** (`cut_out`, `body/region.h`). The island is cut out by
+  a *region*: an octree of cubes marked as the island's (its material and the air near
+  it), the rest's, or free (air at least 0.05 mm clear of every surface, by the exact
+  field). Cubes split where both sides' samples share one, and wherever an island cube
+  meets a rest cube across a face that is not clear, down to 0.05 mm. When no island cube
+  touches a rest cube, every path from one to the other crosses clear air: the island
+  truly came away. If they still touch at the finest (a web too thin for the samples to
+  see), nothing splits.
+- **Keeping one side** (`Op::Keep`). Each side takes the region into its edit list as an
+  undo step. Where it drops, the field becomes `max(d, 0.1 - d)`: at least 0.05 mm, so no
+  surface is left and the octree takes those cells for empty. Kept and dropped cubes meet
+  only across free ones, where that is just `d`, so the field stays continuous. The shader
+  cannot evaluate a region (a sampled octree only the CPU holds), so tapes holding one
+  never become exact leaves, and the island's body stays hidden until its region lands;
+  the board shows the island until then.
+- **Physics.** Where an island came out the board is hollowed, and one hull would fill the
+  hollow, so the board's collider becomes convex pieces: its bounds cut into boxes by the
+  faces of each island's box (0.3 mm outside it), each box's piece the hull of the
+  surface points and material in it. No piece reaches into an island's box. Two things
+  the engine needed at millimetre scale:
+  - shapes with a 0.1 mm margin (Godot's default of 4 cm rounds them away);
+  - the island set down just into what is under it before it is let go, and let go
+    asleep: a body's first step finds no contact yet (falling from a kerf's width above,
+    it drops 2.7 mm into the surface), and on the few points of a sampled surface it
+    would rock. Nothing under it, it falls.
+
+  (A triangle mesh of the board's surface was tried first: the engine drops triangles of
+  a millimetre or two as degenerate, and coarser ones misplace the surfaces round a
+  rebate. Proper meshes come with the Bake step.)
+- **Measured** (`game/tests/island_split`): the rebate, a 1,800 mm² interface, is found and
+  cut out in about 600 ms on the worker (about 160,000 region cubes, most of the time);
+  split in about 3.5 ms of the frame; it rests in the rebate, 1.1 mm down (its kerf) and
+  none across. The island's own ADF costs about 1.7 times the bricks its surface had in the
+  board's, where the region keeps its creases from becoming exact leaves.
+
 ## Layout
 
 | Path | What it is |
