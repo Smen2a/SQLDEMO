@@ -35,7 +35,11 @@ struct Dust {
 	vec3 direction{0.0f}; // the way it is thrown (unit), or zero
 	float volume = 0.0f;  // mm^3 of wood
 	float grain = 0.5f;   // mm: how coarse it is
+	float spread = 0.0f;  // mm round `point` it leaves the work over (a block's face)
 };
+
+// Dust smaller than this (mm^3) is held back until more comes, or the stroke ends.
+constexpr float kLeastDust = 0.05f;
 
 struct Debris {
 	float step = 0.5f; // mm of cut each shaving sample stands for
@@ -53,6 +57,11 @@ struct Debris {
 // How far below the work's surface `floor` lies, looking along `up` (unit, out of the
 // work): 0 where it is in the air, at most `most`.
 float depth_below_surface(const Body &body, const Octree &octree, vec3 floor, vec3 up, float most);
+
+// The fraction of the rectangle [lo, hi] (the plane's x, y) `depth` below `plane` that lies
+// in the body's material, probed on an nx by ny grid.
+float material_fraction(const Body &body, const Octree &octree, const Frame &plane, vec2 lo, vec2 hi, float depth,
+		int nx, int ny);
 
 // The material `cut` takes out of `body` that none of `taken` (the stroke's other cuts)
 // does: sampled on a grid over its bounds (about `samples` points), measured in the frame

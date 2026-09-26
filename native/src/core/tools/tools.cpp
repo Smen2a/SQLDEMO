@@ -1,10 +1,13 @@
 #include "tools/tools.h"
 
+#include "tools/debris.h"
+
 #include "body/materials.h"
 #include "tools/smoothing.h"
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <mutex>
 
 namespace sdf::tools {
@@ -431,7 +434,60 @@ public:
 		return Separation{Plane{frame_.origin, frame_.y}, saw_.kerf};
 	}
 
+	// Sawdust: each slice of kerf the saw goes down through is the kerf's width times the
+	// material along the blade's line at that depth (the chord, sampled every millimetre and
+	// kept per half millimetre of depth). It leaves the kerf at the chord's two ends.
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
+		out.ended = out.ended || ended;
+		while (dusted_ < cut_) {
+			const float to = std::min(cut_, (std::floor(dusted_ / kChordStep) + 1.0f) * kChordStep);
+			const Chord &c = chord(body, octree, 0.5f * (dusted_ + to));
+			pending_ += (to - dusted_) * saw_.kerf * c.length;
+			if (c.length > 0.0f) {
+				ends_[0] = c.from;
+				ends_[1] = c.to;
+			}
+			dusted_ = to;
+		}
+		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
+			return;
+		}
+		for (int e = 0; e < 2; ++e) {
+			Dust d;
+			d.point = frame_.point({ends_[e], 0.0f, 0.0f});
+			d.direction = gl::normalize(frame_.x * (e == 0 ? -1.0f : 1.0f) + frame_.z * 0.5f);
+			d.volume = 0.5f * pending_;
+			d.grain = 0.5f;
+			out.dust.push_back(d);
+		}
+		pending_ = 0.0f;
+	}
+
 private:
+	struct Chord {
+		float length = 0.0f, from = 0.0f, to = 0.0f; // mm along the blade's line
+	};
+	static constexpr float kChordStep = 0.5f;
+	const Chord &chord(const Body &body, const Octree &octree, float depth) {
+		const int key = int(depth / kChordStep);
+		auto it = chords_.find(key);
+		if (it != chords_.end()) {
+			return it->second;
+		}
+		Chord c;
+		const float half = saw_.blade_length * 0.5f;
+		bool any = false;
+		for (float x = -half + 0.5f; x < half; x += 1.0f) {
+			if (octree.distance(body, frame_.point({x, 0.0f, -depth})) < 0.0f) {
+				c.length += 1.0f;
+				c.from = any ? c.from : x;
+				c.to = x;
+				any = true;
+			}
+		}
+		return chords_.emplace(key, c).first->second;
+	}
+
 	Saw saw_;
 	Frame frame_;
 	float feed_, max_depth_;
@@ -439,6 +495,10 @@ private:
 	float cut_ = 0.0f;    // depth the kerf has been cut to
 	float frozen_ = 0.0f; // depth where the open slice starts
 	bool open_ = false;
+	// Dust: the depth reported down to, what is held back, where the kerf's ends were.
+	float dusted_ = 0.0f, pending_ = 0.0f;
+	float ends_[2] = {0.0f, 0.0f};
+	std::map<int, Chord> chords_;
 };
 
 class SandingStroke : public Stroke {
@@ -482,6 +542,32 @@ public:
 		return f;
 	}
 
+	// Fine dust: the pass takes its depth off the rectangle it has covered, as far as that
+	// is over material (probed half way down); what that comes to beyond what was reported
+	// leaves from under the block, over its face.
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
+		out.ended = out.ended || ended;
+		if (cut_) {
+			const vec2 size = cut_hi_ - cut_lo_;
+			const float fraction = material_fraction(body, octree, plane_, cut_lo_, cut_hi_,
+					std::max(0.5f * cut_depth_, 0.005f), 7, 7);
+			const float taken = cut_depth_ * size.x * size.y * fraction;
+			pending_ += std::max(taken - dusted_, 0.0f);
+			dusted_ = std::max(dusted_, taken);
+		}
+		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
+			return;
+		}
+		Dust d;
+		d.point = plane_.point({at_.x, at_.y, 0.0f});
+		d.direction = plane_.z;
+		d.volume = pending_;
+		d.grain = 0.25f;
+		d.spread = 0.5f * std::min(block_.length, block_.breadth);
+		out.dust.push_back(d);
+		pending_ = 0.0f;
+	}
+
 private:
 	void cover(vec2 at) {
 		const vec2 half(block_.length * 0.5f, block_.breadth * 0.5f);
@@ -495,6 +581,7 @@ private:
 	vec2 cut_lo_{0.0f, 0.0f}, cut_hi_{0.0f, 0.0f};
 	float travel_ = 0.0f, cut_depth_ = 0.0f;
 	bool cut_ = false;
+	float dusted_ = 0.0f, pending_ = 0.0f; // dust: reported so far (mm^3), held back
 };
 
 class HandSandingStroke : public Stroke {
@@ -518,6 +605,27 @@ public:
 	}
 
 	bool deferred() const override { return true; }
+
+	// The flow's own measure of what it took out of the material, fine dust from where the
+	// sponge bears. Reads nothing of the body (its work may be running on another thread).
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
+		(void)body;
+		(void)octree;
+		out.ended = out.ended || ended;
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (dust_ < kLeastDust && !(ended && dust_ > 0.0f)) {
+			return;
+		}
+		Dust d;
+		d.point = dust_centre_ / dust_;
+		d.direction = plane_.z;
+		d.volume = dust_;
+		d.grain = 0.2f;
+		d.spread = 0.5f * sponge_.reach;
+		out.dust.push_back(d);
+		dust_ = 0.0f;
+		dust_centre_ = vec3(0.0f);
+	}
 
 	StrokeUpdate work(const Body &body, const Octree &octree) override {
 		std::vector<vec3> path;
@@ -543,6 +651,13 @@ public:
 			from_ = to;
 		}
 		const Aabb changed = grid_->update();
+		{
+			// What the flow took out of the material this time: dust, reported by debris().
+			const SmoothingGrid::Stats &last = grid_->last();
+			std::lock_guard<std::mutex> lock(mutex_);
+			dust_ += last.removed;
+			dust_centre_ = dust_centre_ + last.removed_centre;
+		}
 		if (changed.empty()) {
 			return {};
 		}
@@ -566,6 +681,8 @@ private:
 	std::vector<vec3> path_; // recorded, not yet worked
 	std::unique_ptr<SmoothingGrid> grid_;
 	bool layered_ = false;   // whether the stroke has made its layer edit yet
+	float dust_ = 0.0f;      // mm^3 the flow has taken out, not yet reported (under mutex_)
+	vec3 dust_centre_{0.0f}; // its centre, weighted by volume
 };
 
 } // namespace

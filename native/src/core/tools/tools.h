@@ -163,7 +163,8 @@ public:
 	// What came off the work since the last call (tools/debris.h), appended to `out`: read
 	// from `body` as it was before this stroke (a previewed stroke is only applied when it
 	// is committed). Called after move_to(), and with `ended` once it is lifted off (after
-	// finish()). Nothing by default.
+	// finish()). A deferred stroke reports what its own work measured and reads nothing (its
+	// work may be running on another thread). Nothing by default.
 	virtual void debris(const Body &body, const Octree &octree, Debris &out, bool ended = false) {
 		(void)body;
 		(void)octree;

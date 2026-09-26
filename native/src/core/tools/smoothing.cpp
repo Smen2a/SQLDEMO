@@ -247,6 +247,11 @@ Aabb SmoothingGrid::update() {
 		std::vector<Aabb> flowed_changed(pending.size());
 		std::vector<float> flowed_offset(pending.size(), 0.0f);
 		std::vector<std::size_t> flowed_count(pending.size(), 0);
+		std::vector<float> removed(pending.size(), 0.0f);
+		std::vector<vec3> removed_centre(pending.size(), vec3(0.0f));
+		// How much of a sample's cell is material: phi's zero set smeared over one sample.
+		const auto inside = [inv_h](float phi) { return std::clamp(0.5f - phi * inv_h, 0.0f, 1.0f); };
+		const float cell = h_ * h_ * h_;
 		for (int step = 0; step < steps; ++step) {
 			// Every block's step from the same phi (Jacobi), then all applied.
 			parallel_for(pending.size(), [&](std::size_t n) {
@@ -324,6 +329,11 @@ Aabb SmoothingGrid::update() {
 				const float *delta = &deltas[n * kN];
 				for (int i = 0; i < kN; ++i) {
 					if (delta[i] > 0.0f) {
+						const float taken = (inside(b.phi[i]) - inside(b.phi[i] + delta[i])) * cell;
+						if (taken > 0.0f) {
+							removed[n] += taken;
+							removed_centre[n] = removed_centre[n] + sample_at(b.coord, i) * taken;
+						}
 						b.phi[i] += delta[i];
 						flowed_offset[n] = std::max(flowed_offset[n], b.phi[i] - b.F[i]);
 						// The surface has come nearer: the weight band follows it (the flow only runs
@@ -341,6 +351,8 @@ Aabb SmoothingGrid::update() {
 			changed_.include(flowed_changed[n]);
 			max_offset_ = std::max(max_offset_, flowed_offset[n]);
 			last_.flowed += flowed_count[n];
+			last_.removed += removed[n];
+			last_.removed_centre = last_.removed_centre + removed_centre[n];
 		}
 	}
 	for (Work *b : pending) {

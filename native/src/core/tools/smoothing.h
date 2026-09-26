@@ -65,6 +65,10 @@ public:
 		// Blocks allocated since the update before; explicit substeps run and samples moved in
 		// the last update.
 		std::size_t allocated = 0, substeps = 0, flowed = 0;
+		// The material the flow took out in the last update (mm^3; phi's zero set smeared over
+		// a sample, so a small step counts), and its centre weighted by it (divide by removed).
+		float removed = 0.0f;
+		vec3 removed_centre{0.0f};
 	};
 	const Stats &last() const { return last_; }
 

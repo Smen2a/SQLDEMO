@@ -55,6 +55,19 @@ float depth_below_surface(const Body &body, const Octree &octree, vec3 floor, ve
 	return most;
 }
 
+float material_fraction(const Body &body, const Octree &octree, const Frame &plane, vec2 lo, vec2 hi, float depth,
+		int nx, int ny) {
+	int inside = 0;
+	for (int j = 0; j < ny; ++j) {
+		for (int i = 0; i < nx; ++i) {
+			const vec2 at(lo.x + (hi.x - lo.x) * (float(i) + 0.5f) / float(nx),
+					lo.y + (hi.y - lo.y) * (float(j) + 0.5f) / float(ny));
+			inside += octree.distance(body, plane.point({at.x, at.y, -depth})) < 0.0f;
+		}
+	}
+	return float(inside) / float(std::max(nx * ny, 1));
+}
+
 bool measure_chip(const Body &body, const Octree &octree, const Edit &cut, const std::vector<Edit> &taken, vec3 along,
 		vec3 up, Chip &out, int samples) {
 	const Aabb box = cut.prim.bounds();

@@ -107,7 +107,7 @@ The principles everything is built by (docs/PLAN.md):
   - `workshop.gd`: the scene, tool driving, offcuts and physics;
   - `workshop_ui.gd`: the panel and status line;
   - `orbit_camera.gd`;
-  - `debris.gd`: shavings and chips.
+  - `debris.gd`: shavings and chips; `dust.gd`: dust.
 - **`game/tests/`**: scenes driven headless (logic) or rendered (images). **`game/bench/`**:
   the decision-gate benchmark.
 
@@ -160,10 +160,11 @@ shared cores and from the tests; the README has the tables.
 | T3 | Rasps (coarse to fine, tilted to chamfer, the round face hollowing), a card scraper, and a spokeshave whose sole follows curves and bridges hollows |
 | P1 | Sawn through, the board comes apart: `plane_clear` (about 13 ms), both sides measured on the worker, and `split` in about 3 ms of the frame. The offcut is a rigid body; undo rejoins |
 | P2 | Islands: cuts meeting free a piece no plane separates. `find_parts` (the whole board in about 35 ms), `cut_out` (a region proved apart), `Op::Keep`. The board's collider becomes convex pieces round the hollows. A rebate: about 600 ms on the worker, 3.5 ms to split |
-| Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about 20 s) and a GPU tier (renders, image comparisons, parity, Vulkan) |
+| Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about 30 s) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
+| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). Grains fly, land where their arc meets something, and pile up: sawdust heaps beyond the kerf's ends, sanding dust lies on the face. Every tool's dust is within 1.5% of what the board lost |
 
-Test counts today: 90 native tests (GCC and Clang, including golden images) and 8
+Test counts today: 93 native tests (GCC and Clang, including golden images) and 9
 headless Godot checks.
 
 ## 5. Where things stand
@@ -204,6 +205,8 @@ so correctness can be checked here, but not speed.
 - **Shadows:** under the Compatibility renderer, Live bodies receive no shadow-map
   shadows (coordinates are per vertex on the proxy box). Forward+ and Mobile look them
   up per fragment, which is still to be confirmed on hardware.
+- **Dust:** it doesn't ride on the pieces it lands on (it falls once a sawn piece has slid
+  away), and tools pass over it without pushing it.
 - **Other:** redo doesn't bring back offcuts or debris; there is no mesh export yet.
 
 ## 6. What comes next
@@ -211,24 +214,7 @@ so correctness can be checked here, but not speed.
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
 
-### 2. Debris (under way: D1 done)
-
-**D2: dust** from the saw, rasp, scraper, sanding block and sponge.
-- **What each tool reports.** Each stroke's `debris()` works out what it removed:
-  - **saw:** Δdepth × kerf × the kerf's chord through the material, sampled along the
-    blade, puffed at both ends of the chord;
-  - **rasp, scraper, block:** Δdepth × footprint × the fraction of it over material;
-  - **sponge:** exact, from the samples its flow moves out of the material.
-- **Grain size and colour.** Grains are 0.2–0.8 mm by tool, coloured by `albedo_at` and
-  lightened (dust scatters light).
-- **Grains of its own** (a MultiMesh), not `CPUParticles3D`, which cannot collide:
-  - each grain's landing point is found once, by casting its ballistic arc against the
-    board and the physics space;
-  - grains stack in a 1 mm height grid, so sawdust heaps under the kerf's ends and
-    sanding dust lies on the face;
-  - grains whose support is cut away fall again;
-  - at most 30,000 grains, oldest first out;
-  - undo removes a stroke's dust.
+### 2. Debris (under way: D1 and D2 done)
 
 **D3: small pieces become debris.**
 - One check collects every part that came away. Parts under about 30 mm³ (crumbs under
@@ -312,8 +298,8 @@ materials. Every detail knob is already a parameter, so it is a settings change.
 ```sh
 git submodule update --init
 cmake -S native -B native/build -G Ninja && cmake --build native/build   # also builds game/bin/sdf_godot.*
-native/build/sdf_tests                                                   # 90 tests, golden images
-GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about 20 s)
+native/build/sdf_tests                                                   # 93 tests, golden images
+GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about 30 s)
 GODOT=/path/to/godot tools/test_godot.sh --gpu                           # GPU tier: renders, images, parity
 ```
 

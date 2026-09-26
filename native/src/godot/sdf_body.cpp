@@ -678,6 +678,7 @@ void SdfBody::move_stroke(const Vector3 &point) {
 	tools::StrokeUpdate u = stroke_->move_to(to_body(point));
 	if (stroke_->deferred()) {
 		queue({Command::WORK, 0, {}, false, stroke_});
+		gather_debris(false); // what its work so far took
 		return;
 	}
 	if (u.empty()) {
@@ -694,21 +695,34 @@ void SdfBody::move_stroke(const Vector3 &point) {
 void SdfBody::gather_debris(bool ended) {
 	// Read from the body before the stroke: only a previewed stroke leaves it alone, and only
 	// while nothing else is being applied to it (what is left is gathered at a later move).
-	if (!stroke_ || !previewing_) {
-		debris_.ended = debris_.ended || ended;
-		return;
-	}
-	if (!body_settled()) {
+	// A deferred stroke (the sponge) measures its own work and reads nothing.
+	const bool own = stroke_ && stroke_->deferred();
+	if (!stroke_ || (!own && (!previewing_ || !body_settled()))) {
 		debris_.ended = debris_.ended || ended;
 		return;
 	}
 	stroke_->debris(session_.body(), session_.octree(), debris_, ended);
+	colour_debris();
+}
+
+void SdfBody::colour_debris() {
 	for (std::size_t i = shaving_colours_.size(); i < debris_.shaving.size(); ++i) {
 		shaving_colours_.push_back(albedo_body(debris_.shaving[i].point));
 	}
 	for (std::size_t i = chip_colours_.size(); i < debris_.chips.size(); ++i) {
 		chip_colours_.push_back(albedo_body(debris_.chips[i].frame.origin));
 	}
+	for (std::size_t i = dust_colours_.size(); i < debris_.dust.size(); ++i) {
+		dust_colours_.push_back(albedo_safe(debris_.dust[i].point));
+	}
+}
+
+vec3 SdfBody::albedo_safe(vec3 p) const {
+	if (body_settled()) {
+		return albedo_body(p);
+	}
+	const Body &body = session_.body(); // its material and grain: never changed by edits
+	return materials_.albedo(float(body.base_material), p, body.grain_origin, body.grain_axis);
 }
 
 vec3 SdfBody::albedo_body(vec3 p) const {
@@ -730,6 +744,15 @@ Dictionary SdfBody::take_debris() {
 	if (debris_cancelled_) {
 		out["cancelled"] = true;
 		debris_cancelled_ = false;
+	}
+	if (debris_tail_) {
+		// The sponge's last work: its dust once it has landed.
+		const bool done = !is_busy();
+		debris_tail_->debris(session_.body(), session_.octree(), debris_, false);
+		colour_debris();
+		if (done) {
+			debris_tail_.reset();
+		}
 	}
 	if (debris_.empty()) {
 		return out;
@@ -786,12 +809,38 @@ Dictionary SdfBody::take_debris() {
 		}
 		out["chips"] = chips;
 	}
+	if (!debris_.dust.empty()) {
+		const std::size_t n = debris_.dust.size();
+		PackedVector3Array points, directions;
+		PackedFloat32Array volume, grain, spread;
+		PackedColorArray colours;
+		for (std::size_t i = 0; i < n; ++i) {
+			const tools::Dust &d = debris_.dust[i];
+			const vec3 c = i < dust_colours_.size() ? dust_colours_[i] : vec3(0.8f);
+			points.push_back(xf.xform(to_godot(d.point)));
+			const Vector3 dir = turn.xform(to_godot(d.direction));
+			directions.push_back(dir.length() > 0.0 ? dir.normalized() : Vector3());
+			volume.push_back(d.volume);
+			grain.push_back(float(d.grain * scale));
+			spread.push_back(float(d.spread * scale));
+			colours.push_back(Color(c.x, c.y, c.z));
+		}
+		Dictionary dust;
+		dust["points"] = points;
+		dust["directions"] = directions;
+		dust["volume"] = volume;
+		dust["grain"] = grain;
+		dust["spread"] = spread;
+		dust["colours"] = colours;
+		out["dust"] = dust;
+	}
 	out["ended"] = debris_.ended;
 	out["rise"] = double(stroke_rise_);
 	out["density"] = double(density);
 	debris_ = tools::Debris();
 	shaving_colours_.clear();
 	chip_colours_.clear();
+	dust_colours_.clear();
 	return out;
 }
 
@@ -822,6 +871,7 @@ void SdfBody::end_stroke() {
 	std::vector<Command> commands;
 	if (stroke_->deferred()) {
 		commands.push_back({Command::WORK, 0, {}, false, stroke_}); // whatever motion is left
+		debris_tail_ = stroke_;
 	}
 	std::vector<Edit> finish = stroke_->finish();
 	if (!finish.empty()) {
@@ -841,6 +891,8 @@ void SdfBody::cancel_stroke() {
 	debris_ = tools::Debris(); // nothing came off after all
 	shaving_colours_.clear();
 	chip_colours_.clear();
+	dust_colours_.clear();
+	debris_tail_.reset();
 	debris_cancelled_ = true;
 	if (previewing_) {
 		update_overlay(); // the body never saw it

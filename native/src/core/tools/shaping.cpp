@@ -1,6 +1,7 @@
 #include "tools/shaping.h"
 
 #include "body/materials.h"
+#include "tools/debris.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,16 +39,23 @@ vec4 along_x() {
 // A tool worked back and forth along a line over [0, length] from where it was set: every
 // millimetre of travel deepens its pass by `rate`. Applied as it moves, the pass is re-cut
 // every 5 um it deepens; merged (the preview, the commit), it is exactly as deep as the
-// travel has taken it.
+// travel has taken it. Its dust: each bit deeper takes the pass's width at that depth
+// (`width_at`: a round face's grows as it goes in) over its length, as far as that is over
+// material, in grains `grain` mm across.
 class PassStroke : public Stroke {
 public:
 	using Pass = std::function<Edit(float depth)>;
-	PassStroke(const Frame &frame, float length, float rate, Pass pass)
-		: frame_(frame), length_(length), rate_(rate), pass_(std::move(pass)) {}
+	using Width = std::function<float(float depth)>;
+	PassStroke(const Frame &frame, float length, float rate, Pass pass, Width width_at, float grain)
+		: frame_(frame), length_(length), rate_(rate), pass_(std::move(pass)), width_at_(std::move(width_at)),
+		  grain_(grain) {}
 
 	StrokeUpdate move_to(vec3 point) override {
 		const float s = std::clamp(gl::dot(point - frame_.origin, frame_.x), 0.0f, length_);
 		travel_ += std::fabs(s - at_);
+		if (s != at_) {
+			heading_ = s > at_ ? 1.0f : -1.0f;
+		}
 		at_ = s;
 		const float depth = rate_ * travel_;
 		StrokeUpdate u;
@@ -72,11 +80,39 @@ public:
 		return f;
 	}
 
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
+		out.ended = out.ended || ended;
+		const float depth = rate_ * travel_;
+		if (depth > dusted_) {
+			const float mid = 0.5f * (dusted_ + depth), width = width_at_(mid);
+			const float fraction = material_fraction(body, octree, frame_, {0.0f, -0.5f * width},
+					{length_, 0.5f * width}, mid, 13, 5);
+			pending_ += (depth - dusted_) * width * length_ * fraction;
+			dusted_ = depth;
+		}
+		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
+			return;
+		}
+		// Off the tool where it is now, pushed the way it was going.
+		Dust d;
+		d.point = frame_.point({at_, 0.0f, 0.0f});
+		d.direction = gl::normalize(frame_.x * heading_ + frame_.z * 0.5f);
+		d.volume = pending_;
+		d.grain = grain_;
+		d.spread = 0.5f * width_at_(depth);
+		out.dust.push_back(d);
+		pending_ = 0.0f;
+	}
+
 private:
 	Frame frame_;
 	float length_, rate_;
 	Pass pass_;
+	Width width_at_;
+	float grain_;
 	float travel_ = 0.0f, at_ = 0.0f, cut_ = 0.0f;
+	float heading_ = 1.0f;                 // the way it last moved along its line
+	float dusted_ = 0.0f, pending_ = 0.0f; // dust: the depth reported down to, held back
 };
 
 } // namespace
@@ -124,10 +160,18 @@ std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Wood &wood, vec3 con
 	Frame tilted = f;
 	tilted.z = up;
 	tilted.y = gl::cross(up, f.x);
+	// The round face's chord at a depth: narrow at first, the rasp's width once in far enough.
+	const auto width_at = [=](float depth) {
+		if (!rasp.round) {
+			return rasp.width;
+		}
+		const float r = rasp.round_radius, d = std::min(depth, r);
+		return std::min(rasp.width, 2.0f * std::sqrt(std::max(2.0f * r * d - d * d, 0.0f)));
+	};
 	return std::make_unique<PassStroke>(tilted, length, rasp.removal_per_mm(wood), [=](float depth) {
 		const vec3 a = contact - up * depth, b = a + f.x * length;
 		return cut(Primitive::sweep(a, b, up, rasp.profile(depth + 2.0f)));
-	});
+	}, width_at, 0.4f + 0.6f * rasp.coarseness);
 }
 
 // --- card scraper ----------------------------------------------------------------------
@@ -152,7 +196,7 @@ std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Wood &w
 	const float half = 0.5f * scraper.width;
 	return std::make_unique<PassStroke>(f, length, scraper.removal_per_mm(wood), [=](float depth) {
 		return pass_shape.pass(f, {0.0f, -half}, {length, half}, depth);
-	});
+	}, [=](float) { return scraper.width; }, 0.3f);
 }
 
 // --- spokeshave ------------------------------------------------------------------------

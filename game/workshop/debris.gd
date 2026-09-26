@@ -10,10 +10,13 @@ extends Node3D
 ##             and when the stroke ends, it comes away: a light rigid body that falls and
 ##             rests where it lands.
 ##   chips     tear-out, breakout, a chop's pop-off: a block of the wood thrown off the face.
+##   dust      the saw's, the rasps', the scraper's and the sanding tools': grains that fly,
+##             land and pile up (dust.gd).
 ## Each piece belongs to the board's undo step that made it (undo_step() takes it back).
 ## The newest LIVE pieces move under physics; older ones stay where they lie, still solid;
 ## past MOST the oldest go. World space throughout (metres); the report's volumes are mm^3.
 
+const Dust := preload("res://workshop/dust.gd")
 const MM := 0.001
 const COMPRESSION := 0.7
 const LIVE := 24
@@ -30,6 +33,7 @@ var _live_mesh: MeshInstance3D
 var _edge := Transform3D()
 var _shavings: StandardMaterial3D
 var feed_usec := 0 ## what the last feed() cost
+var dust ## dust.gd: the grains
 
 
 func _ready() -> void:
@@ -41,6 +45,8 @@ func _ready() -> void:
 	_live_mesh.mesh = ArrayMesh.new()
 	_live_mesh.material_override = _shavings
 	add_child(_live_mesh)
+	dust = Dust.new()
+	add_child(dust)
 
 
 ## Takes in what came off (SdfBody.take_debris()) for the board's undo step `step`, with the
@@ -69,6 +75,8 @@ func feed(report: Dictionary, step: int, edge: Transform3D) -> void:
 		moved = true
 	for chip in report.get("chips", []):
 		_add_chip(chip, step, float(report.get("density", 0.7)))
+	if report.has("dust"):
+		dust.add(report.dust, step)
 	if not _live.is_empty() and moved:
 		_shape_live()
 	if report.get("ended", false):
@@ -82,20 +90,27 @@ func live_samples() -> int:
 	return 0 if _live.is_empty() else _live.points.size()
 
 
-## Takes back the pieces the board's undo step `step` made (and any after it).
+## Whether nothing lies about: no pieces, no dust.
+func is_empty() -> bool:
+	return pieces.is_empty() and dust.volume <= 0.0
+
+
+## Takes back the pieces and dust the board's undo step `step` made (and any after it).
 func undo_step(step: int) -> void:
 	for i in range(pieces.size() - 1, -1, -1):
 		if pieces[i].step >= step:
 			pieces[i].body.queue_free()
 			pieces.remove_at(i)
+	dust.undo_step(step)
 
 
-## Sweeps the bench: every piece goes.
+## Sweeps the bench: every piece goes, and the dust.
 func clear() -> void:
 	_drop_live()
 	for piece in pieces:
 		piece.body.queue_free()
 	pieces.clear()
+	dust.clear()
 
 
 func _drop_live() -> void:

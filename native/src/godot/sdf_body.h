@@ -142,6 +142,11 @@ public:
 	//     "size" (world), "volume" (mm^3), "colour"}]
 	//   "ended": the stroke is over (the shaving so far comes away); "cancelled": it was
 	//     taken back (and what came off with it)
+	//   "dust": {"points", "directions" (unit, the way it is thrown), "volume" (mm^3 of wood
+	//     each), "grain" (world size), "spread" (world radius it leaves the work over),
+	//     "colours"}: sawdust from the kerf's ends, rasp and scraper dust from the tool, fine
+	//     dust from under the sanding block and the sponge (whose own flow measures it, so
+	//     its dust arrives as its work lands, the last of it after the stroke ends)
 	//   "rise": degrees the blade stands at (the shaving rides up it), "density" (g/cm^3)
 	godot::Dictionary take_debris();
 	// The body's colour at `point` (world space): its material there, grain and all. Also
@@ -290,11 +295,17 @@ private:
 			float length, const godot::Dictionary &settings);
 	// What came off since take_debris(), with a colour per shaving sample and chip.
 	tools::Debris debris_;
-	std::vector<vec3> shaving_colours_, chip_colours_;
+	std::vector<vec3> shaving_colours_, chip_colours_, dust_colours_;
+	// A deferred stroke (the sponge) once it has ended: its last work may still be running,
+	// and reports dust when it lands.
+	std::shared_ptr<tools::Stroke> debris_tail_;
 	bool debris_cancelled_ = false;
 	float stroke_rise_ = 0.0f; // the stroke's blade angle (a chisel's approach, a spokeshave's bed)
 	void gather_debris(bool ended);
+	void colour_debris(); // the debris gathered since the last take that has no colour yet
 	vec3 albedo_body(vec3 p) const; // body space; the body must stand
+	// The same, or where the body is being changed, its base material's (read nothing else).
+	vec3 albedo_safe(vec3 p) const;
 	double opacity_ = 1.0;
 	bool stroke_preview_ = true;
 	bool previewing_ = false;               // whether stroke_ is previewed

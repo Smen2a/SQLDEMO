@@ -46,8 +46,9 @@ extends Node3D
 ##
 ## What the tools take off comes away too (debris.gd): a chisel's, gouge's or spokeshave's
 ## shaving curls up off the edge as it goes and drops when it breaks or the stroke ends;
-## tear-out and a chop's pop-off throw chips. They land and lie where they fall; undo takes
-## a stroke's back, and Sweep clears the bench.
+## tear-out and a chop's pop-off throw chips; the saw, the rasps, the scraper and the sanding
+## tools throw dust, which piles up where it lands. They lie where they fall; undo takes a
+## stroke's back, and Sweep clears the bench.
 ##
 ## The world is in metres with y up. Bodies are in millimetres with z up: each body node is
 ## scaled by 0.001 and turned -90 degrees about x.
@@ -361,9 +362,9 @@ func act() -> void:
 		return
 	_state = ACTING
 	_debris_step = board.get_stats().get("steps", 0) + 1
-	if _board_collider == null and current in ["chisel", "gouge", "spokeshave"]:
-		# Its shavings will land on the board: its collider, while the board stands (a
-		# stroke has just begun, nothing is being applied to it).
+	if _board_collider == null:
+		# What it takes off will land on the board: its collider, in the physics space before
+		# the first of it comes.
 		_update_board_collider(true)
 	if _lock.get("direct", false):
 		# What the stroke comes to, for the line by the pointer (a chisel's, gouge's or
@@ -583,6 +584,9 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 			"spawn": body.global_transform, "island": island})
 	if not body.freeze:
 		_update_board_collider()
+		# Dust lying on the piece as it was: once it has slid off, whatever it held up falls.
+		var held: AABB = (board.global_transform * piece.get_body_bounds()).grow(0.005)
+		get_tree().create_timer(1.0).timeout.connect(func(): debris.dust.resettle(held))
 	_ui.refresh()
 
 
@@ -635,7 +639,7 @@ func _take_debris(edge: Transform3D) -> void:
 	if report.is_empty() and debris.live_samples() == 0:
 		return
 	debris.feed(report, _debris_step, edge)
-	if _board_collider == null and not debris.pieces.is_empty():
+	if _board_collider == null and not debris.is_empty():
 		_update_board_collider()
 
 
@@ -645,7 +649,7 @@ func _update_board_collider(debris_coming := false) -> void:
 	if _board_collider:
 		_board_collider.queue_free()
 		_board_collider = null
-	if offcuts.is_empty() and debris.pieces.is_empty() and not debris_coming:
+	if offcuts.is_empty() and debris.is_empty() and not debris_coming:
 		return
 	_board_collider = StaticBody3D.new()
 	add_child(_board_collider)
@@ -778,8 +782,8 @@ func _process(delta: float) -> void:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
-	if _engaged:
-		_take_debris(board.get_tool_pose())
+	# (After a stroke too: the sponge's last work lands after it ends.)
+	_take_debris(board.get_tool_pose())
 	# A plan asked for while an edit was landing is planned again once it has.
 	if _state == PLANNING and _plan.get("stale", false):
 		var fresh: Dictionary = board.get_plan()

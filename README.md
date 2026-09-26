@@ -63,7 +63,7 @@ Other controls:
 - Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit.
 - Middle-drag orbits, Shift+middle-drag pans, the wheel zooms.
 - The panel switches the wood (ash, oak, walnut), starts a new board, sweeps the bench of
-  shavings and chips, and lets the board cast shadows. Its sliders are the same settings
+  shavings, chips and dust, and lets the board cast shadows. Its sliders are the same settings
   the wheel changes.
 - *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
   and the board applies it once, when you let go. Turned off, every move is applied as it
@@ -475,6 +475,42 @@ chips. They land and lie where they fall; undo takes a stroke's back, a new boar
   in the workshop, a 50 mm paring cut 0.5 mm deep gives a 255 mm³ shaving (the board lost
   248), at rest on the board within a second.
 
+### Dust
+
+The saw, the rasps, the scraper and the sanding tools throw dust: grains of the wood that
+fly, land and pile up. Sawdust heaps on the bench beyond the kerf's ends; sanding dust
+lies on the face it came off. Undo takes a stroke's dust back; *Sweep* clears it.
+- **How much** (each stroke's `debris()`, from the body before the stroke):
+  - **The saw:** each slice of kerf it goes down through is the kerf's width times the
+    material along the blade's line at that depth (sampled every millimetre, kept per half
+    millimetre of depth). It leaves at that chord's two ends.
+  - **The rasps and the scraper:** each bit deeper is the pass's width at that depth (a
+    round face's grows as it goes in) times its length, as far as it is over material.
+  - **The sanding block:** its pass's depth over the rectangle it has covered, as far as
+    that is over material.
+  - **The sponge:** its own flow measures what it moves out of the material. That runs on
+    the worker, so the last of it arrives just after the stroke ends.
+- **The grains** (`game/workshop/dust.gd`, one MultiMesh):
+  - A puff throws up to 16 grains of 0.2–0.9 mm by tool, bigger when there is more wood
+    (dust takes 2.5 times the room the wood did) up to 2.5 mm across (beyond that the pile
+    grows taller instead), 15% paler than the wood.
+  - Where a grain lands is found once, when it is thrown: its arc is cast in three pieces
+    against the physics space (bench, floor, the board's collider, pieces lying about).
+  - Grains stack on a 1 mm grid. One landing on a pile rolls to the first neighbour lower
+    by more than a cell's width (a 45° slope, or an edge).
+  - At most 30,000 are kept, the oldest going first; at most 20 are thrown a frame.
+  - A sawn piece's dust falls once the piece has slid off.
+![Sawdust heaped on the bench where a kerf across the ash board came out at its side](docs/images/dust_sawdust.png)
+
+- **Measured** (`native/tests/test_debris.cpp`, `game/tests/dust`):
+  - against what the board lost: saw 0.1%, sanding block 1.4%, rasps 0.0% (flat and
+    half-round), sponge 1.0%;
+  - in the workshop, a kerf 5.7 mm deep across the board gives 455 mm³ of sawdust (its
+    width × depth × the board's width: 456), 85% of it heaped on the bench beyond its ends,
+    7 mm high;
+  - throwing costs about 0.6 ms a frame while dust comes (about 1 ms at most), the flights
+    at most 0.4 ms (headless).
+
 ## Layout
 
 | Path | What it is |
@@ -742,7 +778,8 @@ The Godot tests come in two tiers:
   - stroke previews commit as previewed;
   - planned and direct strokes;
   - offcuts and islands come away and settle;
-  - shavings and chips come away as much wood as the board lost, and settle.
+  - shavings and chips come away as much wood as the board lost, and settle;
+  - sawdust is the kerf taken and heaps up; sanding dust lies on the face.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

@@ -15,8 +15,8 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Tools** (below) is done: the tools behave like their real selves, and a stroke can be
   planned before it is made (T1 to T3).
 - **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut).
-- **Debris** (2) is under way: D1 (shavings and chips) is done; D2 (dust) and D3 (small
-  pieces) are next.
+- **Debris** (2) is under way: D1 (shavings and chips) and D2 (dust) are done; D3 (small
+  pieces) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -67,6 +67,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
+| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly, land where their arc meets something and pile up, sawdust heaped beyond the kerf's ends, sanding dust on the face; undo takes them back. Every tool's dust within 1.5% of what the board lost |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 
@@ -278,14 +279,14 @@ The details are in the README ("Pieces").
   - A clip-drawn piece matches its own rebuilt ADF (image diff at the parity thresholds).
 - The existing suites stay green; `sdf_bench tools` reports the separation check's time.
 
-## 2. Debris (current: D1 done)
+## 2. Debris (current: D1 and D2 done)
 Built in three steps:
 - **D1:** shavings and chips.
 - **D2:** dust.
 - **D3:** small pieces.
 
-Dust will be grains of its own (a MultiMesh), not `CPUParticles3D`, which cannot collide:
-it should settle and pile, not fall through the bench.
+Dust is grains of its own (a MultiMesh), not `CPUParticles3D`, which cannot collide: it
+settles and piles rather than falling through the bench.
 
 ### D1 — shavings and chips: done
 - **The report** (`tools/debris.h`). A stroke says what it took off since it last said
@@ -316,17 +317,56 @@ it should settle and pile, not fall through the bench.
 - **Measured.** A shaving is within 1% of the volume the board lost; with an uphill cut's
   tear-out chips, within 1%. Taking it in costs at most about 0.5 ms a frame.
 
-### D2 and D3 (next)
-- **One system for material that leaves the body:**
-  - **chisel shavings:** a curling ribbon as thick as the cut, whose grain comes from where
-    it sat in the wood;
-  - **dust:** saw, block and sponge, in proportion to what they remove, coloured by a new
-    `SdfBody.albedo_at`;
-  - **chips:** stone, for 8;
-  - **small pieces:** pieces from 1 or 6 below a volume threshold become debris, not
-    bodies.
-- It is cosmetic: `CPUParticles3D` and small mesh bodies, which work in every renderer.
-  The newest N are kept.
+### D2 — dust: done
+- **What each tool reports** (its `Stroke::debris`, from the body before the stroke):
+  - **saw:** each slice of kerf it goes down through is the kerf's width times the
+    material along the blade's line at that depth (the chord: sampled every millimetre,
+    kept per half millimetre of depth). It leaves at the chord's two ends, thrown outward;
+  - **rasp, scraper:** each bit deeper is the pass's width at that depth (a round face's
+    chord grows as it goes in) times its length times the fraction of it over material (a
+    13 × 5 probe). It leaves where the tool is, the way it was going;
+  - **sanding block:** the pass's depth over the rectangle it has covered, times the
+    fraction over material (a 7 × 7 probe), beyond what was reported; from under the block,
+    over its face;
+  - **sponge:** its flow measures it: each sample's share of material (phi's zero set
+    smeared over a sample) before and after each step. Its work runs on the worker, so it
+    reports from its own numbers and reads nothing; the last of it lands after the stroke
+    ends (`SdfBody` keeps the stroke until its work is done).
+  - Less than 0.05 mm³ is held back until more comes. Grains are 0.2–0.9 mm by tool.
+- **Colour.** `albedo_at` where the body stands; while it is being changed (the saw and
+  sponge do not wait), the base material's, which edits never change.
+- **The workshop** (`dust.gd`):
+  - a puff throws up to 16 grains, bigger when it carries more wood (dust takes 2.5 times
+    the room) up to 2.5 mm across (then the pile grows taller instead), 15% paler than the
+    wood;
+  - each grain flies the way it was thrown with a little scatter, under gravity. Where it
+    lands is found once, when it is thrown: its arc cast in three pieces against the
+    physics space. So the board keeps its collider from the first stroke on;
+  - grains stack on a 1 mm grid. One landing on a pile rolls to the first neighbour lower
+    by more than a cell's width (a 45° slope, or an edge);
+  - one MultiMesh, 30,000 grains at most, the oldest going first; at most 20 thrown a frame
+    (the rest wait);
+  - undo takes a stroke's dust back; a sawn piece's dust falls once the piece has slid off.
+- **Measured** (`native/tests/test_debris.cpp`, `game/tests/dust`):
+  - against what the board lost: saw 0.1%, sanding block 1.4%, flat and half-round rasp
+    0.0%, sponge 1.0%;
+  - in the workshop, a kerf 5.7 mm deep across the board gives 455 mm³ of sawdust (the
+    kerf's width × depth × the board's width: 456), 85% of it heaped on the bench beyond
+    the kerf's ends (7 mm high); the block's dust lies on the face;
+  - throwing costs about 0.6 ms a frame while dust comes (about 1 ms at most), the flights
+    at most 0.4 ms (headless).
+- **Left for later:** dust does not ride on pieces it lands on (it falls once a sawn piece
+  has slid away); tools pass over dust without pushing it.
+
+### D3 — small pieces (next)
+- One check collects every part that came away. Parts under about 30 mm³ (crumbs under
+  1 mm³ included) are cut out together: one region labels them all Island, and the board
+  keeps the Rest with one `Op::Keep` step. Bigger islands still split into bodies.
+- Each becomes a debris chunk: a hull mesh from a small quickhull
+  (`native/src/core/pieces/hull.{h,cpp}`), coloured per vertex, with a convex collider,
+  reported by a `crumbled` signal. P1 offcuts under the threshold go the same way.
+- Undo straight after drops the Keep.
+- Stone's percussion chips (8) will be debris too.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:
