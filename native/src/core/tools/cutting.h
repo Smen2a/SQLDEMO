@@ -31,10 +31,20 @@
 //   grain (downhill) it runs out to the surface and the cut is clean. Across the grain out
 //   of an edge, a chip breaks away at the exit.
 // - Chopping (the blade at 60 degrees or more): a mallet blow drives a thin slit a few
-//   millimetres (less the deeper it is); along the grain the wedge splits the wood. It
-//   hollows nothing out, except that within reach of an open face on its bevel side the
-//   chip between pops off along the grain.
-// Chips (tear-out, breakout) are seeded, so a plan and the stroke that makes it agree.
+//   millimetres (less the deeper it is; a tap a third of a firm blow, a heavy one 1.6 times);
+//   along the grain the wedge splits the wood. It hollows nothing out, except that within
+//   reach of an open face on its bevel side the chip between pops off along the grain.
+// - What it cannot do. The chip is everything between the floor and the surface above it:
+//   where the surface steps up by a millimetre or more (a wall, a raised part) the edge
+//   stops at its face; where the surface rises into a chip thicker than the hand can push,
+//   the edge follows it up, but only gently (8 degrees): steeper, it stalls. So no cut runs
+//   under the work. Nor does the blade pass through it: wood where the blade's body lies
+//   behind the edge (an overhang, the walls of a gap narrower than the chisel) stops it too.
+//   Where a rule stops a plan it says which (CutPlan::stop) and where (stop_at). The force
+//   is the chip's own section over the edge (in a channel, only what stands over it).
+// Chips (tear-out, breakout) are seeded, so a plan and the stroke that makes it agree. They
+// follow the grain: splinters whose floor dips from the cut along the fibres and curls back
+// up, rounded, never deeper than 1.5 times the cut (and a millimetre; breakout two).
 namespace sdf::tools {
 
 // How a wood takes an edge (materials.h); anything that is not wood is cut as ash.
@@ -77,6 +87,11 @@ enum CutWarning : unsigned {
 	kPopsOff = 1u << 7,       // a chop near an open face: the chip between pops off
 	kDigsIn = 1u << 8,        // dived in steeply: the edge digs in
 	kSplits = 1u << 9,        // chopped along the grain: the wedge splits the wood
+	// What stops a stroke short (CutPlan::stop):
+	kBlocked = 1u << 10,      // the surface steps up ahead (a wall): chop it or come from the other side
+	kBladeMeets = 1u << 11,   // wood where the blade's body goes (an overhang, a ridge)
+	kTooWide = 1u << 12,      // the gap is narrower than the chisel: its sides meet the walls
+	kStalls = 1u << 13,       // the chip grows thicker than the hand can push
 };
 // The warnings' names ("skates", "shallow", ...), in bit order.
 std::vector<std::string> warning_names(unsigned warnings);
@@ -103,6 +118,12 @@ struct CutPlan {
 	int slope = 0;            // +1 with the grain (downhill), -1 against (uphill), 0 level or across
 	float split = 0.5f;       // how readily the wood splits (Wood::split)
 	unsigned warnings = 0;
+	// Where a rule stopped the stroke short: mm along the path (-1: it was not), which
+	// (a CutWarning: blocked, blade meets, too wide, stalls, skates) and, blocked, how high
+	// the step ahead stands (mm).
+	float stop_at = -1.0f;
+	unsigned stop = 0;
+	float wall = 0.0f;
 
 	float depth_at(float s) const;
 	vec3 point(float s, float depth) const { return start + path * s - normal * depth; }
@@ -122,9 +143,10 @@ struct CutPlan {
 // Plans a stroke of `chisel` (held at its approach_deg, bevel down) from `start` on the
 // work's surface (`normal` out of it) along `path` for `length` mm, `depth` deep at most,
 // the edge turned `skew_deg` across the path by the hand (a skew chisel's own is added).
-// At 60 degrees or more it is a chop at `start`: one blow (the waste on the path's side).
+// At 60 degrees or more it is a chop at `start`: one blow (the waste on the path's side),
+// `blow` times a firm one (0.3 a tap, 1.6 a heavy blow).
 CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, float skew_deg, std::uint32_t seed);
+		float depth, float skew_deg, std::uint32_t seed, float blow = 1.0f);
 
 // Tear-out below a pared cut going against the grain (uphill): seeded chips, `scale` times
 // the wood's own readiness to tear (a plane's mouth keeps the split short: 0.5).

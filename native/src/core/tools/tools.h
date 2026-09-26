@@ -55,6 +55,8 @@ struct Chisel {
 	// How deep the edge goes before its corners enter the work: 0 for a flat edge (its
 	// corners are in from the start), a gouge's sweep, a V-tool's wings.
 	float corner_depth() const;
+	// How far above its deepest point the edge's section is, `x` mm out from its middle.
+	float edge_height(float x) const;
 	// The area (mm^2) of the chip the edge takes `depth` deep (up to its corners; the
 	// width beyond).
 	float chip_area(float depth) const;

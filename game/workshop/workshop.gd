@@ -34,6 +34,12 @@ extends Node3D
 ##   sanding block   takes the surface down wherever it rubs, flat
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
 ## The tool in hand stays out of sight until it works, so it never hides where it goes.
+## A chisel, gouge or spokeshave goes no faster than a hand works it (WORKING_SPEED, slower
+## as the wood resists, times the workshop's pace): dragged ahead, it follows; let go, the
+## stroke ends where the tool got to. While it works, its blade pushes aside loose pieces in
+## its way (it never cuts under them). Where a rule stops a plan short (a step ahead, the
+## blade meeting the work, a gap too narrow, a chip too thick) a red mark shows where, and the
+## line by the pointer says why. Ctrl+wheel sets depths in hundredths of a millimetre.
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 ## Middle-drag orbits the camera, Shift+middle-drag pans, the wheel zooms.
 ##
@@ -63,6 +69,12 @@ const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its d
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
 const SETTLE_INTO := 0.00018 # m it starts into that (the solver's slop is 0.2 mm)
 const SHAPE_MARGIN := 0.0001 # m: islands' and the hollowed board's shapes, sharp to a tenth of a mm
+## mm/s a push tool goes at most, paring freely; at the force the hand can give, a fifth of it.
+const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 40.0}
+const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
+## A chop's blow: a tap, a firm blow, a heavy one (SdfBody's "blow").
+const BLOWS := [0.3, 1.0, 1.6]
+const BLOW_NAMES := ["tap", "firm", "heavy"]
 
 ## IDLE: pointing. PLANNING: a stroke locked in with the right button. ARMED: a direct
 ## stroke (the left button, no plan) waiting for its drag to show which way it goes.
@@ -71,8 +83,8 @@ enum { IDLE, PLANNING, ARMED, ACTING }
 
 ## Per tool, what the wheel sets while planning: [setting, step, lowest, highest, format].
 const INTENSITY := {
-	"chisel": ["depth", 0.05, 0.05, 3.0, "%.2f mm deep"],
-	"gouge": ["depth", 0.05, 0.05, 4.0, "%.2f mm deep"],
+	"chisel": ["depth", 0.05, 0.01, 1.5, "%.2f mm deep"],
+	"gouge": ["depth", 0.05, 0.01, 2.5, "%.2f mm deep"],
 	"saw": ["feed", 0.005, 0.005, 0.1, "feed %.3f mm per mm"],
 	"rasp": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"spokeshave": ["depth", 0.02, 0.02, 0.5, "%.2f mm shaving"],
@@ -111,8 +123,8 @@ const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core 
 ## angle to the work and skew (degrees); saw feed (mm deeper per mm of stroke); grit and
 ## pressure (1: an ordinary hand's worth).
 var settings := {
-	"chisel": {"variant": "bench_12", "depth": 0.5, "angle": 30.0, "skew": 0.0},
-	"gouge": {"variant": "gouge_7_12", "depth": 1.0, "angle": 30.0, "skew": 0.0},
+	"chisel": {"variant": "bench_12", "depth": 0.2, "angle": 30.0, "skew": 0.0, "blow": 1.0},
+	"gouge": {"variant": "gouge_7_12", "depth": 0.3, "angle": 30.0, "skew": 0.0, "blow": 1.0},
 	"saw": {"feed": 0.03},
 	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
 	"spokeshave": {"depth": 0.1},
@@ -121,6 +133,9 @@ var settings := {
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
 }
 var wood := "board" ## board, board_oak or board_walnut
+## How fast work goes against real life (1: as a real hand would), for every tool's speed and
+## rate.
+var pace := 1.0
 
 var board                 # SdfBody
 var tools := {}           # name -> SdfBody
@@ -144,6 +159,12 @@ var _plan := {}           # what SdfBody.plan_stroke made of it
 ## The chisels and gouges (SdfBody.tool_catalog()): family -> [{id, label, width, ...}].
 var variants := {}
 var _progress := 0.0      # mm a push tool has gone along its path
+var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
+var _last_blow := -1.0    # s: when the mallet last struck
+var _blade := BoxShape3D.new() # round the tool in hand's blade, while it works (_place_blade)
+var _blade_at := Transform3D()
+var _blade_on := false
+var _edge_velocity := Vector3.ZERO # m/s: the edge's, while it works
 var _opacity := 0.0       # of the tool in hand, in the main view
 var _plane := Plane()
 var _engage_pose := Transform3D()
@@ -199,6 +220,8 @@ func _ready() -> void:
 	lines.vertex_color_use_as_albedo = true
 	_outline.material_override = lines
 	add_child(_outline)
+
+	_blade.margin = SHAPE_MARGIN
 
 	_ui = WorkshopUi.new()
 	_ui.workshop = self
@@ -306,15 +329,22 @@ func unlock() -> void:
 		_drop_plan()
 
 
-## The wheel while planning: `steps` notches of the tool's intensity, or of its tilt.
-func adjust(steps: int, tilt: bool) -> void:
+## The wheel while planning: `steps` notches of the tool's intensity, or of its tilt; `fine`
+## (Ctrl), a fifth of a notch each. Chopping, the intensity is the blow: tap, firm, heavy.
+func adjust(steps: int, tilt: bool, fine := false) -> void:
 	if _state != PLANNING:
+		return
+	if is_chopping() and not tilt:
+		var at := BLOWS.find(settings[current].get("blow", 1.0))
+		set_setting(current, "blow", BLOWS[clampi((at if at >= 0 else 1) + signi(steps), 0, BLOWS.size() - 1)])
+		_replan()
 		return
 	var spec = (TILT if tilt else INTENSITY).get(current)
 	if spec == null:
 		return
+	var step: float = spec[1] / 5.0 if fine else spec[1]
 	var value: float = settings[current][spec[0]]
-	set_setting(current, spec[0], clampf(snappedf(value + steps * spec[1], spec[1]), spec[2], spec[3]))
+	set_setting(current, spec[0], clampf(snappedf(value + steps * step, step), spec[2], spec[3]))
 	_replan()
 
 
@@ -351,10 +381,14 @@ func press(position: Vector2) -> void:
 func act() -> void:
 	if _state != PLANNING and _state != ARMED:
 		return
+	var now := Time.get_ticks_msec() / 1000.0
+	if is_chopping() and now - _last_blow < BLOW_INTERVAL:
+		return # the mallet is still coming back up
 	_engage_pose = tools[current].global_transform
 	_engage_time = Time.get_ticks_msec() / 1000.0
 	_plane = _lock.plane
 	_progress = 0.0
+	_target = 0.0
 	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, _stroke_settings())
 	if not _engaged:
 		if _state == ARMED:
@@ -371,6 +405,7 @@ func act() -> void:
 		# spokeshave's: the plan it was made from; nothing for the others).
 		_plan = board.get_plan()
 	if is_chopping():
+		_last_blow = now
 		board.move_stroke(_lock.point)
 		release()
 
@@ -402,8 +437,8 @@ func drag_screen(position: Vector2) -> void:
 	var path: Vector3 = _lock.path
 	match current:
 		"chisel", "gouge", "spokeshave":
-			_progress = clampf((point - start).dot(path) / MM, _progress, _lock.length)
-			board.move_stroke(start + path * (_progress * MM))
+			# Where the pointer asks it to be: _process takes it there at its working speed.
+			_target = clampf((point - start).dot(path) / MM, _target, _lock.length)
 		"saw", "rasp", "scraper":
 			board.move_stroke(start + path * (point - start).dot(path))
 		_:
@@ -471,11 +506,12 @@ func _faces_its_path() -> bool:
 	return current in ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper"]
 
 
-## A stroke's settings: the tool's, with the plan's length and seed.
+## A stroke's settings: the tool's, with the plan's length and seed, and the pace.
 func _stroke_settings() -> Dictionary:
 	var s: Dictionary = settings[current].duplicate()
 	s["length"] = _lock.length
 	s["seed"] = _lock.seed
+	s["pace"] = pace # (for the tools that take off at a rate)
 	return s
 
 
@@ -644,7 +680,7 @@ func _take_debris(edge: Transform3D) -> void:
 
 
 ## While offcuts or debris lie about, the board has a (convex) collider too, so they rest
-## against it rather than in it. `debris_coming`: a stroke that will throw some is starting.
+## on it rather than in it. `debris_coming`: a stroke that will throw some is starting.
 func _update_board_collider(debris_coming := false) -> void:
 	if _board_collider:
 		_board_collider.queue_free()
@@ -673,14 +709,11 @@ func _update_board_collider(debris_coming := false) -> void:
 			piece_collider.shape = hull
 			_board_collider.add_child(piece_collider)
 		return
-	var collider := CollisionShape3D.new()
-	var hull := ConvexPolygonShape3D.new()
-	var points := PackedVector3Array()
-	for p in board.get_hull_points():
-		points.push_back(board.transform * p)
-	hull.points = points
-	hull.margin = SHAPE_MARGIN
-	collider.shape = hull
+	# As an offcut's: a box while it fills nearly all its bounds (a board with cuts in it), which
+	# pieces rest on steadily. (A hull of its surface has points bunched within a millimetre at
+	# its eased corners, and the physics engine lets pieces sink into it.)
+	var collider := _collider_for(board)
+	collider.shape.margin = SHAPE_MARGIN
 	_board_collider.add_child(collider)
 
 
@@ -702,6 +735,19 @@ func set_setting(tool: String, key: String, value) -> void:
 
 func is_engaged() -> bool:
 	return _engaged
+
+
+## Whether the tool in hand is still catching up with where it was dragged.
+func lagging() -> bool:
+	return _engaged and _progress < _target - 1e-3
+
+
+## mm/s the push tool in hand goes at most: freely, its WORKING_SPEED; slower as the force the
+## cut takes nears what the hand can give (a fifth of it there); times the pace.
+func working_speed() -> float:
+	var free: float = WORKING_SPEED.get(current, 40.0)
+	var effort := clampf(_plan.get("force", 0.0) / maxf(_plan.get("available", 1.0), 1.0), 0.0, 1.0)
+	return free * lerpf(1.0, 0.2, effort) * pace
 
 
 # --- per frame ---------------------------------------------------------------------------
@@ -730,7 +776,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					unlock()
 			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
 				if button.pressed and _state == PLANNING:
-					adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.shift_pressed)
+					adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.shift_pressed,
+							button.ctrl_pressed)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
@@ -782,6 +829,13 @@ func _process(delta: float) -> void:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
+	# A push tool follows where it was dragged at its working speed.
+	var went := 0.0
+	if _engaged and WORKING_SPEED.has(current) and _progress < _target:
+		went = minf(_target, _progress + working_speed() * delta) - _progress
+		_progress += went
+		board.move_stroke(_lock.point + _lock.path * (_progress * MM))
+	_place_blade(_lock.get("path", Vector3.ZERO) * (went * MM / maxf(delta, 1e-6)))
 	# (After a stroke too: the sponge's last work lands after it ends.)
 	_take_debris(board.get_tool_pose())
 	# A plan asked for while an edit was landing is planned again once it has.
@@ -815,6 +869,55 @@ func _process(delta: float) -> void:
 				offcut.body.sleeping = offcut.resting
 	_draw_outline()
 	_ui.update_status()
+
+
+## Where the tool in hand's blade is while a chisel or gouge works (a box round it for the
+## 30 mm behind its edge, rising at its angle to the work), and how fast its edge goes (m/s).
+func _place_blade(velocity: Vector3) -> void:
+	_blade_on = _engaged and (current == "chisel" or current == "gouge") and not is_chopping()
+	_edge_velocity = velocity if _blade_on else Vector3.ZERO
+	if not _blade_on:
+		return
+	var pose: Transform3D = board.get_tool_pose()
+	var x := pose.basis.x.normalized()
+	var z := pose.basis.z.normalized()
+	var a := deg_to_rad(settings[current].angle)
+	var back := -x * cos(a) + z * sin(a)
+	var over := x * sin(a) + z * cos(a)
+	var size := Vector3(30.0, variant().get("width", 12.0), 4.0) * MM
+	if _blade.size != size:
+		_blade.size = size
+	# From a millimetre ahead of the edge back along the blade, and from its flat back through
+	# its thickness.
+	_blade_at = Transform3D(Basis(back, over.cross(back), over), pose.origin + back * 0.014 - over * 0.002)
+
+
+func _physics_process(delta: float) -> void:
+	_push_aside(delta)
+
+
+## Loose pieces (offcuts, islands) the blade meets go on ahead of the edge as it advances:
+## never cut under. They are moved with it, not kicked: a push as fast as the edge is less
+## than friction takes off a piece of a few grams in one physics step, so it would not move.
+## (A solid blade, a kinematic body, wedged under them: at this scale the physics engine let
+## it slide under, or tipped them and buried them in the board. A plate standing up at the
+## edge flung them off it.)
+func _push_aside(delta: float) -> void:
+	var speed := _edge_velocity.length()
+	if not _blade_on or speed < 1e-5:
+		return
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _blade
+	query.transform = _blade_at
+	query.collision_mask = 1 # (the pieces; not the shavings and chips it makes: debris.gd LAYER)
+	query.margin = 0.0003 # (touching counts)
+	for hit in get_world_3d().direct_space_state.intersect_shape(query, 8):
+		var piece = hit.collider
+		if piece is RigidBody3D and not piece.freeze:
+			# Along the board: the edge's advance this step, less any way it goes up or down.
+			var advance: Vector3 = _edge_velocity * delta
+			piece.global_position += advance - Vector3.UP * advance.dot(Vector3.UP)
+			piece.sleeping = false
 
 
 ## Where the tool in hand floats: over the board under the pointer, or over its middle.
@@ -907,6 +1010,15 @@ func _draw_outline() -> void:
 				segments.append(p + (a * cos(TAU * (i + 1) / 24.0) + s * sin(TAU * (i + 1) / 24.0)) * r)
 	for v in segments:
 		mesh.surface_add_vertex(v)
+	# Where a rule stops the plan short: a red cross there.
+	var stop_at: float = _plan.get("stop_at", -1.0) if _state == PLANNING else -1.0
+	if stop_at >= 0.0:
+		var at: Vector3 = p + _lock.path * (stop_at * MM)
+		var across := n.cross(_lock.path) * 0.004
+		var ahead: Vector3 = _lock.path * 0.004
+		mesh.surface_set_color(Color(1.0, 0.25, 0.2))
+		for v in [at - across - ahead, at + across + ahead, at - across + ahead, at + across - ahead]:
+			mesh.surface_add_vertex(v)
 	mesh.surface_end()
 
 

@@ -356,8 +356,8 @@ tools::CutPlan SdfBody::plan_for(const String &tool, const tools::Work &work, ve
 	if (tool == "spokeshave") {
 		return tools::plan_spokeshave(tools::Spokeshave{}, work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
 	}
-	return tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 1.0))),
-			float(double(s.get("skew", 0.0))), seed);
+	return tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 0.2))),
+			float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))));
 }
 
 Array SdfBody::tool_catalog() {
@@ -608,6 +608,11 @@ Dictionary SdfBody::compute_plan() {
 			warnings.push_back(String(w.c_str()));
 		}
 		report["warnings"] = warnings;
+		// Where a rule stopped it short, and which.
+		report["stop_at"] = double(c.stop_at);
+		const std::vector<std::string> stop = tools::warning_names(c.stop);
+		report["stop"] = stop.empty() ? String() : String(stop.front().c_str());
+		report["wall"] = double(c.wall);
 		plan_stale_ = false;
 		plan_report_ = report;
 		update_overlay();

@@ -4,11 +4,15 @@ extends "res://tests/harness.gd"
 ## step against what the wood allows (core tools/cutting.h):
 ## - a bench chisel in the middle of the ash board: the plan (as deep as asked, while a hand
 ##   can push it; drawn hatched) with the chisel out of sight; the wheel deepening it;
-##   tilted below its bevel it skates and plans nothing; made, it fades in and cuts as deep
-##   as planned, and stops at the plan's end;
+##   tilted below its bevel it skates and plans nothing; Ctrl+wheel steps it by hundredths;
+##   made, it fades in and cuts as deep as planned, and stops at the plan's end;
+## - flicked 50 mm in one go, the chisel follows at its working speed (it takes over a second
+##   to get there), and pushes a loose block lying in its way ahead of it, never riding under;
 ## - uphill, against the grain, the plan says so;
 ## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
-## - a #7 gouge goes a millimetre deep there, where the chisel could not;
+## - a #7 gouge goes a millimetre deep there, where the chisel could not; two passes of it
+##   cut a channel nearly 2 mm deep, and a 6 mm chisel's plan along it stops at the channel's
+##   end (blocked by the step), and says so;
 ## - a spokeshave takes an even 0.1 mm shaving; a rasp worked back and forth takes what its
 ##   plan says, stroke by stroke;
 ## - without a plan, a left-drag uses the tool directly: a chisel goes the way it is
@@ -61,6 +65,10 @@ func _ready() -> void:
 	plan = workshop.get_plan()
 	_check(absf(plan.get("depth", 0.0) - 0.4) < 0.01 and plan.get("warnings", PackedStringArray()).is_empty(),
 			"tipped back to 30 degrees it bites")
+	workshop.adjust(-3, false, true)
+	_check(is_equal_approx(workshop.settings.chisel.depth, 0.37), "Ctrl+wheel: three hundredths shallower (%.3f)"
+			% workshop.settings.chisel.depth)
+	workshop.adjust(3, false, true)
 	await _frames(3)
 	var out := user_arg("--out", "")
 	if out != "" and DisplayServer.get_name() != "headless":
@@ -76,6 +84,7 @@ func _ready() -> void:
 	for k in 12:
 		workshop.drag_screen(cam.unproject_position(start.lerp(end + Vector3(0.02, 0, 0), float(k + 1) / 12.0)))
 		await _frames(1)
+	await _catch_up()
 	workshop.release()
 	_check(workshop.is_planning(), "with the right button still down, the next pass is planned from the same spot")
 	workshop.unlock()
@@ -90,6 +99,52 @@ func _ready() -> void:
 	print("tool planning: chisel planned 0.40 mm, cut %.2f mm; %.2f mm beyond the plan's end" % [middle, beyond])
 	_check(absf(middle - 0.4) < 0.03, "the cut is as deep as planned")
 	_check(beyond < 0.03, "the stroke stopped at the plan's end")
+
+	# A flick: dragged 50 mm in one go, the chisel follows at its working speed. A loose block
+	# lies in its way, on the board: the blade pushes it aside.
+	var flick_from := Vector3(0.0, 0.025, 0.015)
+	var flick_to := Vector3(0.05, 0.025, 0.015)
+	plan = await _plan(flick_from, flick_to)
+	workshop._update_board_collider(true) # (for the block to rest on)
+	var block := RigidBody3D.new()
+	# As an offcut: sliding on the board, 5 g to the solver.
+	block.mass = 0.005
+	var surface := PhysicsMaterial.new()
+	surface.friction = 0.5
+	block.physics_material_override = surface
+	var block_shape := CollisionShape3D.new()
+	block_shape.shape = BoxShape3D.new()
+	block_shape.shape.size = Vector3(0.016, 0.008, 0.016)
+	block_shape.shape.margin = workshop.SHAPE_MARGIN
+	block.add_child(block_shape)
+	add_child(block)
+	var block_at := Vector3(0.03, 0.025 + 0.004 + 0.0002, 0.015)
+	block.global_position = block_at
+	await _physics(10)
+	block_at = block.global_position
+	var speed: float = workshop.working_speed()
+	workshop.press(cam.unproject_position(flick_from))
+	workshop.drag_screen(cam.unproject_position(flick_to + Vector3(0.01, 0, 0)))
+	await _frames(1)
+	var early: float = workshop._progress
+	_check(early < 10.0, "a flick does not carry it there at once (%.1f mm after a frame)" % early)
+	var took := get_process_delta_time()
+	took += await _catch_up()
+	workshop.release()
+	workshop.unlock()
+	workshop.board.flush()
+	await _physics(40)
+	var pushed := block.global_position - block_at
+	print("tool planning: a flick of 50 mm took %.2f s at %.0f mm/s; the loose block went %.1f mm along, %.1f mm up"
+			% [took, speed, pushed.x * 1000.0, pushed.y * 1000.0])
+	_check(took > 50.0 / (workshop.WORKING_SPEED.chisel * workshop.pace) - 0.05 and took < 50.0 / speed * 1.3 + 0.3,
+			"it got there at its working speed")
+	_check(pushed.length() > 0.005, "the loose block was pushed aside (%.1f mm)" % (pushed.length() * 1000.0))
+	# Ahead of the edge to the stroke's end (its back edge riding a little onto the blade),
+	# not left behind with the cut run under it.
+	_check(block.global_position.x - 0.008 > flick_to.x - 0.003,
+			"the block's back is ahead of where the edge stopped (%.1f mm)" % ((block.global_position.x - 0.008) * 1000.0))
+	block.queue_free()
 
 	# Uphill: pushed the other way along the grain.
 	plan = await _plan(Vector3(0.03, 0.025, 0.025), Vector3(-0.01, 0.025, 0.025))
@@ -129,6 +184,49 @@ func _ready() -> void:
 	print("tool planning: asked 1 mm, the #7 gouge %.2f mm, the bench chisel %.2f mm" % [gouge_depth, chisel_depth])
 	_check(absf(gouge_depth - 1.0) < 0.01 and chisel_depth < 0.6, "the gouge goes deeper than the chisel")
 
+	# A channel with a step at its end: two passes of the gouge, dived in steeply (35 degrees)
+	# and on to the same end, the second deepening the first. A 6 mm chisel pared along its
+	# floor stops at the step, and says why.
+	workshop.select_tool("gouge")
+	workshop.set_setting("gouge", "depth", 2.0)
+	workshop.set_setting("gouge", "angle", 35.0)
+	await _frames(4)
+	var channel_end := Vector3(-0.04, 0.025, -0.015)
+	var floor := 0.025
+	for from_x in [-0.075, -0.066]:
+		var channel_from := Vector3(from_x, floor, -0.015)
+		plan = await _plan(channel_from, Vector3(channel_end.x, floor, channel_end.z))
+		var pass_depth: float = plan.get("depth", 0.0)
+		_check(pass_depth > 0.5 and plan.get("stop_at", -1.0) < 0.0,
+				"a gouge pass along the channel goes %.2f mm deeper, to its end" % pass_depth)
+		workshop.press(cam.unproject_position(channel_from))
+		for k in 4:
+			workshop.drag_screen(cam.unproject_position(channel_from.lerp(channel_end, float(k + 1) / 4.0)))
+			await _frames(1)
+		await _catch_up()
+		workshop.release()
+		workshop.unlock()
+		workshop.board.flush()
+		floor -= pass_depth * 0.001
+	workshop.set_setting("gouge", "depth", 1.0)
+	workshop.set_setting("gouge", "angle", 30.0)
+	workshop.select_tool("chisel")
+	workshop.set_setting("chisel", "variant", "bench_6")
+	workshop.set_setting("chisel", "depth", 0.2)
+	await _frames(4)
+	# (Aimed at the channel's floor.)
+	plan = await _plan(Vector3(-0.056, floor, -0.015), Vector3(-0.03, floor, -0.015))
+	var stop_at: float = plan.get("stop_at", -1.0)
+	var line: String = workshop._ui.plan_text()
+	print("tool planning: a channel %.2f mm deep; the chisel in it stops at %.1f mm (%s, %.2f mm): %s"
+			% [(0.025 - floor) * 1000.0, stop_at, plan.get("stop", ""), plan.get("wall", 0.0), line.replace("\n", " / ")])
+	_check(plan.get("stop", "") == "blocked" and absf(stop_at - 16.0) < 1.5,
+			"the chisel's plan stops at the channel's end, blocked (%.1f mm)" % stop_at)
+	_check(plan.get("wall", 0.0) > 1.0, "by the step (%.2f mm)" % plan.get("wall", 0.0))
+	_check(line.contains("stops at 16 mm: blocked"), "the line by the pointer says where it stops, and why")
+	workshop.unlock()
+	workshop.set_setting("chisel", "variant", "bench_12")
+
 	# A spokeshave on the flat top: its sole sets an even 0.1 mm shaving from the start.
 	workshop.select_tool("spokeshave")
 	await _frames(4)
@@ -141,6 +239,7 @@ func _ready() -> void:
 	for k in 8:
 		workshop.drag_screen(cam.unproject_position(shave_from.lerp(shave_to, float(k + 1) / 8.0)))
 		await _frames(1)
+	await _catch_up()
 	workshop.release()
 	workshop.unlock()
 	workshop.board.flush()
@@ -192,11 +291,12 @@ func _ready() -> void:
 	_check(plan.get("direct", false) and absf(plan.get("depth", 0.0) - 0.3) < 0.01,
 			"it says how deep the wood lets it go (%.3f)" % plan.get("depth", 0.0))
 	_check(workshop.board.get_stats().get("planned_edits", 0) == 0, "nothing is hatched")
-	var line: String = workshop._ui.plan_text()
+	line = workshop._ui.plan_text()
 	_check(line.contains(" N") and not line.contains("300 mm"), "the line by the pointer tells the force: " + line)
 	for k in 10:
 		workshop.drag_screen(cam.unproject_position(direct_from.lerp(direct_to, float(k + 1) / 10.0)))
 		await _frames(1)
+	await _catch_up()
 	workshop.release()
 	workshop.board.flush()
 	var direct_cut := _depth_at(Vector3(-0.05, 0.0, -0.03))
@@ -254,16 +354,39 @@ func _ready() -> void:
 	get_tree().quit(1 if _failed else 0)
 
 
-## Locks a stroke in at `from` and aims it at `to` (world), and waits for its plan.
+## Locks a stroke in at `from` and aims it at `to` (world), once the board is idle, and waits
+## for its plan.
 func _plan(from: Vector3, to: Vector3) -> Dictionary:
 	var cam: Camera3D = workshop.camera
 	workshop.board.flush()
+	# And until the cuts so far are refined: the pointer's rays read the refined surface, and
+	# the lock does not depend on how far refining has got.
+	for i in 1200:
+		if not workshop.board.is_busy() and not workshop.board.get_stats().get("refine_pending", false):
+			break
+		await _frames(1)
 	workshop.hover_screen(cam.unproject_position(from))
 	await _frames(2)
 	workshop.lock(cam.unproject_position(from))
 	workshop.aim(cam.unproject_position(to))
 	await _frames(1)
 	return workshop.get_plan()
+
+
+## Waits (a minute at most) for the tool in hand to catch up with where it was dragged, and
+## returns how long it took. In game time: where frames take seconds (rendered in software)
+## the engine slows the game down, and the tool with it.
+func _catch_up() -> float:
+	var waited := 0.0
+	while workshop.lagging() and waited < 60.0:
+		await _frames(1)
+		waited += get_process_delta_time()
+	return waited
+
+
+func _physics(n: int) -> void:
+	for i in n:
+		await get_tree().physics_frame
 
 
 ## The cut's depth (mm) below the board's top face at a point on it (world, y ignored).

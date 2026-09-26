@@ -22,6 +22,7 @@ const COMPRESSION := 0.7
 const LIVE := 24
 const MOST := 300
 const MARGIN := 0.0001 # m: sharp shapes at millimetre scale (Godot's default rounds them away)
+const LAYER := 4 # its pieces' physics layer bit (the world and loose pieces are on 1)
 const LIFT := 0.0005 # m a piece is set clear of where it came from before it falls
 
 ## Pieces come away as these, oldest first: {"body": RigidBody3D, "step": the board's
@@ -266,6 +267,10 @@ func _add_chip(chip: Dictionary, step: int, density: float) -> void:
 
 func _new_body(xf: Transform3D, shape: Shape3D, mass: float) -> RigidBody3D:
 	var body := RigidBody3D.new()
+	# On their own layer, meeting the world and each other: the blade in hand pushes loose
+	# pieces aside, not what it takes off.
+	body.collision_layer = LAYER
+	body.collision_mask = 1 | LAYER
 	add_child(body)
 	body.global_transform = xf
 	shape.margin = MARGIN
@@ -277,6 +282,15 @@ func _new_body(xf: Transform3D, shape: Shape3D, mass: float) -> RigidBody3D:
 	var surface := PhysicsMaterial.new()
 	surface.friction = 0.6
 	body.physics_material_override = surface
+	# Born inside a loose piece (one the blade was pushing ahead of the edge, where the shaving
+	# curls): the two would be forced apart violently. It goes through that one instead.
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = xf
+	query.collision_mask = 1
+	for hit in get_world_3d().direct_space_state.intersect_shape(query, 8):
+		if hit.collider is RigidBody3D:
+			body.add_collision_exception_with(hit.collider)
 	return body
 
 

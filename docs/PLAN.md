@@ -12,8 +12,10 @@ This revision merges those into shared capabilities and keeps finished work to o
 - The first plan's lasting design sections and its detailed E4 (bake) design are archived
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
-- **Tools** (below) is done: the tools behave like their real selves, and a stroke can be
-  planned before it is made (T1 to T3).
+- **Tools** (below): the tools behave like their real selves, and a stroke can be planned
+  before it is made (T1 to T3). T4 holds them to the rules of the real tools, one tool at a
+  time, each tried before the next: T4-1 (chisels and gouges) is done, T4-2 (the sanding
+  block) is next.
 - **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut).
 - **Debris** (2) is under way: D1 (shavings and chips) and D2 (dust) are done; D3 (small
   pieces) is next.
@@ -70,6 +72,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly, land where their arc meets something and pile up, sawdust heaped beyond the kerf's ends, sanding dust on the face; undo takes them back. Every tool's dust within 1.5% of what the board lost |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
+| T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -82,7 +85,7 @@ path needs compute passes.
 ## Roadmap
 | # | Capability | Replaces | Builds on |
 | --- | --- | --- | --- |
-| T | **Tools**: plan, lock, act; cutting by the wood | the fixed-depth tools of W1 | the overlay (W2a) |
+| T | **Tools**: plan, lock, act; cutting by the wood; the real tools' rules (T4, under way) | the fixed-depth tools of W1 | the overlay (W2a) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
 | 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
@@ -153,6 +156,75 @@ Decided with the user:
 - **Spokeshave:** a short sole following the surface at a set depth. An even shaving on a
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
+
+### T4 — the rules of the real tools, one tool at a time (T4-1 done; T4-2 next)
+**Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
+square pits and cut under raised parts of the board and under loose pieces; sanding was
+far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
+covered. Decided with the user: real rates with a workshop pace (1× by default); every tool
+capped at its working speed; fine control, a reason wherever a tool stops, and better aim;
+one tool at a time, each tried before the next.
+
+**The rules every tool will obey:**
+1. **Access.** Only the working edge or face meets the wood; the tool's body never passes
+   through the work.
+2. **Chips must escape.** Material comes off only where it can leave: no tunnels, no
+   undercuts.
+3. **Real rates**, per tool, wood, grit or coarseness and pressure, times the pace. The
+   numbers live in one table (README).
+4. **Working speed.** The tool follows the pointer at most at its working speed, slower
+   as the wood resists, times the pace.
+5. **Other bodies.** Loose pieces in the tool's way are pushed by it, never cut under.
+6. **Say why.** Every limit carries a reason and a place.
+
+**T4-1, chisels and gouges: done.**
+- The plan (`plan_cut`) looks at the chip every millimetre across the edge (nine columns).
+  A rise of over a millimetre within two stops the edge at its face (*blocked*, with the
+  step's height); a gentler rise into a chip too thick to push is followed at up to 8°,
+  steeper it *stalls*. The section reaches through the thickest chip, so no edit leaves a
+  ledge or a slot. Chopping still goes into walls.
+- The force is the chip's own section over the edge, summed across the columns: in a
+  gouge's channel the crescent the next pass takes, so a gouge deepens its own channel.
+- Blade access: points on its back and sides 10, 17 and 25 mm behind the edge, at its
+  angle (skipping those still down in the stroke's own channel): wood there stops it
+  (*the blade meets the work*; walls only at its sides: *too wide for the gap*). Checked at
+  the start too, which refuses a stroke the blade cannot reach.
+- Tear-out, breakout, buried corners and V-tool wings are splinters: capsule sweeps dipping
+  from their root along the grain, at most 1.5 times the cut and 1 mm (breakout 2 mm).
+- Defaults 0.2 mm (chisel), 0.3 mm (gouge); limits 1.5 and 2.5 mm; a steep dive levels at
+  the asked depth and only warns. Mallet blows 0.3, 1 and 1.6 times a firm one.
+- `CutPlan::stop_at`, `stop` and `wall`, reported by `SdfBody.plan_stroke`: the hatch ends
+  there, the outline draws a red cross, the line says *stops at N mm: why*.
+- Workshop: `drag_screen` sets a target and `_process` moves the stroke towards it at the
+  working speed (chisel 40 mm/s, gouge 30, spokeshave 40, down to a fifth at the hand's
+  limit, times the pace); a blow every 0.35 s at most; a pace setting; loose pieces the
+  blade's box touches (a shape query each physics step) moved on with the edge's advance
+  (debris on its own layer, untouched); Ctrl+wheel and the sliders in a fifth of a wheel
+  step; the blow chosen on the panel or, chopping, by the wheel.
+- The blade as a kinematic solid did not work at millimetre scale: the wedge slid under a
+  5 g piece, or tipped it and buried it in the board; a plate at the edge flung pieces off.
+  And a velocity as slow as the edge is lost to friction within a physics step.
+- Found on the way: the board's convex hull (17 points bunched at its eased corners) let
+  loose pieces sink 3 mm into it in Jolt; the board's collider is now a box while it fills
+  its bounds, as an offcut's is.
+- Tests: `test_cutting` (step, groove, overhang, rising surfaces, a gouge's second pass and
+  the chisel blocked at its channel's end, splinters, blows); `tool_planning` (a flick
+  follows at the working speed and pushes a loose block aside; the channel's stop and its
+  line; Ctrl+wheel).
+
+**Next, each planned in detail once the one before has been tried:**
+- **T4-2 Sanding block.** Removal only where it rubbed (a dwell map under its footprint),
+  resting on high spots and flattening them first; rates by grit, calibrated (120 grit
+  takes hundredths of a millimetre over many strokes); pressure and grit in fine steps; a
+  smaller pad for precise work.
+- **T4-3 Saw.** Real feed by wood and teeth (a tenon saw cross-cuts 25 mm oak in about
+  50–80 strokes); cuts on the push stroke; the kerf only where the teeth have been; the back
+  stops its depth.
+- **T4-4 Rasp.** Removal only where its face passes, resting on high spots; calibrated rates.
+- **T4-5 Card scraper.** About 0.01 mm a pass, only where the burr touches.
+- **T4-6 Spokeshave.** The chisel's access and chip rules, its sole's rest, a real depth and
+  speed.
+- **T4-7 Sanding sponge.** Rate by grit and pressure, calibrated, and a working speed.
 
 ## 1. Pieces — bodies that come apart (current: P1 and P2 done)
 

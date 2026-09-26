@@ -163,8 +163,9 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about 30 s) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). Grains fly, land where their arc meets something, and pile up: sawdust heaps beyond the kerf's ends, sanding dust lies on the face. Every tool's dust is within 1.5% of what the board lost |
+| T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths |
 
-Test counts today: 93 native tests (GCC and Clang, including golden images) and 9
+Test counts today: 100 native tests (GCC and Clang, including golden images) and 9
 headless Godot checks.
 
 ## 5. Where things stand
@@ -200,8 +201,8 @@ so correctness can be checked here, but not speed.
   - crumbs under 1 mm³ stay in the body (D3).
 - **Physics:**
   - debris colliders are boxes;
-  - the board's collider is a single hull unless islands have hollowed it (then convex
-    pieces). Proper meshes come with the Bake.
+  - the board's collider is a box while it fills its bounds, unless islands have hollowed
+    it (then convex pieces). Proper meshes come with the Bake.
 - **Shadows:** under the Compatibility renderer, Live bodies receive no shadow-map
   shadows (coordinates are per vertex on the proxy box). Forward+ and Mobile look them
   up per fragment, which is still to be confirmed on hardware.
@@ -213,6 +214,21 @@ so correctness can be checked here, but not speed.
 
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
+
+### T4. The rules of the real tools (under way: T4-1 done)
+
+From play, the tools went too fast and hit too hard. One tool at a time, each tried by the
+user before the next, they are held to six rules (docs/PLAN.md, T4): access (only the edge
+or face meets the wood), chips must escape, real rates times a workshop pace, a working
+speed, loose pieces pushed not cut under, and a reason wherever a tool stops. T4-1 (chisels
+and gouges) is done. Next:
+- **T4-2 sanding block:** removal only where it rubbed (a dwell map), resting on high spots,
+  calibrated rates by grit (it is about 1,000 times too fast now), fine pressure and grit,
+  a small pad.
+- **T4-3 saw** (real feed, cutting on the push, a kerf only where the teeth have been),
+  **T4-4 rasp**, **T4-5 scraper**, **T4-6 spokeshave** (the chisel's rules), **T4-7 sponge**.
+
+D3 waits until T4 is through.
 
 ### 2. Debris (under way: D1 and D2 done)
 
@@ -330,9 +346,18 @@ build directory).
   - Jolt discards triangles of 1–2 mm as degenerate, so there are no trimesh colliders
     until the Bake.
   - Hull points closer than about 1 mm make sliver faces that rock. A hull round a curled
-    shaving rocked from facet to facet and never settled; a box rests.
+    shaving rocked from facet to facet and never settled; a box rests. The board's own hull
+    (17 points, bunched at its eased corners) let a loose block jump and then sink 3 mm into
+    it; a box of its bounds holds it.
   - Bodies lighter than a few grams are shaken about: debris weighs at least 5 g to the
     solver.
+  - A kinematic wedge (a chisel's blade) slides under a light piece, or tips it and buries
+    it in the board; a plate at the edge flings it off. A velocity kick as slow as a hand's
+    tool (13 mm/s) is below what friction takes off in one physics step (μ·g·dt ≈ 80 mm/s),
+    so it moves nothing. Pieces in a tool's way are moved with the edge (a shape query and a
+    step each physics frame).
+  - A test that locks a stroke by a ray should wait for the board to go idle: refining
+    changes the cache the rays read, and the plane fitted across a channel's rim with it.
 - **Threads.** Strokes and plans read the body on the main thread, so they wait for
   `body_settled()`. REFINE and CHECK jobs only read, so they don't block. A previewed
   stroke leaves the body alone until it commits, so its debris is read from the body as
@@ -350,6 +375,12 @@ build directory).
   take minutes. Lavapipe gives Vulkan (Forward+) for correctness only.
 - **Volumes.** The ADF's voxel volume can't resolve a half-millimetre cut. Measure what a
   cut removed with columns of raycasts before and after.
+- **Chips are what stands over the edge.** Taken as a block from the floor up to the
+  highest surface nearby, a chip in a gouge's channel counted the channel's sides, and the
+  gouge could not deepen its own channel. Sum the section across the edge.
+- **A cut's end is not a step.** It slopes back at the blade's angle, rising under a
+  millimetre per millimetre, so a rise tested sample by sample never sees a wall there.
+  Look over two millimetres.
 
 ## 9. Where to read more
 

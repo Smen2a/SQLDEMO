@@ -98,7 +98,11 @@ public:
 	// is a layer, which is not drawn (edits 0). A chisel's or gouge's plan (the cutting
 	// model's) adds {"force", "available" (N), "grain" (0 along the fibres .. 1 severing
 	// them), "slope" (+1 with the grain, -1 against), "warnings" (names: "skates", "shallow",
-	// "tears out", ...), "chop", "blow" (mm this blow goes)}. It reads the body, so while an
+	// "tears out", ...), "chop", "blow" (mm this blow goes), "stop_at" (mm along the path where
+	// a rule stops it short, or -1), "stop" (which: "blocked", "blade meets the work", "too
+	// wide for the gap", "stalls", "skates"), "wall" (mm: the step or walls that stop it)}.
+	// Settings: "depth", "angle", "skew", "variant", "blow" (a chop's strength: 0.3 a tap,
+	// 1 firm, 1.6 heavy). It reads the body, so while an
 	// edit is being applied it answers with the last plan ({..., "stale": true}) and plans
 	// again once the edit lands (get_plan()).
 	godot::Dictionary plan_stroke(const godot::String &tool, const godot::Vector3 &contact, const godot::Vector3 &normal,

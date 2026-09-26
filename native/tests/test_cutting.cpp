@@ -5,6 +5,7 @@
 #include "demo/gallery.h"
 #include "tools/catalog.h"
 #include "tools/cutting.h"
+#include "tools/debris.h"
 
 #include <cstdio>
 #include <cstring>
@@ -86,7 +87,8 @@ TEST(a_bench_chisel_pares_what_a_hand_can_push) {
 
 // In the middle of a face, bevel down, a chisel held flatter than its bevel (plus 2
 // degrees of clearance) rides on its bevel and cuts nothing; tipped past it, it dives at
-// the difference until it levels. Diving steeply, it digs in.
+// the difference until it levels. Diving steeply it digs in, but never below the depth
+// asked (no chip goes deeper).
 TEST(mid_face_a_chisel_skates_until_tipped_past_its_bevel) {
 	const Board ash;
 	const vec3 middle{-20, 0, kTop};
@@ -105,7 +107,12 @@ TEST(mid_face_a_chisel_skates_until_tipped_past_its_bevel) {
 
 	const CutPlan steep = plan_cut(variant("bench_12", 45.0f), ash.work(), middle, kUp, {1, 0, 0}, 40.0f, 0.3f, 0.0f, 1);
 	describe("tipped to 45 degrees", steep);
-	CHECK(has(steep, kDigsIn) && !steep.chips.empty());
+	CHECK(has(steep, kDigsIn) && std::fabs(steep.depth - 0.3f) < 1e-3f);
+	bool shallow = true;
+	for (const vec2 &f : steep.floor) {
+		shallow = shallow && f.y <= 0.3f + 1e-4f;
+	}
+	CHECK(shallow);
 }
 
 // Against the grain (uphill: the fibres run down into the wood ahead) the split tears out
@@ -235,4 +242,175 @@ TEST(a_planned_stroke_makes_its_plan) {
 	part->move_to(plan.start + plan.path * 20.0f);
 	CHECK(std::fabs(part->pose().origin.x - (30.0f - 20.0f)) < 1e-3f);
 	CHECK(part->edits().size() <= planned.size());
+}
+
+namespace {
+
+Edit block(vec3 centre, vec3 half, Op op) {
+	Edit e;
+	e.prim = Primitive::box(centre, half);
+	e.op = op;
+	e.material = mat::Ash;
+	return e;
+}
+
+// Whether the body holds material at p.
+bool solid(const Board &b, vec3 p) {
+	return b.octree.distance(b.body, p) < 0.0f;
+}
+
+} // namespace
+
+// Pared at a raised part (a step 3 mm high across the board), the edge stops at its face:
+// the plan ends there and says why, and nothing is cut under the step.
+TEST(a_chisel_stops_at_a_step_and_never_cuts_under_it) {
+	Board ash;
+	ash.add({block({10, 0, kTop + 1.5f}, {10, 60, 1.5f}, Op::Union)}); // x 0..20, 3 mm high
+	const CutPlan plan = plan_cut(variant("bench_12", 33.0f), ash.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 80.0f,
+			0.3f, 0.0f, 1);
+	describe("pared at a 3 mm step 40 mm ahead", plan);
+	CHECK(plan.stop == kBlocked && has(plan, kBlocked));
+	CHECK(plan.stop_at > 37.0f && plan.stop_at <= 40.0f && std::fabs(plan.length - plan.stop_at) < 1e-4f);
+	CHECK(std::fabs(plan.wall - 3.0f) < 0.3f);
+	Board cut = ash;
+	cut.add(plan.edits());
+	bool intact = true;
+	for (float x = 0.5f; x < 20.0f; x += 1.0f) {
+		for (float z = kTop - 0.25f; z < kTop + 3.0f; z += 0.5f) {
+			intact = intact && solid(cut, {x, 0, z});
+		}
+	}
+	CHECK(intact);
+	CHECK(!solid(cut, {-20, 0, kTop - 0.15f})); // pared before it
+}
+
+// A chisel wider than a groove cannot go down it: its corners meet the walls. A narrower
+// one pares its floor.
+TEST(a_chisel_too_wide_for_a_groove_stops) {
+	Board ash;
+	ash.add({block({0, 0, kTop}, {70, 4, 3}, Op::Subtract)}); // 8 mm wide, 3 mm deep, along x
+	const vec3 floor{-40, 0, kTop - 3.0f};
+	const CutPlan wide = plan_cut(variant("bench_12", 33.0f), ash.work(), floor, kUp, {1, 0, 0}, 40.0f, 0.3f, 0.0f, 1);
+	const CutPlan narrow = plan_cut(variant("bench_6", 33.0f), ash.work(), floor, kUp, {1, 0, 0}, 40.0f, 0.3f, 0.0f, 1);
+	describe("12 mm chisel in an 8 mm groove", wide);
+	describe("6 mm chisel", narrow);
+	CHECK(wide.stop == kTooWide && wide.stop_at == 0.0f && wide.edits().empty());
+	CHECK(narrow.stop_at < 0.0f && std::fabs(narrow.length - 40.0f) < 1e-3f && std::fabs(narrow.depth - 0.3f) < 1e-3f);
+}
+
+// A surface rising ahead, a little at each millimetre (stairs too low to be steps): gently
+// (4.6 degrees) the edge follows it up once the chip is as thick as the hand can push;
+// steeply (24 degrees) it stalls. Neither takes more force than the hand has.
+TEST(a_rising_surface_is_followed_gently_or_stalls) {
+	for (const float rise : {0.08f, 0.45f}) {
+		Board ash;
+		std::vector<Edit> stairs; // x 0..30: rise mm higher at each millimetre
+		for (int i = 0; i < 30; ++i) {
+			stairs.push_back(block({0.5f * float(i + 30), 0, kTop + rise * (float(i) + 0.5f)},
+					{0.5f * float(30 - i), 60, 0.5f * rise}, Op::Union));
+		}
+		ash.add(stairs);
+		const CutPlan plan = plan_cut(variant("bench_12", 33.0f), ash.work(), {-20, 0, kTop}, kUp, {1, 0, 0}, 45.0f,
+				0.3f, 0.0f, 1);
+		describe(rise < 0.1f ? "at a surface rising 4.6 degrees" : "at one rising 24 degrees", plan);
+		CHECK(plan.force <= plan.available * 1.001f);
+		if (rise < 0.1f) {
+			std::printf("    the floor 45 mm on: %.2f mm above where it started\n", double(-plan.depth_at(45.0f)));
+			CHECK(plan.stop_at < 0.0f && plan.depth_at(45.0f) < -1.0f);
+		} else {
+			std::printf("    stalls %.1f mm on (the rise begins 20 mm on)\n", double(plan.stop_at));
+			CHECK(plan.stop == kStalls && plan.stop_at >= 18.0f && plan.stop_at < 25.0f);
+		}
+	}
+}
+
+// A gouge deepens its own channel, pass after pass: the chip over its edge is what stands
+// over it there (a crescent), not a block from its floor to the surface either side. A
+// chisel along the channel is blocked by its end.
+TEST(a_gouge_deepens_its_own_channel) {
+	Board ash;
+	const Chisel gouge = variant("gouge_7_12", 35.0f);
+	const CutPlan first = plan_cut(gouge, ash.work(), {-75, 0, kTop}, kUp, {1, 0, 0}, 35.0f, 2.0f, 0.0f, 1);
+	ash.add(first.edits());
+	const CutPlan second = plan_cut(gouge, ash.work(), {-66, 0, kTop - first.depth}, kUp, {1, 0, 0}, 26.0f, 2.0f,
+			0.0f, 1);
+	describe("a #7 gouge's first pass", first);
+	describe("its second, in the channel", second);
+	CHECK(first.depth > 1.0f && second.stop_at < 0.0f && second.depth > 0.5f);
+	CHECK(second.force <= second.available * 1.001f);
+	// The channel ends in a wall sloping back at the gouge's angle: a 6 mm chisel pared along
+	// its floor is blocked there.
+	ash.add(second.edits());
+	const float floor = kTop - first.depth - second.depth;
+	const CutPlan chisel = plan_cut(variant("bench_6", 30.0f), ash.work(), {-56, 0, floor}, kUp, {1, 0, 0}, 26.0f, 0.2f,
+			0.0f, 1);
+	describe("a 6 mm chisel along it", chisel);
+	CHECK(chisel.stop == kBlocked && chisel.stop_at > 13.0f && chisel.stop_at <= 16.0f && chisel.wall > 1.0f);
+	// However its millimetres fall on the sloping end, and however its plane leans: blocked.
+	for (const float from : {-56.25f, -56.5f, -56.75f}) {
+		for (const float lean : {-0.03f, 0.03f}) {
+			const CutPlan p = plan_cut(variant("bench_6", 30.0f), ash.work(), {from, 0, floor},
+					gl::normalize(vec3{0, lean, 1}), {1, 0, 0}, 26.0f, 0.2f, 0.0f, 1);
+			if (p.stop != kBlocked) {
+				std::printf("    from %.2f, leaning %+.2f: %s at %.1f\n", double(from), double(lean),
+						warning_names(p.stop).empty() ? "no stop" : warning_names(p.stop).front().c_str(), double(p.stop_at));
+			}
+			CHECK(p.stop == kBlocked && p.wall > 1.0f);
+		}
+	}
+}
+
+// Nor does the blade go through the work: under a bar standing 2 mm clear of the surface,
+// the blade rising behind the edge meets it, and the stroke stops there.
+TEST(the_blade_meets_an_overhang) {
+	Board ash;
+	ash.add({block({0, 0, kTop + 3.5f}, {5, 60, 1.5f}, Op::Union)}); // x -5..5, from 2 mm above the top
+	const CutPlan plan = plan_cut(variant("bench_12", 33.0f), ash.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 80.0f,
+			0.3f, 0.0f, 1);
+	describe("pared under a bar 2 mm clear", plan);
+	CHECK(plan.stop == kBladeMeets && plan.stop_at > 38.0f && plan.stop_at < 48.0f);
+}
+
+// Tear-out and breakout are splinters along the grain: rounded scoops, never deeper than
+// half as much again as the cut (a millimetre at most; breakout two), not boxes. (A pit with
+// a flat floor and upright walls fills its bounding box; a rounded one, about two thirds.)
+TEST(tear_out_is_shallow_rounded_splinters) {
+	const Board oak(mat::Oak);
+	const CutPlan uphill = plan_cut(variant("bench_12", 33.0f), oak.work(), {30, 0, kTop}, kUp, {-1, 0, 0}, 60.0f, 0.3f,
+			0.0f, 7);
+	const CutPlan across = plan_cut(variant("bench_12", 33.0f), oak.work(), {0, 30, kTop}, kUp, {0, 1, 0}, 30.0f, 0.3f,
+			0.0f, 1);
+	describe("uphill in oak", uphill);
+	describe("across, out of the side", across);
+	CHECK(!uphill.chips.empty() && has(across, kBreaksOut));
+	for (const CutPlan *plan : {&uphill, &across}) {
+		std::vector<Edit> taken = plan->floor_edits();
+		for (std::size_t i = 0; i < plan->chips.size(); ++i) {
+			Chip chip;
+			if (!measure_chip(oak.body, oak.octree, plan->chips[i], taken, plan->path, kUp, chip, 20000)) {
+				continue;
+			}
+			const float bottom = kTop - (chip.frame.origin.z - 0.5f * chip.size.z);
+			const float box = chip.size.x * chip.size.y * chip.size.z;
+			const bool breakout = plan == &across && i + 1 == plan->chips.size();
+			const float limit = plan->depth + (breakout ? 2.0f : std::min(1.5f * plan->depth, 1.0f)) + 0.1f;
+			std::printf("    chip %zu: %.2f mm deep (limit %.2f), fills %.0f%% of its box\n", i, double(bottom),
+					double(limit), double(100.0f * chip.volume / box));
+			CHECK(bottom <= limit);
+			CHECK(chip.volume < 0.8f * box);
+		}
+	}
+}
+
+// Chopping: a tap drives the slit a third as far as a firm blow, a heavy blow further.
+TEST(mallet_blows_tap_firm_heavy) {
+	const Board oak(mat::Oak);
+	const Chisel bench = variant("bench_12", 90.0f);
+	float blows[3];
+	const float strength[3] = {0.3f, 1.0f, 1.6f};
+	for (int i = 0; i < 3; ++i) {
+		blows[i] = plan_cut(bench, oak.work(), {0, 0, kTop}, kUp, {1, 0, 0}, 10.0f, 0.0f, 0.0f, 1, strength[i]).blow;
+	}
+	std::printf("    tap %.2f mm, firm %.2f mm, heavy %.2f mm\n", double(blows[0]), double(blows[1]), double(blows[2]));
+	CHECK(blows[0] < blows[1] && blows[1] < blows[2] && blows[0] < 1.0f);
 }

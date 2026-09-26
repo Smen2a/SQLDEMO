@@ -161,8 +161,8 @@ TEST(a_shaving_breaks_across_the_grain_and_over_a_gap) {
 	bool gap = true, after = false;
 	for (const ShavingSample &s : g.shaving) {
 		const float x = along.start.x + s.s;
-		gap = gap && (x < -62.0f || x > -58.0f); // nothing came off over the groove
-		after = after || (x > -58.0f && x < -57.4f && s.starts);
+		gap = gap && (x <= -62.0f || x >= -58.0f); // nothing came off over the groove (its walls at -62, -58)
+		after = after || (x >= -58.0f && x < -57.4f && s.starts);
 	}
 	CHECK(gap && after && pieces(g) == 2);
 }

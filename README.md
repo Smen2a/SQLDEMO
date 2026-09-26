@@ -24,13 +24,16 @@ abrasive.
 3. **Use it: press the left button on the board and drag.** The tool fades in where you
    pressed and works the way the drag goes, as the wood lets it:
    - **Chisel, gouge:** pushed along the drag, never back, as deep as the wood lets it
-     (see *Chisels and gouges* below), and lifted out when you let go. Held up to chop
-     (**C**), each click is a mallet blow.
+     (see *Chisels and gouges* below), and lifted out when you let go. It goes no faster
+     than a hand works it: drag ahead and it follows at its working speed (below); let go
+     and the stroke ends where it got to. Its blade pushes loose pieces in its way aside.
+     Held up to chop (**C**), each click is a mallet blow (a tap, a firm blow or a heavy one,
+     from the panel or the wheel), at most one every 0.35 s.
    - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
      kerf by the feed, until it is through the board.
    - **Rasp, card scraper:** back and forth along their line, taking the surface down
      steadily; see *Shaping and finishing* below.
-   - **Spokeshave:** pushed along the drag, taking its shaving.
+   - **Spokeshave:** pushed along the drag at its working speed, taking its shaving.
    - **Sanding block:** follows the pointer anywhere and takes the surface down wherever it
      rubs, faster at coarser grits and more pressure. Being a flat block, it flattens: high
      spots and edges go first, and the edges of the patch feather out.
@@ -45,14 +48,20 @@ abrasive.
 4. **Or plan it first: hold the right button.** The stroke is locked in where you pressed,
    and runs from there towards the pointer. Nothing is cut yet:
    - The cut it would make shows on the board, hatched in the tool's colour.
-   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth, the
-     spokeshave's shaving, the saw's feed, the pressure on the rasp, the scraper and the
-     sanding tools). **Shift+wheel** sets a chisel's or gouge's angle to the work, or
-     tilts the rasp about its line. **Q / E** skew a chisel's edge, or turn the sanding
-     tools. (The panel's sliders set the same things at any time.)
+   - The **wheel** sets how hard the tool works (a chisel's or gouge's depth in steps of
+     0.05 mm, the spokeshave's shaving, the saw's feed, the pressure on the rasp, the
+     scraper and the sanding tools; held up to chop, the blow). **Ctrl+wheel** steps a
+     fifth as far: a chisel's depth by hundredths of a millimetre. **Shift+wheel** sets a
+     chisel's or gouge's angle to the work, or tilts the rasp about its line. **Q / E**
+     skew a chisel's edge, or turn the sanding tools. (The panel's sliders set the same
+     things at any time, as finely as Ctrl+wheel.)
    - The line beside the pointer says what it comes to. For example: *Bench chisel 12 mm
      0.48 mm deep (asked 1.00) 30° to the work 40 mm 200 of 200 N, along the grain,
      downhill; only as deep as a hand can push it.*
+   - Where a rule stops the stroke short (a step up ahead, the blade meeting the work, a
+     gap narrower than the chisel, a surface rising too steeply), the hatch ends there, a
+     red cross marks the spot, and the line says why: *stops at 16 mm: blocked: a 1.3 mm
+     step ahead: chop it, or come from the other side.*
 
    Then press the left button and drag (the right can come up once you have): the tool
    follows the plan as far as you take it, never past its end. Keep holding the right
@@ -64,7 +73,9 @@ Other controls:
 - Middle-drag orbits, Shift+middle-drag pans, the wheel zooms.
 - The panel switches the wood (ash, oak, walnut), starts a new board, sweeps the bench of
   shavings, chips and dust, and lets the board cast shadows. Its sliders are the same settings
-  the wheel changes.
+  the wheel changes. **Pace** (¼× to 8×, 1× by default) speeds up or slows down the work
+  against real life: every tool's working speed, and in time the rates of the tools that
+  wear the wood away.
 - *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
   and the board applies it once, when you let go. Turned off, every move is applied as it
   happens, for comparison.
@@ -268,6 +279,30 @@ pointer says what it comes to.
   - A paring chisel is never struck: pushed by hand, it barely goes in.
 - **Skew.** Q / E turn a chisel's edge across its push, and a skewed edge slices for less
   force.
+- **What it cannot do.** The chip is everything between the floor and the surface above it,
+  and the plan checks it every millimetre across the edge (nine columns), so no cut runs
+  under the work:
+  - Where the surface steps up by more than a millimetre within two (a raised part, a wall,
+    the end of an earlier cut), the edge stops at its face: *blocked*. Chop it, or come
+    from the other side. (Chopping, at 60° or more, still goes into walls.)
+  - Where it rises more gently into a chip thicker than the hand can push, the edge follows
+    it up, as a hand lowering the handle onto the bevel would, at up to 8°. Steeper, it
+    *stalls*.
+  - The blade's body never passes through the work. Points on its back and sides for 25 mm
+    behind the edge are probed at its angle: wood there (an overhang, a ridge) stops it
+    (*the blade meets the work*), and so do walls either side closer than the edge is wide
+    (*too wide for the gap*: take a narrower chisel). A stroke the blade cannot reach is
+    refused at its start.
+  - The force is the chip's own section over the edge. In a gouge's channel that is the
+    crescent the next pass takes, not a block up to the surface either side, so a gouge
+    deepens its own channel pass after pass.
+- **Depth that feels right.** A chisel is set 0.2 mm deep and a gouge 0.3 mm to begin with,
+  at most 1.5 and 2.5 mm. Dived in steeply, the edge levels at the asked depth (a steep dive
+  only warns *digs in*).
+- **Splinters, not boxes.** Tear-out, breakout, buried corners and a V-tool's torn wing are
+  splinters along the grain: each dips from its root, rounded, and curls back up to the
+  surface, never deeper than half as much again as the cut (a millimetre at most; breakout
+  two). They leave no square pits.
 
 The variants (Tab cycles them; the panel lists them):
 
@@ -292,10 +327,48 @@ noted):
 | The same, tipped to 33° | dives at 6°, levels at 0.3 mm as asked |
 | #7 gouge vs the chisel, mid-face, 1 mm asked | 1.00 mm vs 0.48 mm |
 | Skewed 30°, 0.2 mm | 58 N instead of 83 |
-| Oak, chop across the grain | 2.52 mm; the next blow 1.72 more |
+| Oak, chop across the grain | 2.52 mm (a firm blow); the next blow 1.72 more |
+| Oak, a tap, a firm blow, a heavy one | 0.75, 2.52, 4.03 mm |
 | Oak, chop along the grain | 6.2 mm, and it splits |
 | Mortise chisel 8 mm vs a bench chisel of 8 mm | 1.5× per blow |
 | Paring chisel, chopped | 0.02 mm: never struck |
+| Pared at a step 3 mm high | stops at its face (blocked, 3 mm); nothing cut under it |
+| 12 mm chisel into an 8 mm groove; a 6 mm one | too wide, refused; the 6 mm pares its floor |
+| Pared under a bar standing 2 mm clear | the blade meets it: stops 40–48 mm on |
+| A surface rising 4.6°; one rising 24° | followed up (1.6 mm by 45 mm on); stalls where it begins |
+| #7 gouge, 35°, 2 mm asked: two passes | 1.15 mm, then 0.66 mm more in its own channel |
+| 6 mm chisel along that channel | blocked by its end (a wall sloping at the gouge's angle) |
+| Tear-out (oak, uphill) and breakout | rounded: under 80% of their bounding box, within their depth limits |
+
+The force behind the cutting constant: 0.005 N/mm² of chip per newton of Janka hardness
+(`kCuttingResistance`), about 29 N/mm² paring ash along the grain. That is of the order
+reported for orthogonal cutting of hardwoods at chip thicknesses of a few tenths of a
+millimetre (tens of N/mm²).
+
+**Working speed.** A tool in hand goes no faster than a hand works it, whatever the pointer
+does (`workshop.gd`, `WORKING_SPEED`): dragged ahead, it follows; let go, the stroke ends
+where it got to. As the force a cut takes nears what the hand can give, it slows, to a fifth
+at the limit. The workshop's pace multiplies these.
+
+| Tool | Free | At the hand's limit | Blows |
+| --- | --- | --- | --- |
+| Chisel | 40 mm/s | 8 mm/s | one every 0.35 s at most |
+| Gouge | 30 mm/s | 6 mm/s | one every 0.35 s at most |
+| Spokeshave | 40 mm/s | 8 mm/s | |
+
+A 0.4 mm paring cut in ash (170 of 200 N) goes about 13 mm/s: 50 mm takes nearly 4 s.
+While a chisel or gouge pares, loose pieces in its way (offcuts, islands) go on ahead of
+its edge. Each physics step, a shape query with a box round the blade (30 mm behind the
+edge, rising at its angle) finds the pieces it touches, and each moves on by the edge's
+advance. So nothing is cut under. Shavings and chips are on their own physics layer, so
+what the blade takes off is left alone. Two other ways were tried and failed at this scale
+in Jolt:
+- The blade as a solid kinematic body, a wedge under the piece's edge, slid under a 5 g
+  piece, or tipped it and buried it 3 mm in the board.
+- A plate standing up at the edge flung pieces off the board.
+
+A push as fast as the edge (13 mm/s) is less than friction takes off a few grams in one
+physics step, so pieces are moved with the edge, not given its velocity.
 
 ### Shaping and finishing: rasps, a card scraper, a spokeshave
 
@@ -362,7 +435,9 @@ Fracture and failing joints will split bodies the same way later
     reduced to the extremes along 256 directions, then to the outermost of any within
     1 mm. Left as tight clusters round corners and edges, they made sliver faces the
     offcut rocked and sank on.
-  - The offcut gets a 0.25 m/s nudge off the kerf; the kept board gets a static hull.
+  - The offcut gets a 0.25 m/s nudge off the kerf. The kept board gets a static collider by
+    the same rule, which for a board is a box: pieces sank 3 mm into its hull, whose points
+    still bunch within a little over a millimetre at its eased corners.
 - **Millimetre tolerances.** Godot's physics engines are tuned for metre-sized objects:
   Jolt, the default, lets contacts overlap by 2 cm. `project.godot` sets the overlap to
   0.2 mm (`[physics]`), so a 25 mm offcut rests on the bench instead of sinking into it.

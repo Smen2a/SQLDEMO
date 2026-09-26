@@ -168,6 +168,18 @@ float Chisel::corner_depth() const {
 	return 0.0f;
 }
 
+float Chisel::edge_height(float x) const {
+	x = std::fabs(x);
+	if (kind == gl::SDF_TOOL_GOUGE) {
+		const float r = sweep_radius, within = std::min(x, r);
+		return r - std::sqrt(r * r - within * within);
+	}
+	if (kind == gl::SDF_TOOL_V) {
+		return x / std::tan(0.5f * v_angle_deg * kDegToRad);
+	}
+	return 0.0f;
+}
+
 float Chisel::chip_area(float depth) const {
 	depth = std::max(depth, 0.0f);
 	const float corners = corner_depth();

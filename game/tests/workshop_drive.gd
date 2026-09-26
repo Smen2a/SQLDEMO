@@ -156,6 +156,12 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, pla
 			# Mid-stroke, with the tool at work.
 			workshop.board.flush()
 			await _shot(_out, tool + "_working")
+	# A push tool follows at its working speed: until it has caught up (in game time, which
+	# the engine slows down where frames take seconds).
+	var waited := 0.0
+	while workshop.lagging() and waited < 60.0:
+		await _frames(1)
+		waited += get_process_delta_time()
 	workshop.release()
 	if planned:
 		workshop.unlock()

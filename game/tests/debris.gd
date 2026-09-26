@@ -153,6 +153,15 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, pla
 				workshop.camera.pitch = -0.8
 				workshop.camera._apply()
 		from = leg
+	# A push tool follows at its working speed: until it has caught up (in game time, which
+	# the engine slows down where frames take seconds).
+	var waited := 0.0
+	while workshop.lagging() and waited < 60.0:
+		await _frames(1)
+		waited += get_process_delta_time()
+		var live: int = workshop.debris.live_samples()
+		if live > 0:
+			growth.append(live)
 	if not workshop.is_engaged():
 		_check(false, "%s did not engage at %s" % [tool, start])
 	workshop.release()

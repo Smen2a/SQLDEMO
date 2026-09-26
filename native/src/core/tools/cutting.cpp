@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace sdf::tools {
 
@@ -16,6 +17,9 @@ constexpr float kCutting = kCuttingResistance;
 constexpr float kSideStrip = 1.5f;   // mm of chip each attached side adds
 constexpr float kClearance = 2.0f * kDeg;
 constexpr float kDigIn = 8.0f * kDeg; // diving more steeply than this, the edge digs in
+// The steepest the edge can be steered up, following a rising surface (the handle lowered
+// onto the bevel): mm per mm. A surface rising faster stalls it.
+constexpr float kRise = 0.14f;
 // A chop's depth per blow of a bench chisel's mallet, 12 mm wide across the grain in oak
 // (severing the fibres: grain factor 4.5), from the surface: 2.5 mm.
 constexpr float kBlow = 11.25f;
@@ -98,7 +102,8 @@ float resistance(const Wood &wood, vec3 fibre, vec3 travel, vec3 edge) {
 
 std::vector<std::string> warning_names(unsigned warnings) {
 	static const char *names[] = {"skates", "shallow", "tears out", "corners buried", "breaks out", "not struck",
-			"slit only", "pops off", "digs in", "splits"};
+			"slit only", "pops off", "digs in", "splits", "blocked", "blade meets the work", "too wide for the gap",
+			"stalls"};
 	std::vector<std::string> out;
 	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
 		if (warnings & (1u << i)) {
@@ -240,7 +245,7 @@ int attached_sides(const Work &work, vec3 at, vec3 n, vec3 b, float width, float
 	return int(work.field(mid + b * (0.5f * width + 0.4f)) < 0.0f) + int(work.field(mid - b * (0.5f * width + 0.4f)) < 0.0f);
 }
 
-CutPlan plan_chop(CutPlan p, const Work &work, const Wood &wood, vec3 b, vec3 edge) {
+CutPlan plan_chop(CutPlan p, const Work &work, const Wood &wood, vec3 b, vec3 edge, float blow) {
 	const Chisel &c = p.chisel;
 	const vec3 n = p.normal, t = p.path;
 	const vec3 f = work.fibre();
@@ -259,7 +264,7 @@ CutPlan plan_chop(CutPlan p, const Work &work, const Wood &wood, vec3 b, vec3 ed
 		d0 = z;
 	}
 	const float hard = wood.hardness / 5740.0f, wide = p.width / 12.0f;
-	const float driven = c.mallet > 0.0f ? kBlow * c.mallet : kPush * c.hand_force / 200.0f;
+	const float driven = c.mallet > 0.0f ? kBlow * c.mallet * blow : kPush * c.hand_force / 200.0f;
 	if (c.mallet <= 0.0f) {
 		p.warnings |= kNotStruck;
 	}
@@ -288,6 +293,24 @@ CutPlan plan_chop(CutPlan p, const Work &work, const Wood &wood, vec3 b, vec3 ed
 
 } // namespace
 
+namespace {
+
+// A splinter torn out along the grain: a rounded scoop `radius` wide either side of its
+// line, `side` off the cut's middle, whose floor runs from `bottom0` deep at `s0` along the
+// path down to `bottom1` at `s1` and curls back up to the surface beyond (depths below the
+// plane the plan starts on).
+Edit splinter(const CutPlan &p, float s0, float s1, float bottom0, float bottom1, float radius, vec3 side) {
+	return cut(Primitive::capsule(p.point(s0, bottom0 - radius) + side, p.point(s1, bottom1 - radius) + side, radius));
+}
+
+// How deep a splinter may go below the cut's floor there: half as deep again as the cut, and
+// a millimetre at most.
+float splinter_limit(const CutPlan &p, float s) {
+	return std::min(1.5f * std::max(p.depth_at(s), 0.05f), 1.0f);
+}
+
+} // namespace
+
 void add_tear_out(CutPlan &p, const Work &work, float scale, std::uint32_t seed) {
 	if (p.slope >= 0 || p.depth <= 0.0f || p.chips.size() >= kMaxChips) {
 		return;
@@ -302,23 +325,23 @@ void add_tear_out(CutPlan &p, const Work &work, float scale, std::uint32_t seed)
 	for (float s = 2.0f + 3.0f * rng.next(); s < p.length - 1.0f && p.chips.size() < kMaxChips;
 			s += 3.0f + 5.0f * rng.next()) {
 		const float roll = rng.next(), w = p.width * (0.4f + 0.5f * rng.next()), off = rng.next() * 2.0f - 1.0f;
-		const float floor = p.depth_at(s);
+		const float lean = rng.next();
 		if (roll >= risk) {
 			continue;
 		}
-		const float dip = std::min(p.depth * (0.4f + 1.2f * risk * rng.next()), 2.5f);
+		// The split runs down along the fibres ahead of the edge; the chip over it tears away.
 		const float reach = (2.0f + 4.0f * rng.next()) * (0.5f + wood.split);
 		const float end = std::min(s + reach, p.length);
+		const float dip = std::min(p.depth_at(s) * (0.3f + 1.2f * risk * lean), splinter_limit(p, s));
 		const vec3 side = b * (off * 0.5f * (p.width - w));
-		p.chips.push_back(cut(Primitive::sweep(p.point(s, floor) + side, p.point(end, p.depth_at(end) + dip) + side,
-				p.normal, ToolProfile::flat(w, dip + (p.height > 0.0f ? p.height : p.depth_at(end) + 1.0f)))));
+		p.chips.push_back(splinter(p, s, end, p.depth_at(s), p.depth_at(end) + dip, 0.5f * w, side));
 		p.chips_at.push_back(end);
 		p.warnings |= kTearOut;
 	}
 }
 
 CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, float skew_deg, std::uint32_t seed) {
+		float depth, float skew_deg, std::uint32_t seed, float blow) {
 	CutPlan p;
 	p.chisel = chisel;
 	p.start = start;
@@ -333,7 +356,7 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	const Wood wood = work.wood(start - n * 0.5f);
 	p.split = wood.split;
 	if (chisel.approach_deg >= 60.0f) {
-		return plan_chop(p, work, wood, b, edge);
+		return plan_chop(p, work, wood, b, edge, blow);
 	}
 
 	const vec3 f = work.fibre();
@@ -347,21 +370,10 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	const float side_strip = kSideStrip * (1.0f - 0.6f * wood.split * along * along);
 	const float corners = chisel.corner_depth();
 	p.available = chisel.hand_force;
-	auto force = [&](float d, int sides) {
-		const float area = chisel.kind == gl::SDF_TOOL_FLAT ? p.width * d : chisel.chip_area(d);
-		return k * (area + float(sides) * side_strip * std::max(d - corners, 0.0f));
-	};
-	// The deepest the hand can take with `sides` attached: F(d) = available, by bisection.
-	auto reachable = [&](int sides) {
-		if (force(depth, sides) <= p.available) {
-			return depth;
-		}
-		float lo = 0.0f, hi = depth;
-		for (int i = 0; i < 30; ++i) {
-			const float mid = 0.5f * (lo + hi);
-			(force(mid, sides) <= p.available ? lo : hi) = mid;
-		}
-		return lo;
+	auto stop = [&](float s, unsigned why) {
+		p.stop_at = std::max(s, 0.0f);
+		p.stop = why;
+		p.warnings |= why;
 	};
 
 	// In: from an open face at its depth at once; mid-face, only past its bevel's clearance,
@@ -373,56 +385,202 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	if (!open) {
 		if (tilt < bevel + kClearance) {
 			p.warnings |= kSkates;
+			stop(0.0f, kSkates);
+			p.length = 0.0f;
+			p.floor.push_back({0.0f, 0.0f});
 			return p;
 		}
 		dive = std::tan(tilt - bevel);
 		if (tilt - bevel > kDigIn + 1e-4f) {
-			p.warnings |= kDigsIn;
+			p.warnings |= kDigsIn; // (it dives steeply, but never below the depth asked)
 		}
 	}
 
+	// What stands over the edge `floor` deep at s (its section rises to its corners), in
+	// columns across it: the wood over each (0 where it is in the air), and the highest the
+	// surface stands above the floor (0: the edge is all in the air).
+	constexpr int kColumns = 9;
+	struct Column {
+		float over[kColumns] = {};
+		float thickest = 0.0f, middle = 0.0f, side = 0.0f; // side: the outer columns, the more
+		float floor = 0.0f;
+	};
+	auto column = [&](float s, float floor) {
+		Column c;
+		c.floor = floor;
+		for (int j = 0; j < kColumns; ++j) {
+			const float across = ((float(j) + 0.5f) / float(kColumns) - 0.5f) * p.width;
+			const float lift = chisel.edge_height(across);
+			const vec3 at = p.point(s, floor - lift) + b * across;
+			const float over = depth_below_surface(work.body, work.octree, at, n, floor + 30.0f);
+			if (over > 0.0f) {
+				c.over[j] = over;
+				c.thickest = std::max(c.thickest, over + lift);
+				if (j == kColumns / 2) {
+					c.middle = over;
+				} else if (j == 0 || j == kColumns - 1) {
+					c.side = std::max(c.side, over);
+				}
+			}
+		}
+		return c;
+	};
+	// The force the chip over the edge takes with its floor raised from the column's to `at`
+	// (the surface stays where it is): its section, summed across the columns, and the strips
+	// its attached sides tear.
+	auto force_over = [&](const Column &c, float at, int sides) {
+		const float raised = c.floor - at;
+		float area = 0.0f, thick = 0.0f;
+		for (const float over : c.over) {
+			area += std::max(over - raised, 0.0f);
+			thick = std::max(thick, over - raised);
+		}
+		area *= p.width / float(kColumns);
+		return k * (area + float(sides) * side_strip * std::max(thick - corners, 0.0f));
+	};
+	// The deepest floor in [lo, hi] the hand can push the column's chip at (lo if not even that).
+	auto deepest_pushed = [&](const Column &c, float lo, float hi, int sides) {
+		if (force_over(c, hi, sides) <= p.available) {
+			return hi;
+		}
+		for (int i = 0; i < 24; ++i) {
+			const float mid = 0.5f * (lo + hi);
+			(force_over(c, mid, sides) <= p.available ? lo : hi) = mid;
+		}
+		return lo;
+	};
+	// Whether wood lies where the blade's body goes behind an edge `floor` deep at s: its
+	// middle 10 to 25 mm back at its approach (kBladeMeets), or only its sides (kTooWide).
+	const vec3 back = gl::normalize(t * -std::cos(tilt) + n * std::sin(tilt));
+	const vec3 over = gl::normalize(t * std::sin(tilt) + n * std::cos(tilt)); // out of its flat back
+	auto blade = [&](float s, float floor, float chip) -> unsigned {
+		unsigned hit = 0;
+		for (const float u : {10.0f, 17.0f, 25.0f}) {
+			if (u * std::sin(tilt) - 0.5f * chisel.thickness * std::cos(tilt) < chip + 0.3f) {
+				continue; // still down in the stroke's own channel, the chip it has cut away
+			}
+			for (const float x : {-0.4f, 0.0f, 0.4f}) {
+				const float across = x * p.width;
+				const vec3 q = p.point(s, floor) + back * u - over * (0.5f * chisel.thickness) + b * across +
+						n * chisel.edge_height(across);
+				if (work.field(q) < 0.0f) {
+					hit |= x == 0.0f ? kBladeMeets : kTooWide;
+				}
+			}
+		}
+		return hit & kBladeMeets ? kBladeMeets : hit;
+	};
+
 	// Along the path a millimetre at a time: the floor dives until it levels at the depth,
-	// or at what the hand can push where that is less.
+	// never deeper than the hand can push the chip there, and rising only gently.
 	const int steps = std::max(1, int(std::ceil(length)));
 	const float ds = length / float(steps);
-	float d = open ? std::min(depth, reachable(attached_sides(work, start, n, b, p.width, depth))) : 0.0f;
+	float d = open ? deepest_pushed(column(0.0f, depth), 0.0f, depth, attached_sides(work, start, n, b, p.width, depth))
+				   : 0.0f;
 	p.floor.push_back({0.0f, d});
-	float exit = -1.0f;
+	if (const unsigned why = blade(0.0f, d, d)) {
+		stop(0.0f, why); // the blade cannot get there
+		p.length = 0.0f;
+		return p;
+	}
+	constexpr float kNone = std::numeric_limits<float>::quiet_NaN();
+	float exit = -1.0f, top = 0.0f, last_rise = kNone, before = kNone; // the surface a mm and 2 mm back
 	bool limited = false;
+	// How high the surface stands above the start's plane at its highest over the next 6 mm
+	// from s (along the edge's middle, the floor `floor` deep): the top of a wall ahead.
+	auto top_ahead = [&](float s, float floor) {
+		float highest = -1e9f;
+		for (float u = 0.0f; u <= 6.0f; u += 0.5f) {
+			const float over = depth_below_surface(work.body, work.octree, p.point(s + u, floor), n, floor + 30.0f);
+			if (over > 0.0f) {
+				highest = std::max(highest, over - floor);
+			}
+		}
+		return highest;
+	};
 	for (int i = 1; i <= steps; ++i) {
 		const float s = float(i) * ds;
 		const vec3 at = start + t * s;
-		const float probe = std::max(std::max(d, 0.1f), std::min(depth, d + dive * ds));
-		const bool in_wood = work.field(at - n * (0.5f * probe)) < 0.0f;
-		float target = d; // in the air (off the work, over a cut) it holds its depth
-		if (in_wood) {
-			int sides = attached_sides(work, at, n, b, p.width, probe);
-			if (chisel.kind != gl::SDF_TOOL_FLAT && probe <= corners) {
+		float next = std::min(depth, d + dive * ds);
+		const Column col = column(s, next);
+		const float chip = col.thickest;
+		if (chip > 0.02f) {
+			// The surface's height above the plane the stroke started on, here.
+			const float surface = chip - next;
+			// A step up ahead: over a millimetre within the last two (a wall steeper than about
+			// 27 degrees, as a cut's own end is). The edge stops at its face.
+			const float lowest = std::isnan(before) ? last_rise : std::min(last_rise, before);
+			if (!std::isnan(lowest) && surface > lowest + 1.0f) {
+				stop(s - ds, kBlocked);
+				p.wall = std::max(surface, top_ahead(s, next)) - lowest;
+				break;
+			}
+			if (col.side > col.middle + 1.0f) {
+				stop(s - ds, kTooWide); // walls either side, closer than the edge is wide
+				p.wall = col.side - col.middle;
+				break;
+			}
+			before = last_rise;
+			last_rise = surface;
+			int sides = attached_sides(work, at, n, b, p.width, std::max(next, 0.1f));
+			if (chisel.kind != gl::SDF_TOOL_FLAT && next <= corners) {
 				sides = 0; // corners out: the chip's sides are free
 			}
-			target = reachable(sides);
-			limited = limited || target < depth - 1e-3f;
-			p.force = std::max(p.force, force(std::min(target, std::min(depth, d + dive * ds)), sides));
-		} else if (exit < 0.0f && d > 0.0f) {
-			exit = s; // the edge has left the work
+			// As deep as the hand can push the chip over the edge. Where the surface rises into a
+			// chip thicker than that, the edge follows it up, but only so steeply: faster, it stalls;
+			// where it rises steeper than about 27 degrees here, that is a wall, which blocks it
+			// (however the millimetres fall on it).
+			const float highest = d - kRise * ds;
+			if (force_over(col, highest, sides) > p.available) {
+				const float rise = std::isnan(before) ? 0.0f : surface - before;
+				if (rise >= 0.5f * ds) {
+					stop(s - ds, kBlocked);
+					p.wall = std::max(surface, top_ahead(s, next)) - (std::isnan(lowest) ? surface : lowest);
+				} else {
+					stop(s - ds, kStalls); // the floor would have to rise too fast: the edge stalls
+				}
+				break;
+			}
+			const float pushed = deepest_pushed(col, highest, next, sides);
+			if (pushed < next) {
+				next = pushed;
+				limited = limited || next < depth - 1e-3f;
+			}
+			p.force = std::max(p.force, force_over(col, next, sides));
+			top = std::max(top, next + surface);
+		} else {
+			next = d; // in the air (off the work, over a cut) it holds its depth
+			if (exit < 0.0f && d > 0.0f) {
+				exit = s; // the edge has left the work
+			}
 		}
-		if (d < target && d + dive * ds > target) {
+		if (const unsigned why = blade(s, next, std::max(next + (std::isnan(last_rise) ? 0.0f : last_rise), next))) {
+			stop(s - ds, why);
+			break;
+		}
+		if (d < next && d + dive * ds > next) {
 			// It levels between samples: exactly where, so the ramp stays one straight piece.
-			p.floor.push_back({s - ds + (target - d) / dive, target});
+			p.floor.push_back({s - ds + (next - d) / dive, next});
 		}
-		d = std::min(target, d + dive * ds);
+		d = next;
 		p.floor.push_back({s, d});
 		p.depth = std::max(p.depth, d);
 	}
-	p.length = length;
+	p.length = p.stop_at >= 0.0f ? p.stop_at : length;
+	// The section reaches through the thickest chip (nothing thicker stands over the floor).
+	p.height = top + 1.0f;
 	if (limited && p.depth < depth - 1e-3f) {
 		p.warnings |= kShallow;
 	}
 	if (chisel.kind != gl::SDF_TOOL_FLAT && p.depth > corners + 1e-3f) {
 		p.warnings |= kCornersBuried;
 	}
+	if (p.length <= 0.0f) {
+		return p;
+	}
 
-	// Chips, seeded: tear-out against the grain, the corners' tearing, breakout at the exit.
+	// Chips, seeded: tear-out against the grain, the corners' tearing, breakout at the exit,
+	// each a splinter along the grain.
 	Rng rng{seed * 2654435761u + 0x9e3779b9u};
 	rng.next();
 	add_tear_out(p, work, 1.0f, seed);
@@ -430,11 +588,10 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 		// The buried corners tear the fibres beside the cut.
 		for (float s = 3.0f + 4.0f * rng.next(); s < p.length - 1.0f && p.chips.size() < kMaxChips; s += 6.0f + 6.0f * rng.next()) {
 			const float side = rng.next() < 0.5f ? -1.0f : 1.0f;
-			const float torn = (p.depth_at(s) - corners) * (0.5f + 0.5f * rng.next());
+			const float torn = std::min((p.depth_at(s) - corners) * (0.5f + 0.5f * rng.next()), splinter_limit(p, s));
 			if (torn > 0.02f) {
-				const vec3 at = p.point(s, 0.0f) + b * (side * (0.5f * p.width + 0.3f));
-				p.chips.push_back(cut(Primitive::sweep(at + n * 0.3f, at + t * (2.0f + 2.0f * rng.next()) - n * torn, n,
-						ToolProfile::flat(1.2f, torn + 0.6f))));
+				const float end = std::min(s + 2.0f + 2.0f * rng.next(), p.length);
+				p.chips.push_back(splinter(p, s, end, 0.0f, torn, 0.6f, b * (side * (0.5f * p.width + 0.3f))));
 				p.chips_at.push_back(s);
 			}
 		}
@@ -444,42 +601,26 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 		const float side = gl::dot(f * (gl::dot(f, n) >= 0.0f ? 1.0f : -1.0f), b) >= 0.0f ? -1.0f : 1.0f;
 		const float half = p.depth * std::tan(0.5f * chisel.v_angle_deg * kDeg);
 		for (float s = 2.0f + 3.0f * rng.next(); s < p.length - 1.0f && p.chips.size() < kMaxChips; s += 4.0f + 5.0f * rng.next()) {
-			const float torn = p.depth_at(s) * (0.3f + 0.4f * rng.next() * wood.tearout);
-			const vec3 at = p.point(s, 0.0f) + b * (side * (half + 0.2f));
-			p.chips.push_back(cut(Primitive::sweep(at + n * 0.3f, at + t * (1.5f + 2.0f * rng.next()) - n * torn, n,
-					ToolProfile::flat(0.8f + rng.next(), torn + 0.6f))));
+			const float torn = std::min(p.depth_at(s) * (0.3f + 0.4f * rng.next() * wood.tearout), splinter_limit(p, s));
+			const float end = std::min(s + 1.5f + 2.0f * rng.next(), p.length);
+			p.chips.push_back(splinter(p, s, end, 0.0f, torn, 0.4f + 0.4f * rng.next(), b * (side * (half + 0.2f))));
 			p.chips_at.push_back(s);
 			p.warnings |= kTearOut;
 		}
 	}
 	if (exit > 0.0f && g > 1.4f) {
-		// Out of an edge across the grain: the unsupported fibres there break away.
-		const float r = std::min(p.depth_at(exit) * (1.0f + 2.0f * wood.split) * (0.7f + 0.6f * rng.next()), 4.0f);
-		const float s0 = std::max(exit - 2.0f * r, 0.0f);
+		// Out of an edge across the grain: the unsupported fibres there break away, a splinter
+		// running out to the edge.
+		const float dip = std::min(p.depth_at(exit) * (1.0f + 2.0f * wood.split) * (0.4f + 0.3f * rng.next()), 2.0f);
+		const float s0 = std::max(exit - 4.0f * (0.5f + wood.split), 0.0f);
 		if (p.chips.size() >= kMaxChips) {
 			p.chips.pop_back();
 			p.chips_at.pop_back();
 		}
-		p.chips.push_back(cut(Primitive::sweep(p.point(s0, p.depth_at(s0)), p.point(exit + 1.0f, p.depth_at(exit) + r), n,
-				ToolProfile::flat(p.width * (0.6f + 0.4f * rng.next()), p.depth_at(exit) + r + 1.0f))));
+		p.chips.push_back(splinter(p, s0, exit + 1.0f, p.depth_at(s0), p.depth_at(exit) + dip,
+				0.5f * p.width * (0.6f + 0.4f * rng.next()), vec3(0.0f)));
 		p.chips_at.push_back(exit);
 		p.warnings |= kBreaksOut;
-	}
-	if (p.warnings & kDigsIn) {
-		// Where the steep dive levels, the edge has already gone on in.
-		for (std::size_t i = 1; i < p.floor.size(); ++i) {
-			if (p.floor[i].y >= p.depth - 1e-4f) {
-				const float s = p.floor[i].x;
-				const float dig = std::min(p.depth * std::tan(tilt - bevel) * 2.0f, 1.5f);
-				if (p.chips.size() < kMaxChips) {
-					p.chips.push_back(cut(Primitive::sweep(p.point(std::max(s - 1.0f, 0.0f), p.depth), p.point(s + 3.0f, p.depth + dig), n,
-							chisel.kind == gl::SDF_TOOL_FLAT ? ToolProfile::flat(p.width * 0.8f, p.depth + dig + 1.0f)
-															 : chisel.profile(p.depth + dig + 1.0f))));
-					p.chips_at.push_back(s);
-				}
-				break;
-			}
-		}
 	}
 	return p;
 }

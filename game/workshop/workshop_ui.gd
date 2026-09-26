@@ -17,10 +17,16 @@ const WARNINGS := {
 	"pops off": "the chip pops off",
 	"digs in": "dives steeply: digs in",
 	"splits": "along the grain: the wedge splits it",
+	"blocked": "blocked: a %.1f mm step ahead: chop it, or come from the other side",
+	"blade meets the work": "its blade meets the work behind the edge: come at it another way",
+	"too wide for the gap": "too wide for the gap: take a narrower one",
+	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
 }
+## A workshop's pace against real life (workshop.pace).
+const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
-		"Hold right first: plan it and see it (wheel: how hard, Shift+wheel: angle), then left-drag: make it\n" + \
+		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
 		"Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 
 var workshop
@@ -29,6 +35,7 @@ var _tool_buttons := {}
 var _settings_boxes := {}
 var _sliders := {}  # "tool/key" -> [slider, its value label, format]: what the wheel also sets
 var _variants := {} # family -> its variant OptionButton
+var _blows := {}    # family -> its blow OptionButton (a chop's strength)
 var _undo: Button
 var _redo: Button
 var _wood: OptionButton
@@ -63,6 +70,8 @@ func _ready() -> void:
 			workshop.set_setting(family, "variant", workshop.variants[family][i].id))
 		_slider(box, family, "depth", "Depth", "%.2f mm")
 		_slider(box, family, "angle", "Angle", "%.0f°")
+		_blows[family] = _choice(box, "Blow", ["Tap", "Firm", "Heavy"], 1, func(i):
+			workshop.set_setting(family, "blow", workshop.BLOWS[i]))
 		edge_boxes[family] = box
 	var chisel: VBoxContainer = edge_boxes.chisel
 	var rasp := VBoxContainer.new()
@@ -110,6 +119,9 @@ func _ready() -> void:
 	_redo = _button(row, "Redo", func(): workshop.redo())
 	_button(row, "New board", func(): workshop.reset_board())
 	_button(row, "Sweep", func(): workshop.sweep())
+	# How fast the work goes: 1x as a real hand would.
+	_choice(right, "Pace", ["¼×", "½×", "1×", "2×", "4×", "8×"], PACES.find(workshop.pace),
+			func(i): workshop.pace = PACES[i])
 	var shadows := CheckBox.new()
 	shadows.text = "Board casts shadows"
 	shadows.focus_mode = Control.FOCUS_NONE
@@ -188,6 +200,8 @@ func refresh() -> void:
 		for i in list.size():
 			if list[i].id == workshop.settings[family].variant:
 				_variants[family].select(i)
+	for family in _blows:
+		_blows[family].select(maxi(workshop.BLOWS.find(workshop.settings[family].get("blow", 1.0)), 0))
 	# The wheel sets these too, while a stroke is planned.
 	for id in _sliders:
 		var parts: PackedStringArray = id.split("/")
@@ -236,7 +250,9 @@ func update_status() -> void:
 func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String:
 	var depth: float = plan.get("depth", 0.0)
 	if plan.get("chop", false):
-		parts.append("chopping: this blow %.1f mm, the slit %.1f mm deep" % [plan.get("blow", 0.0), depth])
+		var named: int = maxi(workshop.BLOWS.find(s.get("blow", 1.0)), 0)
+		parts.append("chopping: a %s blow %.1f mm, the slit %.1f mm deep" % [workshop.BLOW_NAMES[named],
+				plan.get("blow", 0.0), depth])
 	else:
 		parts.append("%.2f mm deep (asked %.2f)" % [depth, s.depth])
 		if s.has("angle"):
@@ -254,11 +270,19 @@ func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String
 	elif slope < 0:
 		along += ", uphill"
 	var lines: Array[String] = ["   ".join(parts), along]
+	# Where a rule stops it short, first: where, and why.
+	var stop: String = plan.get("stop", "")
+	var stop_at: float = plan.get("stop_at", -1.0)
 	for w in plan.get("warnings", PackedStringArray()):
 		var text: String = WARNINGS.get(w, w)
 		if w == "skates":
 			text = text % int(workshop.variant().get("bevel", 25.0) + 2.0)
-		lines.append("! " + text)
+		elif w == "blocked":
+			text = text % plan.get("wall", 0.0)
+		if w == stop and stop_at >= 0.0:
+			lines.insert(2, "! stops at %.0f mm: %s" % [stop_at, text])
+		else:
+			lines.append("! " + text)
 	return "\n".join(lines)
 
 
@@ -312,7 +336,7 @@ func _slider(parent: Control, tool: String, key: String, label: String, format: 
 	var spec = workshop.INTENSITY[tool] if workshop.INTENSITY[tool][0] == key else workshop.TILT[tool]
 	var lo: float = spec[2]
 	var hi: float = spec[3]
-	var step: float = spec[1]
+	var step: float = spec[1] / 5.0 # as finely as Ctrl+wheel
 	var value: float = workshop.settings[tool][key]
 	var changed := func(v): workshop.set_setting(tool, key, v)
 	var row := HBoxContainer.new()
