@@ -4,9 +4,11 @@ extends "res://tests/harness.gd"
 ## own pointer methods:
 ## - a chisel pared along the board from near its end (a left-drag, no plan): its shaving grows
 ##   at the edge during the drag, and comes away as one body when the stroke ends, as much
-##   wood as the board lost; within two seconds it lies still on the board or the bench;
+##   wood as the board lost; it comes to rest on the board or the bench, lies there a couple
+##   of seconds, fades and is gone;
 ## - pared across the grain, the shaving comes off in pieces;
-## - against the grain in oak (planned, uphill), the tear-out comes off as chips;
+## - against the grain in oak (planned, uphill), the tear-out comes off as chips, which fade
+##   and go too;
 ## - a chop near the end pops a chip off;
 ## - undo takes the last stroke's debris back, and Sweep clears the rest.
 ## Prints what came off and what taking it in cost. Rendered, with --out=<dir>, saves close
@@ -34,11 +36,12 @@ func _ready() -> void:
 	workshop.set_setting("chisel", "depth", 0.5)
 	workshop.set_setting("chisel", "angle", 30.0)
 	var before := _depths(-0.08, -0.028, -0.008, 0.008)
+	var made_before: int = workshop.debris.made.shaving
 	var growth := await _stroke("chisel", _on_top(-0.0785, 0.0), [_on_top(-0.03, 0.0)], 20, false,
 			"debris_shaving_working")
 	workshop.board.flush()
 	var lost := _lost(before, _depths(-0.08, -0.028, -0.008, 0.008))
-	var shavings := _count("shaving")
+	var shavings: int = workshop.debris.made.shaving - made_before
 	_check(growth.size() > 3 and growth[growth.size() - 1] > growth[0], "the shaving grows during the drag (%s)" % [growth])
 	_check(shavings == 1, "along the grain it comes away in one piece (%d)" % shavings)
 	if shavings >= 1:
@@ -46,21 +49,33 @@ func _ready() -> void:
 		print("debris: a 50 mm paring cut, 0.5 mm deep: a shaving of %.1f mm^3 (the board lost %.1f mm^3), %.2f g; taking it in cost at most %d us a frame" % [
 				shaving.volume, lost, shaving.volume * 0.67e-3, _feed_usec])
 		_check(absf(shaving.volume - lost) < 0.2 * lost, "the shaving is the wood the board lost")
-		for i in 120:
-			await get_tree().physics_frame
 		var body: RigidBody3D = shaving.body
-		var speed := body.linear_velocity.length() * 1000.0
+		var clock := 0.0
+		while shaving.rest < 0.0 and clock < 5.0:
+			await _frames(1)
+			clock += get_process_delta_time()
 		var at := body.global_position
-		print("debris: after 2 s it lies at %.1f mm above the bench, moving %.1f mm/s%s" % [at.y * 1000.0, speed,
-				" (asleep)" if body.sleeping else ""])
-		_check(at.y > 0.0 and at.y < 0.05 and (speed < 5.0 or body.sleeping), "it comes to rest on the board or the bench")
+		print("debris: %.1f s after it came away it rests %.1f mm above the bench" % [clock, at.y * 1000.0])
+		_check(shaving.rest >= 0.0 and clock < 3.5 and at.y > 0.0 and at.y < 0.05, "it comes to rest on the board or the bench")
 		await _shot("debris_shaving", at)
+		# Lies there a while, fades, and goes.
+		var alpha := 1.0
+		while is_instance_valid(body) and clock < 10.0:
+			await _frames(1)
+			clock += get_process_delta_time()
+			if shaving.fade >= 0.0 and is_instance_valid(body):
+				alpha = minf(alpha, (shaving.view.material_override as StandardMaterial3D).albedo_color.a)
+		var faded := clock
+		print("debris: it faded and was gone %.1f s after it came away" % faded)
+		_check(not is_instance_valid(body) and not workshop.debris.pieces.has(shaving) and alpha < 1.0,
+				"it fades and goes")
 
 	# Across the grain from the side: it crumbles into pieces.
 	var pieces_before := _count("shaving")
+	made_before = workshop.debris.made.shaving
 	workshop.set_setting("chisel", "depth", 0.3)
 	await _stroke("chisel", _on_top(0.0, 0.03), [_on_top(0.0, -0.005)], 12, false)
-	var across := _count("shaving") - pieces_before
+	var across: int = workshop.debris.made.shaving - made_before
 	print("debris: 30 mm across the grain: the shaving came off in %d pieces" % across)
 	_check(across >= 2, "across the grain the shaving breaks")
 
@@ -78,21 +93,26 @@ func _ready() -> void:
 	workshop.set_setting("chisel", "depth", 0.3)
 	var chips := 0
 	var tries := 0
+	var chips_made: int = workshop.debris.made.chip
 	while chips == 0 and tries < 4: # the plan's seed is random: tear-out is likely, not certain
 		await _stroke("chisel", _on_top(0.03 - 0.012 * tries, 0.02 - 0.012 * tries),
 				[_on_top(-0.03 - 0.012 * tries, 0.02 - 0.012 * tries)], 20, true)
-		chips = _count("chip")
+		chips = workshop.debris.made.chip - chips_made
 		tries += 1
 	print("debris: uphill in oak, %d chips in %d strokes" % [chips, tries])
 	_check(chips > 0, "tear-out comes off as chips")
-	if chips > 0:
-		for i in 60:
-			await get_tree().physics_frame
+	if _count("chip") > 0:
 		var chip: Dictionary = workshop.debris.pieces.filter(func(p): return p.kind == "chip").back()
 		await _shot("debris_chips", chip.body.global_position)
+	# They fade and go too.
+	var waited := 0.0
+	while _count("chip") > 0 and waited < 10.0:
+		await _frames(1)
+		waited += get_process_delta_time()
+	_check(_count("chip") == 0, "the chips fade and go (%d left after %.1f s)" % [_count("chip"), waited])
 
 	# A chop 2.5 mm from the end, the waste towards it: the chip between pops off.
-	var chips_before := _count("chip")
+	var chips_before: int = workshop.debris.made.chip
 	workshop.set_setting("chisel", "angle", 90.0)
 	var cam: Camera3D = workshop.camera
 	var chop := _on_top(-0.0775, -0.02)
@@ -107,7 +127,7 @@ func _ready() -> void:
 	workshop.press(cam.unproject_position(chop))
 	workshop.unlock()
 	workshop.board.flush()
-	var popped := _count("chip") - chips_before
+	var popped: int = workshop.debris.made.chip - chips_before
 	print("debris: a chop by the end (%s): %d chip(s)" % [", ".join(planned.get("warnings", [])), popped])
 	_check("pops off" in planned.get("warnings", []) and popped == 1, "a chop by the end pops its chip off")
 	workshop.set_setting("chisel", "angle", 30.0)

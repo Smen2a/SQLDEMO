@@ -515,8 +515,9 @@ chiselled free. That piece comes away too, and it rests where it lies.
 
 A chisel's, gouge's or spokeshave's shaving curls up off the edge as the stroke goes, and
 drops when it breaks or the stroke ends. Tear-out, breakout and a chop's pop-off throw
-chips. They land and lie where they fall; undo takes a stroke's back, a new board or
-*Sweep* clears them. Debris never goes back into a body: it only shows what came off.
+chips. They land, lie still for 2 s, fade out over half a second and are gone (from play:
+lying about until swept, they only cluttered the bench). Undo straight after takes a
+stroke's back. Debris never goes back into a body: it only shows what came off.
 - **The report** (`native/src/core/tools/debris.h`). As a previewed stroke moves, it says
   what it took off since it last said, read from the body as it was before the stroke
   (the body is only changed when the stroke lands). A planned stroke samples its shaving
@@ -538,8 +539,12 @@ chips. They land and lie where they fall; undo takes a stroke's back, a new boar
   curl in its own frame: a hull round the curl rocked from facet to facet and never came
   to rest. It weighs at least a few grams to the solver (lighter bodies this small are
   shaken about), and is damped (light and springy, it soon lies still). The board has a
-  collider while debris lies about. The newest 24 pieces move; older ones stay where
-  they lie; past 300, the oldest go.
+  collider while debris lies about.
+- **Fading.** A piece is at rest once it has moved slower than 5 mm/s for 0.2 s (or 3 s
+  after it came away, still rolling or not). 2 s later it is frozen, its collider is
+  switched off so nothing lands on it, and its own copy of its material fades from opaque
+  to clear over 0.5 s. Then it is freed. The newest 24 pieces move; older ones are frozen;
+  past 60, the oldest go.
 | | |
 | --- | --- |
 | ![A paring cut in ash, close up: the shaving rising off the chisel's edge and curling over as the stroke goes](docs/images/debris_shaving_working.png) | ![The shaving come away, lying curled on the board where it fell](docs/images/debris_shaving.png) |
@@ -548,13 +553,17 @@ chips. They land and lie where they fall; undo takes a stroke's back, a new boar
   shaving is within 1% of the volume the board lost (sampled by columns, before and
   after); the shaving and the tear-out chips of an uphill cut in oak together, within 1%;
   in the workshop, a 50 mm paring cut 0.5 mm deep gives a 255 mm³ shaving (the board lost
-  248), at rest on the board within a second.
+  248), at rest on the board within a second, faded and gone under 3 s after it came
+  away.
 
 ### Dust
 
-The saw, the rasps, the scraper and the sanding tools throw dust: grains of the wood that
-fly, land and pile up. Sawdust heaps on the bench beyond the kerf's ends; sanding dust
-lies on the face it came off. Undo takes a stroke's dust back; *Sweep* clears it.
+The saw, the rasps, the scraper and the sanding tools throw dust: a puff of grains of the
+wood that fly, land and are gone within about a second. What reaches the ground (the bench
+or the floor) heaps up in a pile there, one solid mound: sawdust piles up on the bench
+beyond the kerf's ends. Dust landing on the board just goes. (From play: 30,000 grains
+lying about, on the board's face too, was clutter.) Undo takes a stroke's dust back, piles
+included; *Sweep* clears the piles.
 - **How much** (each stroke's `debris()`, from the body before the stroke):
   - **The saw:** each slice of kerf it goes down through is the kerf's width times the
     material along the blade's line at that depth (sampled every millimetre, kept per half
@@ -567,24 +576,31 @@ lies on the face it came off. Undo takes a stroke's dust back; *Sweep* clears it
     the worker, so the last of it arrives just after the stroke ends.
 - **The grains** (`game/workshop/dust.gd`, one MultiMesh):
   - A puff throws up to 16 grains of 0.2–0.9 mm by tool, bigger when there is more wood
-    (dust takes 2.5 times the room the wood did) up to 2.5 mm across (beyond that the pile
-    grows taller instead), 15% paler than the wood.
+    (dust takes 2.5 times the room the wood did) up to 2.5 mm across, 15% paler than the
+    wood. Thrown a way (out of a kerf's end), a grain leaves 1.5 mm out, clear of the edge.
   - Where a grain lands is found once, when it is thrown: its arc is cast in three pieces
     against the physics space (bench, floor, the board's collider, pieces lying about).
-  - Grains stack on a 1 mm grid. One landing on a pile rolls to the first neighbour lower
-    by more than a cell's width (a 45° slope, or an edge).
-  - At most 30,000 are kept, the oldest going first; at most 20 are thrown a frame.
-  - A sawn piece's dust falls once the piece has slid off.
+    Meeting a steep face (the board's side) it drops straight down it.
+  - Landed, it shrinks away over 0.3 s. At most 3,000 are drawn at once (more fly unseen);
+    at most 20 are thrown a frame.
+- **The piles.** A grain that lands on a body marked `"ground"` (the bench, the floor)
+  adds its wood to the nearest pile within 25 mm (or within the pile), else starts one.
+  - A pile is one mesh: a mound of profile (1 − r²)², as high as half its radius (flanks
+    of about 37° at the steepest, sawdust's angle of repose), holding 2.5 times its wood.
+  - It stands at the mean of where its dust landed, in the mean of its dust's colours.
+  - It keeps its wood per undo step, so undo takes a stroke's share back.
 ![Sawdust heaped on the bench where a kerf across the ash board came out at its side](docs/images/dust_sawdust.png)
 
 - **Measured** (`native/tests/test_debris.cpp`, `game/tests/dust`):
   - against what the board lost: saw 0.1%, sanding block 1.4%, rasps 0.0% (flat and
     half-round), sponge 1.0%;
   - in the workshop, a kerf 5.7 mm deep across the board gives 455 mm³ of sawdust (its
-    width × depth × the board's width: 456), 85% of it heaped on the bench beyond its ends,
-    7 mm high;
-  - throwing costs about 0.6 ms a frame while dust comes (about 1 ms at most), the flights
-    at most 0.4 ms (headless).
+    width × depth × the board's width: 456), all of it in two piles on the bench, one
+    beyond each end of the kerf, 5.1 mm high; the sanding block's dust lands on the face
+    and goes (none piles);
+  - throwing costs about 0.2 ms a frame while dust comes (0.3 ms at most); the grains up to
+    2 ms a frame while the sanding block throws thousands (its rate is some 1,000 times too
+    high: T4-2).
 
 ## Layout
 

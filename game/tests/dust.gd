@@ -2,12 +2,14 @@ extends "res://tests/harness.gd"
 
 ## Dust (workshop/dust.gd), driven through the workshop's own pointer methods:
 ## - a saw kerf across the board: as much sawdust as the kerf's width times its depth times
-##   the board's width; it lands, most of it heaped on the bench beyond the kerf's ends;
-## - the sanding block rubbed round a patch: its fine dust lies on the board's face;
+##   the board's width; its grains land and go, and most of its wood is heaped in a pile or
+##   two on the bench beyond each of the kerf's ends;
+## - the sanding block rubbed round a patch: its fine dust lands on the board's face and
+##   goes (little of it piles);
 ## - the sponge along an arris: its dust arrives, the last of it after the stroke ends;
-## - undo takes each stroke's dust back.
+## - undo takes each stroke's dust back, piles too; Sweep clears the piles.
 ## Prints what came off and what the grains cost a frame. Rendered, with --out=<dir>, saves
-## <dir>/dust_sawdust.png (the heap at a kerf's end) and dust_sanding.png.
+## <dir>/dust_sawdust.png (the pile at a kerf's end) and dust_sanding.png (the puff).
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -40,54 +42,74 @@ func _ready() -> void:
 	var hit: Dictionary = workshop.board.raycast(Vector3(0.02, 0.05, 0.0), Vector3.DOWN, 0.1)
 	var depth: float = (hit.position.y if not hit.is_empty() else 0.025)
 	var kerf := 0.8 * (25.0 - depth * 1000.0) * 100.0 # mm^3: kerf x depth x the board's width
-	var sawdust: float = dust.volume
+	var sawdust: float = dust.thrown
 	# On the bench beyond each side of the board (its sides are 50 mm either side of z = 0).
-	var heap: Dictionary = dust.lying_in(AABB(Vector3(-0.03, -0.001, 0.051), Vector3(0.1, 0.02, 0.1)))
-	var ends: float = heap.volume + dust.lying_in(AABB(Vector3(-0.03, -0.001, -0.151), Vector3(0.1, 0.02, 0.1))).volume
-	print("dust: a kerf %.1f mm deep across the board: %.0f mm^3 of sawdust (kerf x depth x width: %.0f); %.0f%% of it on the bench beyond the kerf's ends, heaped %.1f mm high; throwing it cost %d us a frame (at most %d), its flights at most %d us" % [
-			25.0 - depth * 1000.0, sawdust, kerf, 100.0 * ends / maxf(sawdust, 1e-6), heap.top * 1000.0,
-			_feed_total / maxi(_feed_frames, 1), _feed_usec, _update_usec])
+	var ahead: Dictionary = dust.piles_in(AABB(Vector3(-0.03, -0.001, 0.051), Vector3(0.1, 0.02, 0.1)))
+	var behind: Dictionary = dust.piles_in(AABB(Vector3(-0.03, -0.001, -0.151), Vector3(0.1, 0.02, 0.1)))
+	var ends: float = ahead.volume + behind.volume
+	var top: float = maxf(ahead.top, behind.top)
+	print("dust: a kerf %.1f mm deep across the board: %.0f mm^3 of sawdust (kerf x depth x width: %.0f); %.0f%% of it in %d + %d piles on the bench beyond the kerf's ends, heaped %.1f mm high (%d piles in all); throwing it cost %d us a frame (at most %d), its grains at most %d us" % [
+			25.0 - depth * 1000.0, sawdust, kerf, 100.0 * ends / maxf(sawdust, 1e-6), ahead.count, behind.count,
+			top * 1000.0, dust.piles.size(), _feed_total / maxi(_feed_frames, 1), _feed_usec, _update_usec])
 	_check(sawdust > 100.0 and absf(sawdust - kerf) < 0.15 * kerf, "the sawdust is the kerf taken")
-	_check(dust.flying() == 0, "every grain has landed (%d flying)" % dust.flying())
-	_check(ends > 0.5 * sawdust, "it leaves at the kerf's ends and lands beyond them")
-	_check(heap.top > 0.001, "it heaps up where it lands")
+	_check(dust.flying() == 0, "every grain has landed and gone (%d left)" % dust.flying())
+	_check(ends > 0.5 * sawdust, "it leaves at the kerf's ends and piles up beyond them")
+	_check(ahead.count <= 2 and behind.count <= 2 and ahead.count + behind.count >= 1,
+			"in a pile or two at each end (%d, %d)" % [ahead.count, behind.count])
+	_check(top > 0.001, "heaped over a millimetre")
 	await _shot("dust_sawdust", Vector3(0.02, 0.0, 0.07))
 
-	# Sanding block: rubbed round a patch; its fine dust lies on the face.
-	var before: float = dust.volume
+	# Sanding block: rubbed round a patch; its fine dust lands on the face and goes.
+	var before: float = dust.thrown
+	var piled_before: float = dust.piled()
 	var rub: Array[Vector3] = []
 	for i in 16:
 		var a := float(i) * 0.9
 		rub.append(_on_top(-0.03 + 0.02 * cos(a), -0.02 + 0.012 * sin(a)))
 	await _stroke("sanding_block", _on_top(-0.03, -0.02), rub, 2, false)
+	await _shot("dust_sanding", _on_top(-0.03, -0.02)) # (the last of its puffs)
 	await _settle()
-	var sanded: float = dust.volume - before
-	var on_face: float = dust.lying_in(AABB(Vector3(-0.08, 0.024, -0.05), Vector3(0.1, 0.02, 0.1))).volume
-	print("dust: the sanding block: %.1f mm^3 of fine dust, %.0f%% of it on the board's face" % [sanded,
-			100.0 * on_face / maxf(sanded, 1e-6)])
-	_check(sanded > 1.0 and on_face > 0.5 * sanded, "sanding dust lies on the face")
-	await _shot("dust_sanding", _on_top(-0.03, -0.02))
+	var sanded: float = dust.thrown - before
+	var piled: float = dust.piled() - piled_before
+	print("dust: the sanding block: %.1f mm^3 of fine dust, %.0f%% of it piled on the ground" % [sanded,
+			100.0 * piled / maxf(sanded, 1e-6)])
+	_check(sanded > 1.0, "the sanding block throws dust")
+	_check(dust.flying() == 0, "it goes as it lands (%d left)" % dust.flying())
+	_check(piled < 0.5 * sanded, "landing on the face, little of it piles")
 
 	# Sponge: along the front top arris; the last of its dust lands after the stroke ends.
-	var before_sponge: float = dust.volume
+	var before_sponge: float = dust.thrown
 	var arris: Array[Vector3] = []
 	for i in 6:
 		arris.append(Vector3(0.035 if i % 2 == 0 else -0.035, 0.025, 0.05))
 	await _stroke("sanding_sponge", Vector3(-0.035, 0.025, 0.05), arris, 4, false)
 	await _settle()
-	var sponged: float = dust.volume - before_sponge
+	var sponged: float = dust.thrown - before_sponge
 	print("dust: the sponge along an arris: %.2f mm^3" % sponged)
 	_check(sponged > 0.05, "the sponge's dust arrives")
 
-	# Undo takes each stroke's dust back.
+	# Undo takes each stroke's dust back, and the saw's piles with it.
 	workshop.undo()
 	workshop.board.flush()
 	await _frames(1)
-	_check(absf(dust.volume - before_sponge) < 1e-3, "undo takes the sponge's dust back")
+	_check(absf(dust.thrown - before_sponge) < 1e-3, "undo takes the sponge's dust back")
 	workshop.undo()
 	workshop.board.flush()
 	await _frames(1)
-	_check(absf(dust.volume - before) < 1e-3, "and the sanding block's")
+	_check(absf(dust.thrown - before) < 1e-3, "and the sanding block's")
+	workshop.undo()
+	workshop.board.flush()
+	await _frames(1)
+	_check(dust.thrown < 1e-3 and dust.piles.is_empty(), "and the saw's, and its piles (%d left)" % dust.piles.size())
+
+	# Sweep clears the piles.
+	strokes.resize(4)
+	await _stroke("saw", _on_top(0.02, 0.0), strokes, 6, true)
+	await _settle()
+	var made: int = dust.piles.size()
+	workshop.sweep()
+	await _frames(1)
+	_check(made > 0 and dust.piles.is_empty() and dust.thrown == 0.0, "Sweep clears the piles (%d made)" % made)
 	print("dust: %s" % ("the dust comes away and settles" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
 
@@ -125,11 +147,13 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, pla
 	await _frames(2)
 
 
-## A second and a half for the grains to land (and the sponge's last work to report).
+## A second and a half for the grains to land and go (and the sponge's last work to report),
+## or as long as they take: in game time, which the engine slows where frames take seconds.
 func _settle() -> void:
-	var until := Time.get_ticks_msec() + 1500
-	while Time.get_ticks_msec() < until:
+	var waited := 0.0
+	while waited < 1.5 or (workshop.debris.dust.flying() > 0 and waited < 10.0):
 		await _frames(1)
+		waited += get_process_delta_time()
 		_update_usec = maxi(_update_usec, workshop.debris.dust.update_usec)
 
 

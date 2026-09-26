@@ -52,9 +52,10 @@ extends Node3D
 ##
 ## What the tools take off comes away too (debris.gd): a chisel's, gouge's or spokeshave's
 ## shaving curls up off the edge as it goes and drops when it breaks or the stroke ends;
-## tear-out and a chop's pop-off throw chips; the saw, the rasps, the scraper and the sanding
-## tools throw dust, which piles up where it lands. They lie where they fall; undo takes a
-## stroke's back, and Sweep clears the bench.
+## tear-out and a chop's pop-off throw chips. They lie a moment where they fall, then fade
+## away. The saw, the rasps, the scraper and the sanding tools throw puffs of dust that go as
+## they land; what reaches the bench or the floor heaps up in a pile there. Undo takes a
+## stroke's back, and Sweep clears the piles.
 ##
 ## The world is in metres with y up. Bodies are in millimetres with z up: each body node is
 ## scaled by 0.001 and turned -90 degrees about x.
@@ -620,9 +621,6 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 			"spawn": body.global_transform, "island": island})
 	if not body.freeze:
 		_update_board_collider()
-		# Dust lying on the piece as it was: once it has slid off, whatever it held up falls.
-		var held: AABB = (board.global_transform * piece.get_body_bounds()).grow(0.005)
-		get_tree().create_timer(1.0).timeout.connect(func(): debris.dust.resettle(held))
 	_ui.refresh()
 
 
@@ -1093,6 +1091,7 @@ func _build_world() -> void:
 	add_child(top)
 	# Offcuts land on the bench and the floor.
 	var bench := StaticBody3D.new()
+	bench.set_meta("ground", true) # (dust piles up on it: dust.gd)
 	var bench_shape := CollisionShape3D.new()
 	var bench_box := BoxShape3D.new()
 	bench_box.size = slab.size
@@ -1119,6 +1118,7 @@ func _build_world() -> void:
 	ground.position = Vector3(0.0, -0.85, 0.0)
 	add_child(ground)
 	var floor_body := StaticBody3D.new()
+	floor_body.set_meta("ground", true)
 	var floor_shape := CollisionShape3D.new()
 	floor_shape.shape = WorldBoundaryShape3D.new()
 	floor_shape.position = ground.position

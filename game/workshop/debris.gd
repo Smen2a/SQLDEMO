@@ -7,34 +7,46 @@ extends Node3D
 ##             is: a radius of 1.5 mm + 12 times its thickness, winding in a thickness a
 ##             turn so the turns never meet). It comes off shorter and thicker than the cut
 ##             (COMPRESSION: the same wood). Where it breaks (across the grain, over a gap)
-##             and when the stroke ends, it comes away: a light rigid body that falls and
-##             rests where it lands.
+##             and when the stroke ends, it comes away: a light rigid body that falls.
 ##   chips     tear-out, breakout, a chop's pop-off: a block of the wood thrown off the face.
-##   dust      the saw's, the rasps', the scraper's and the sanding tools': grains that fly,
-##             land and pile up (dust.gd).
-## Each piece belongs to the board's undo step that made it (undo_step() takes it back).
-## The newest LIVE pieces move under physics; older ones stay where they lie, still solid;
-## past MOST the oldest go. World space throughout (metres); the report's volumes are mm^3.
+##   dust      the saw's, the rasps', the scraper's and the sanding tools': a puff of grains
+##             that goes as soon as it lands, what reaches the ground heaped into a pile
+##             there (dust.gd).
+## Shavings and chips are passing things: once one has lain still for REST it fades out over
+## FADE and is gone. Each piece belongs to the board's undo step that made it (undo_step()
+## takes it back). The newest LIVE pieces move under physics; older ones stay where they
+## lie, still solid; past MOST the oldest go. World space throughout (metres); the report's
+## volumes are mm^3.
 
 const Dust := preload("res://workshop/dust.gd")
 const MM := 0.001
 const COMPRESSION := 0.7
 const LIVE := 24
-const MOST := 300
+const MOST := 60
+const REST := 2.0 # s a piece lies still before it fades
+const FADE := 0.5 # s it takes to fade out
+const STILL := 0.005 # m/s: slower than this (for SETTLING), a piece is at rest
+const SETTLING := 0.2 # s
+const FALLING := 3.0 # s after it came away a piece counts as at rest, still or not
 const MARGIN := 0.0001 # m: sharp shapes at millimetre scale (Godot's default rounds them away)
 const LAYER := 4 # its pieces' physics layer bit (the world and loose pieces are on 1)
 const LIFT := 0.0005 # m a piece is set clear of where it came from before it falls
 
-## Pieces come away as these, oldest first: {"body": RigidBody3D, "step": the board's
-## step that made it, "kind": "shaving" or "chip", "volume": mm^3}.
+## Pieces come away as these, oldest first: {"body": RigidBody3D, "view": its MeshInstance3D,
+## "step": the board's step that made it, "kind": "shaving" or "chip", "volume": mm^3, and
+## when (the clock, s) it "came" away, was last "moving", came to "rest" and began to "fade"
+## (-1: not yet)}.
 var pieces: Array[Dictionary] = []
+## How many of each kind came away (since the workshop started): {"shaving", "chip"}.
+var made := {"shaving": 0, "chip": 0}
 ## The shaving being taken, if any: its samples (world space) and what they came to.
 var _live := {}
 var _live_mesh: MeshInstance3D
 var _edge := Transform3D()
 var _shavings: StandardMaterial3D
 var feed_usec := 0 ## what the last feed() cost
-var dust ## dust.gd: the grains
+var dust ## dust.gd: the grains and piles
+var _clock := 0.0 # s of game time
 
 
 func _ready() -> void:
@@ -91,9 +103,9 @@ func live_samples() -> int:
 	return 0 if _live.is_empty() else _live.points.size()
 
 
-## Whether nothing lies about: no pieces, no dust.
+## Whether nothing lies about: no pieces, no dust in the air or piled.
 func is_empty() -> bool:
-	return pieces.is_empty() and dust.volume <= 0.0
+	return pieces.is_empty() and dust.flying() == 0 and dust.piles.is_empty()
 
 
 ## Takes back the pieces and dust the board's undo step `step` made (and any after it).
@@ -117,6 +129,52 @@ func clear() -> void:
 func _drop_live() -> void:
 	_live = {}
 	(_live_mesh.mesh as ArrayMesh).clear_surfaces()
+
+
+## Pieces that have lain still for REST fade out, and go.
+func _process(delta: float) -> void:
+	_clock += delta
+	for i in range(pieces.size() - 1, -1, -1):
+		var piece: Dictionary = pieces[i]
+		var body: RigidBody3D = piece.body
+		if piece.fade < 0.0:
+			if piece.rest < 0.0:
+				var still := body.freeze or body.sleeping or body.linear_velocity.length() < STILL
+				if not still:
+					piece.moving = _clock
+				if _clock - piece.moving >= SETTLING or _clock - piece.came >= FALLING:
+					piece.rest = _clock
+			elif _clock - piece.rest >= REST:
+				_begin_fade(piece)
+			continue
+		var left: float = 1.0 - (_clock - piece.fade) / FADE
+		if left <= 0.0:
+			body.queue_free()
+			pieces.remove_at(i)
+		else:
+			(piece.view.material_override as StandardMaterial3D).albedo_color.a = left
+
+
+## A piece starts to fade: it stays where it is, nothing lands on it any more, and it is
+## drawn in a see-through copy of its material.
+func _begin_fade(piece: Dictionary) -> void:
+	piece.fade = _clock
+	var body: RigidBody3D = piece.body
+	body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+	body.freeze = true
+	for child in body.get_children():
+		if child is CollisionShape3D:
+			child.disabled = true
+	var look: StandardMaterial3D = piece.view.material_override.duplicate()
+	look.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	piece.view.material_override = look
+
+
+## A piece's entry in `pieces`, just come away.
+func _piece(body: RigidBody3D, view: MeshInstance3D, step: int, kind: String, volume: float) -> Dictionary:
+	made[kind] += 1
+	return {"body": body, "view": view, "step": step, "kind": kind, "volume": volume, "came": _clock, "moving": _clock,
+			"rest": -1.0, "fade": -1.0}
 
 
 # --- the shaving ------------------------------------------------------------------------
@@ -233,7 +291,7 @@ func _release_live() -> void:
 	body.global_position += Vector3.UP * (2.0 * curl.half_thickness[0] + LIFT)
 	body.linear_damp = 2.0
 	body.angular_damp = 8.0
-	pieces.append({"body": body, "step": live.step, "kind": "shaving", "volume": live.volume})
+	pieces.append(_piece(body, view, live.step, "shaving", live.volume))
 
 
 # --- chips ------------------------------------------------------------------------------
@@ -260,7 +318,7 @@ func _add_chip(chip: Dictionary, step: int, density: float) -> void:
 	body.linear_velocity = out_of * 0.05 + xf.basis.x * 0.03
 	body.angular_velocity = xf.basis.y * 4.0
 	body.angular_damp = 3.0
-	pieces.append({"body": body, "step": step, "kind": "chip", "volume": float(chip.volume)})
+	pieces.append(_piece(body, view, step, "chip", float(chip.volume)))
 
 
 # --- bodies -----------------------------------------------------------------------------

@@ -107,7 +107,8 @@ The principles everything is built by (docs/PLAN.md):
   - `workshop.gd`: the scene, tool driving, offcuts and physics;
   - `workshop_ui.gd`: the panel and status line;
   - `orbit_camera.gd`;
-  - `debris.gd`: shavings and chips; `dust.gd`: dust.
+  - `debris.gd`: shavings and chips (they fade 2 s after landing); `dust.gd`: dust (a puff,
+    and piles on the ground).
 - **`game/tests/`**: scenes driven headless (logic) or rendered (images). **`game/bench/`**:
   the decision-gate benchmark.
 
@@ -161,8 +162,8 @@ shared cores and from the tests; the README has the tables.
 | P1 | Sawn through, the board comes apart: `plane_clear` (about 13 ms), both sides measured on the worker, and `split` in about 3 ms of the frame. The offcut is a rigid body; undo rejoins |
 | P2 | Islands: cuts meeting free a piece no plane separates. `find_parts` (the whole board in about 35 ms), `cut_out` (a region proved apart), `Op::Keep`. The board's collider becomes convex pieces round the hollows. A rebate: about 600 ms on the worker, 3.5 ms to split |
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
-| D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
-| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). Grains fly, land where their arc meets something, and pile up: sawdust heaps beyond the kerf's ends, sanding dust lies on the face. Every tool's dust is within 1.5% of what the board lost |
+| D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
+| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths |
 
 Test counts today: 100 native tests (GCC and Clang, including golden images) and 9

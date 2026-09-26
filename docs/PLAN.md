@@ -69,8 +69,8 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
-| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly, land where their arc meets something and pile up, sawdust heaped beyond the kerf's ends, sanding dust on the face; undo takes them back. Every tool's dust within 1.5% of what the board lost |
-| D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
+| D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 | T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths |
 
@@ -357,8 +357,15 @@ Built in three steps:
 - **D2:** dust.
 - **D3:** small pieces.
 
-Dust is grains of its own (a MultiMesh), not `CPUParticles3D`, which cannot collide: it
-settles and piles rather than falling through the bench.
+Dust is grains of its own (a MultiMesh), not `CPUParticles3D`, which cannot collide: each
+grain's landing is cast against the physics space.
+
+**Changed after play (the user):** debris lingered. Now it is transient. Shavings and
+chips lie still 2 s, fade out over 0.5 s and are freed. Dust is a quick puff: a grain
+shrinks away as it lands, and what reaches the ground (the bench, the floor) goes into a
+pile there, one mound mesh growing with its wood (piles stay until Sweep; undo takes a
+stroke's share back). The 1 mm stacking grid, rolling and the 30,000 kept grains are
+gone.
 
 ### D1 — shavings and chips: done
 - **The report** (`tools/debris.h`). A stroke says what it took off since it last said
@@ -424,11 +431,11 @@ settles and piles rather than falling through the bench.
     0.0%, sponge 1.0%;
   - in the workshop, a kerf 5.7 mm deep across the board gives 455 mm³ of sawdust (the
     kerf's width × depth × the board's width: 456), 85% of it heaped on the bench beyond
-    the kerf's ends (7 mm high); the block's dust lies on the face;
+    the kerf's ends (7 mm high); the block's dust lies on the face (as first built; now
+    all of it in the two piles beyond the ends, 5.1 mm high, and the block's goes);
   - throwing costs about 0.6 ms a frame while dust comes (about 1 ms at most), the flights
     at most 0.4 ms (headless).
-- **Left for later:** dust does not ride on pieces it lands on (it falls once a sawn piece
-  has slid away); tools pass over dust without pushing it.
+- **Left for later:** tools pass over piles without pushing them.
 
 ### D3 — small pieces (next)
 - One check collects every part that came away. Parts under about 30 mm³ (crumbs under
