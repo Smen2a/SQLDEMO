@@ -276,7 +276,7 @@ func _ready() -> void:
 	_check(plan.get("stop", "") == "blocked" and absf(stop_at - 16.0) < 1.5,
 			"the chisel's plan stops at the channel's end, blocked (%.1f mm)" % stop_at)
 	_check(plan.get("wall", 0.0) > 1.0, "by the step (%.2f mm)" % plan.get("wall", 0.0))
-	_check(line.contains("stops at 16 mm: blocked"), "the line by the pointer says where it stops, and why")
+	_check(line.contains("stops at %.0f mm: blocked" % stop_at), "the line by the pointer says where it stops, and why")
 	workshop.unlock()
 	workshop.set_setting("chisel", "variant", "bench_12")
 
