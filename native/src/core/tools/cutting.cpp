@@ -309,6 +309,26 @@ float splinter_limit(const CutPlan &p, float s) {
 	return std::min(1.5f * std::max(p.depth_at(s), 0.05f), 1.0f);
 }
 
+// The chip over an edge is looked at in this many columns across it.
+constexpr int kColumns = 9;
+
+// Column j's offset across the edge (mm, towards b = normal x path).
+float column_across(const CutPlan &p, int j) {
+	return ((float(j) + 0.5f) / float(kColumns) - 0.5f) * p.width;
+}
+
+// The wood over the edge `floor` deep at s, in columns across it: over each (0 where the
+// edge is in the air there), measured from the edge's own section (rising to its corners).
+void wood_over(const CutPlan &p, const Body &body, const Octree &octree, float s, float floor, float over[kColumns]) {
+	const vec3 n = p.normal, b = gl::cross(p.normal, p.path);
+	for (int j = 0; j < kColumns; ++j) {
+		const float across = column_across(p, j);
+		const float lift = p.chisel.edge_height(across);
+		const vec3 at = p.point(s, floor - lift) + b * across;
+		over[j] = std::max(depth_below_surface(body, octree, at, n, floor + 30.0f), 0.0f);
+	}
+}
+
 } // namespace
 
 void add_tear_out(CutPlan &p, const Work &work, float scale, std::uint32_t seed) {
@@ -399,7 +419,6 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	// What stands over the edge `floor` deep at s (its section rises to its corners), in
 	// columns across it: the wood over each (0 where it is in the air), and the highest the
 	// surface stands above the floor (0: the edge is all in the air).
-	constexpr int kColumns = 9;
 	struct Column {
 		float over[kColumns] = {};
 		float thickest = 0.0f, middle = 0.0f, side = 0.0f; // side: the outer columns, the more
@@ -408,14 +427,11 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	auto column = [&](float s, float floor) {
 		Column c;
 		c.floor = floor;
+		wood_over(p, work.body, work.octree, s, floor, c.over);
 		for (int j = 0; j < kColumns; ++j) {
-			const float across = ((float(j) + 0.5f) / float(kColumns) - 0.5f) * p.width;
-			const float lift = chisel.edge_height(across);
-			const vec3 at = p.point(s, floor - lift) + b * across;
-			const float over = depth_below_surface(work.body, work.octree, at, n, floor + 30.0f);
+			const float over = c.over[j];
 			if (over > 0.0f) {
-				c.over[j] = over;
-				c.thickest = std::max(c.thickest, over + lift);
+				c.thickest = std::max(c.thickest, over + chisel.edge_height(column_across(p, j)));
 				if (j == kColumns / 2) {
 					c.middle = over;
 				} else if (j == 0 || j == kColumns - 1) {
@@ -686,24 +702,37 @@ public:
 			}
 			return;
 		}
-		// The shaving, from the floor up to the surface the edge came in under.
+		// The shaving: the chip over the edge, column by column across it (from the edge's
+		// section up to the surface it came in under), as wide as the columns holding wood.
 		out.step = kShavingStep;
-		const vec3 n = plan_.normal;
-		const float most = (plan_.height > 0.0f ? plan_.height : plan_.depth + 2.0f);
-		const bool flat = plan_.chisel.kind == gl::SDF_TOOL_FLAT;
+		const vec3 n = plan_.normal, b = gl::cross(plan_.normal, plan_.path);
+		const float column = plan_.width / float(kColumns);
 		for (; shaved_ <= reached_ + 1e-4f; shaved_ += kShavingStep) {
 			const float s = shaved_;
-			const vec3 floor = plan_.point(s, plan_.depth_at(s));
-			const float t = depth_below_surface(body, octree, floor, n, most);
-			if (t < kShavingLeast) {
+			const float depth = plan_.depth_at(s);
+			float over[kColumns];
+			wood_over(plan_, body, octree, s, depth, over);
+			float area = 0.0f, moment = 0.0f;
+			int first = -1, last = -1;
+			for (int j = 0; j < kColumns; ++j) {
+				if (over[j] >= kShavingLeast) {
+					area += over[j] * column;
+					moment += over[j] * column * column_across(plan_, j);
+					first = first < 0 ? j : first;
+					last = j;
+				}
+			}
+			if (first < 0) {
 				gap_ = true; // over air (off the work, over an earlier cut): it breaks here
 				continue;
 			}
 			ShavingSample sample;
 			sample.s = s;
-			sample.thickness = t;
-			sample.width = flat ? plan_.width : plan_.chisel.chip_area(t) / t;
-			sample.point = floor + n * (0.5f * t);
+			sample.width = float(last - first + 1) * column;
+			sample.thickness = area / sample.width;
+			sample.offset = moment / area;
+			sample.point = plan_.point(s, depth) + b * sample.offset +
+					n * (plan_.chisel.edge_height(sample.offset) + 0.5f * sample.thickness);
 			sample.starts = gap_ || piece_ >= piece_length_;
 			if (sample.starts) {
 				piece_ = 0.0f;

@@ -370,3 +370,49 @@ TEST(sponge_dust_is_what_its_flow_takes) {
 	CHECK(lost > 1.0 && std::fabs(double(d.dust_volume()) - lost) < 0.1 * lost);
 	CHECK(std::fabs(centre.x) < 5.0f && centre.y < -48.0f && centre.z > 10.5f);
 }
+
+// Pared along the board's side with half the chisel off the work, the shaving is the chip
+// the edge actually takes: about half the chisel's width, its middle a quarter width in
+// from the edge's (towards the board), and the wood the board lost.
+TEST(a_shaving_is_as_wide_as_the_wood_under_the_edge) {
+	const Board board;
+	const Chisel bench = variant("bench_12", 30.0f);
+	// From the end, along the grain, centred on the side's arris (y = 50).
+	const CutPlan plan = plan_cut(bench, board.work(), {-79.5f, 50.0f, kTop}, kUp, {1, 0, 0}, 40.0f, 0.3f, 0.0f, 1);
+	std::vector<Edit> edits;
+	const Debris d = make(board, plan, &edits);
+	Board after = board;
+	after.add(edits);
+	const float taken = removed(board, after, {-80, 40}, {-38, 50}, 0.2f);
+	float width = 0.0f, offset = 0.0f;
+	int n = 0;
+	for (const ShavingSample &s : d.shaving) {
+		if (s.s > 5.0f && s.s < 35.0f) {
+			width += s.width;
+			offset += s.offset;
+			++n;
+		}
+	}
+	width /= float(std::max(n, 1));
+	offset /= float(std::max(n, 1));
+	std::printf("    half off the side: %.2f mm wide (the chisel 12), its middle %.2f mm across; %.1f mm^3, the board lost %.1f\n",
+			double(width), double(offset), double(d.shaving_volume()), double(taken));
+	CHECK(n > 20 && width > 4.0f && width < 7.5f);
+	CHECK(offset < -2.0f && offset > -4.0f); // (b = normal x path is +y: off the board)
+	CHECK(std::fabs(d.shaving_volume() - taken) < 0.15f * taken);
+}
+
+// Over a groove narrower than the chisel, under its middle, the edge still cuts at its sides:
+// the shaving holds together.
+TEST(a_shaving_holds_together_over_a_groove_under_its_middle) {
+	Board board;
+	Edit groove;
+	groove.prim = Primitive::box({0, 0, kTop}, {70, 2, 2});
+	groove.op = Op::Subtract;
+	board.add({groove}); // 4 mm wide, 2 mm deep, along x
+	const CutPlan plan = plan_cut(variant("bench_12", 30.0f), board.work(), {-79.5f, 0, kTop}, kUp, {1, 0, 0}, 40.0f,
+			0.3f, 0.0f, 1);
+	const Debris d = make(board, plan);
+	std::printf("    over a groove under its middle: %d piece(s), %zu samples\n", pieces(d), d.shaving.size());
+	CHECK(!d.shaving.empty() && pieces(d) == 1);
+}

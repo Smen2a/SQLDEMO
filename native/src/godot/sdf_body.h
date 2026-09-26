@@ -69,6 +69,13 @@ public:
 	// space, or an empty dictionary. While an edit is being applied it answers from the last
 	// query instead ({..., "stale": true}).
 	godot::Dictionary raycast(const godot::Vector3 &from, const godot::Vector3 &direction, double max_distance);
+	// The edge nearest `point` (world, on the surface; `normal` out of it) within `reach_mm`,
+	// where the surface steps by 0.1 mm or more or folds by `fold_deg` or more (core
+	// tools/edges.h): {point (world, on the edge line), direction, across (world, unit: along
+	// it, and from it towards the point's side), distance (mm), step (mm the far side stands
+	// above the near: negative below, -1000 off the work), floor (the far side is a floor, an
+	// earlier cut's), fold}, or {} (none, or an edit is being applied).
+	godot::Dictionary find_edge(const godot::Vector3 &point, const godot::Vector3 &normal, double reach_mm, double fold_deg);
 
 	// Engages a tool at `contact` (world space, on this body's surface) with the surface
 	// `normal` there and the tool facing `along`. tool:
@@ -139,8 +146,10 @@ public:
 	// What the stroke took off the work since the last call (core tools/debris.h), in world
 	// space, for the game to show; empty when nothing came off. Gathered as a previewed
 	// stroke moves (from the body as it was before the stroke), and when it ends:
-	//   "shaving": {"points" (mid-thickness), "thickness", "width" (world lengths), "volume"
-	//     (mm^3 each), "starts" (1 where a new piece begins: it broke, or after a gap),
+	//   "shaving": {"points" (mid-thickness, at its middle across), "thickness", "width" (as
+	//     wide as the edge has wood over it), "offset" (how far its middle lies across the
+	//     edge's, towards normal x path: world lengths), "volume" (mm^3 each), "starts" (1
+	//     where a new piece begins: it broke, or after a gap),
 	//     "colours"}, sampled every "step" (world length) along the cut, oldest first
 	//   "chips": [{"transform" (its centre; x along the cut, z out of the face; unscaled),
 	//     "size" (world), "volume" (mm^3), "colour"}]

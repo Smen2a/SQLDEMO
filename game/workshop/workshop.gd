@@ -40,6 +40,9 @@ extends Node3D
 ## its way (it never cuts under them). Where a rule stops a plan short (a step ahead, the
 ## blade meeting the work, a gap too narrow, a chip too thick) a red mark shows where, and the
 ## line by the pointer says why. Ctrl+wheel sets depths in hundredths of a millimetre.
+## Locked or pressed near an edge (a step, or a fold sharper than edge_fold) and aimed within
+## edge_aim of its way, a chisel's or gouge's stroke runs along the edge, its side flush with
+## it (the edge drawn in blue); beside an earlier cut, level with its floor. Alt: freely.
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 ## Middle-drag orbits the camera, Shift+middle-drag pans, the wheel zooms.
 ##
@@ -73,6 +76,9 @@ const SHAPE_MARGIN := 0.0001 # m: islands' and the hollowed board's shapes, shar
 ## mm/s a push tool goes at most, paring freely; at the force the hand can give, a fifth of it.
 const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 40.0}
 const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
+const EDGE_REACH := 6.0 # mm round where a chisel or gouge is locked that it looks for an edge
+const FLUSH := 0.05 # mm a tool locked to an edge keeps its side off it
+const EDGE_COLOUR := Color(0.35, 0.9, 1.0)
 ## A chop's blow: a tap, a firm blow, a heavy one (SdfBody's "blow").
 const BLOWS := [0.3, 1.0, 1.6]
 const BLOW_NAMES := ["tap", "firm", "heavy"]
@@ -137,6 +143,12 @@ var wood := "board" ## board, board_oak or board_walnut
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
 ## rate.
 var pace := 1.0
+## Edge lock (chisels and gouges): locked within EDGE_REACH of an edge (a step, or a fold
+## sharper than `edge_fold` degrees) and aimed within `edge_aim` degrees of its way, a stroke
+## runs along it, the tool's side flush with it; started beside an earlier cut, its depth is
+## set level with that cut's floor. `edge_aim` 0: off. Alt places a stroke freely.
+var edge_aim := 20.0
+var edge_fold := 25.0
 
 var board                 # SdfBody
 var tools := {}           # name -> SdfBody
@@ -263,6 +275,7 @@ func _surface_at(position: Vector2) -> Dictionary:
 		# While an edit is being applied the body answers every ray with its last hit, so
 		# there is nothing to fit a plane to: keep that hit's own normal.
 		return hit
+	hit.own_normal = hit.normal # (the surface's own there, for the edge lock)
 	var pixel := 2.0 * float(hit.distance) * tan(deg_to_rad(camera.fov) * 0.5) / get_viewport().get_visible_rect().size.y
 	var k: float = 4.0 * MM / maxf(pixel, 1e-6)
 	var around: Array[Vector3] = []
@@ -284,7 +297,8 @@ func _surface_at(position: Vector2) -> Dictionary:
 
 ## Right button down: locks a stroke in where the pointer is on the board (the tool in hand
 ## set on the surface there), and plans it towards the pointer.
-func lock(position: Vector2) -> void:
+## `free` (Alt): no edge lock.
+func lock(position: Vector2, free := false) -> void:
 	_right_held = true
 	if _state != IDLE or current == "":
 		return
@@ -296,6 +310,7 @@ func lock(position: Vector2) -> void:
 	# The seed makes a plan's chips (tear-out) the same as the stroke's.
 	_lock = {"point": _hit.position, "normal": normal, "plane": Plane(normal, _hit.position), "along": facing,
 			"path": facing, "length": DEFAULT_LENGTH[current], "seed": randi() % 100000}
+	_note_edge(free, _hit.get("own_normal", normal))
 	_state = PLANNING
 	camera.wheel_zoom = false
 	aim(position)
@@ -308,19 +323,75 @@ func aim(position: Vector2) -> void:
 	_pointer = position
 	if _state != PLANNING:
 		return
-	var point = _lock.plane.intersects_ray(camera.project_ray_origin(position), camera.project_ray_normal(position))
+	var free: Plane = _lock.get("free_plane", _lock.plane)
+	var point = free.intersects_ray(camera.project_ray_origin(position), camera.project_ray_normal(position))
 	if point == null:
 		return
-	var n: Vector3 = _lock.normal
-	var d: Vector3 = point - _lock.point
+	var n: Vector3 = free.normal
+	var d: Vector3 = point - _lock.get("free_point", _lock.point)
 	d -= n * d.dot(n)
 	if d.length() < 3.0 * MM:
 		return
-	_lock.path = d.normalized()
+	_snap(d.normalized())
+	if not _lock.snapped:
+		_lock.path = d.normalized()
 	# Edge tools and the saw face the way they work; the sanding tools can be turned (Q / E).
-	_lock.along = _lock.path if _faces_its_path() else _lock.path.rotated(n, yaw)
-	_lock.length = clampf(d.length() / MM, 3.0, 400.0)
+	_lock.along = _lock.path if _faces_its_path() else _lock.path.rotated(_lock.normal, yaw)
+	var reach: Vector3 = point - _lock.point
+	_lock.length = clampf(reach.dot(_lock.path) / MM if _lock.snapped else d.length() / MM, 3.0, 400.0)
 	_replan()
+
+
+## Looks for an edge near where the stroke was locked (a chisel's or gouge's, not `free`;
+## `surface`: the surface's own normal there, not the plane fitted round it, which an edge
+## nearby tilts), and keeps where it was locked: _snap() places the stroke from there.
+func _note_edge(free: bool, surface: Vector3) -> void:
+	_lock.free_point = _lock.point
+	_lock.free_normal = _lock.normal
+	_lock.free_plane = _lock.plane
+	_lock.snapped = false
+	_lock.edge = {}
+	if free or edge_aim <= 0.0 or not (current == "chisel" or current == "gouge") or is_chopping():
+		return
+	_lock.edge = board.find_edge(_lock.point, surface, EDGE_REACH, edge_fold)
+
+
+## The stroke asks to go `asked` (unit, in the plane it was locked on). Within `edge_aim` of
+## the way of the edge it was locked near, it runs along that edge instead, the tool's side
+## FLUSH off it; started on the higher side of an earlier cut, its depth is set (once) level
+## with that cut's floor. Otherwise it starts where it was locked.
+func _snap(asked: Vector3) -> void:
+	_lock.point = _lock.get("free_point", _lock.point)
+	_lock.normal = _lock.get("free_normal", _lock.normal)
+	_lock.plane = _lock.get("free_plane", _lock.plane)
+	_lock.snapped = false
+	var edge: Dictionary = _lock.get("edge", {})
+	if edge.is_empty():
+		return
+	var n: Vector3 = _lock.normal
+	var way: Vector3 = edge.direction - n * n.dot(edge.direction)
+	way = way.normalized()
+	if way.dot(asked) < 0.0:
+		way = -way
+	if rad_to_deg(way.angle_to(asked)) > edge_aim:
+		return
+	var width: float = variant().get("width", 12.0) * MM
+	var start: Vector3 = edge.point + edge.across * (0.5 * width + FLUSH * MM)
+	var hit: Dictionary = board.raycast(start + n * 0.01, -n, 0.03)
+	if hit.is_empty() or hit.get("stale", false):
+		return
+	# On the surface beside the edge, as it is there.
+	n = hit.normal
+	_lock.point = hit.position
+	_lock.normal = n
+	_lock.plane = Plane(n, hit.position)
+	_lock.path = (way - n * n.dot(way)).normalized()
+	_lock.snapped = true
+	if edge.floor and edge.step < 0.0 and not _lock.has("level"):
+		# Beside an earlier cut, on its higher side: level with its floor (the wheel adjusts it).
+		var spec: Array = INTENSITY[current]
+		_lock.level = -edge.step
+		settings[current].depth = clampf(snappedf(-edge.step, 0.01), spec[2], spec[3])
 
 
 ## Right button up: a plan not acted on is dropped; a stroke in progress carries on.
@@ -353,7 +424,7 @@ func adjust(steps: int, tilt: bool, fine := false) -> void:
 ## tool lying on the bench under the pointer is picked up, or the tool in hand sets to work
 ## where the pointer is on the board, without a plan: the sanding tools (and a chop) at
 ## once, the others once the drag shows which way they go.
-func press(position: Vector2) -> void:
+func press(position: Vector2, free := false) -> void:
 	if _state == PLANNING:
 		act()
 		return
@@ -372,6 +443,7 @@ func press(position: Vector2) -> void:
 	_lock = {"point": _hit.position, "normal": normal, "plane": Plane(normal, _hit.position), "along": facing,
 			"path": facing, "length": DIRECT_LENGTH.get(current, DEFAULT_LENGTH[current]),
 			"seed": randi() % 100000, "direct": true}
+	_note_edge(free, _hit.get("own_normal", normal))
 	_state = ARMED
 	if not _faces_its_path() or is_chopping():
 		act() # at once
@@ -426,7 +498,9 @@ func drag_screen(position: Vector2) -> void:
 		d -= n * d.dot(n)
 		if d.length() < ARM_DISTANCE * MM:
 			return
-		_lock.path = d.normalized()
+		_snap(d.normalized()) # (along an edge it was pressed near, if the drag goes its way)
+		if not _lock.snapped:
+			_lock.path = d.normalized()
 		_lock.along = _lock.path
 		act()
 	if not _engaged:
@@ -764,12 +838,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		match button.button_index:
 			MOUSE_BUTTON_LEFT:
 				if button.pressed:
-					press(button.position)
+					press(button.position, button.alt_pressed)
 				else:
 					release()
 			MOUSE_BUTTON_RIGHT:
 				if button.pressed:
-					lock(button.position)
+					lock(button.position, button.alt_pressed)
 				else:
 					unlock()
 			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
@@ -1008,6 +1082,13 @@ func _draw_outline() -> void:
 				segments.append(p + (a * cos(TAU * (i + 1) / 24.0) + s * sin(TAU * (i + 1) / 24.0)) * r)
 	for v in segments:
 		mesh.surface_add_vertex(v)
+	# Locked to an edge: the edge, 40 mm of it.
+	if (_state == PLANNING or _state == ARMED) and _lock.get("snapped", false):
+		var edge: Dictionary = _lock.edge
+		var on: Vector3 = edge.point + _lock.normal * 0.0003
+		mesh.surface_set_color(EDGE_COLOUR)
+		for v in [on - _lock.path * 0.02, on + _lock.path * 0.02]:
+			mesh.surface_add_vertex(v)
 	# Where a rule stops the plan short: a red cross there.
 	var stop_at: float = _plan.get("stop_at", -1.0) if _state == PLANNING else -1.0
 	if stop_at >= 0.0:

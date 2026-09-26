@@ -27,7 +27,7 @@ const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
-		"Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+		"Alt: no edge lock   Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 
 var workshop
 
@@ -122,6 +122,10 @@ func _ready() -> void:
 	# How fast the work goes: 1x as a real hand would.
 	_choice(right, "Pace", ["¼×", "½×", "1×", "2×", "4×", "8×"], PACES.find(workshop.pace),
 			func(i): workshop.pace = PACES[i])
+	# A chisel's or gouge's stroke locks onto an edge it is aimed along (Alt: freely).
+	_value_slider(right, "Edge lock", 0.0, 45.0, 1.0, workshop.edge_aim, "aimed within %.0f°",
+			func(v): workshop.edge_aim = v)
+	_value_slider(right, "", 5.0, 90.0, 1.0, workshop.edge_fold, "edges over %.0f°", func(v): workshop.edge_fold = v)
 	var shadows := CheckBox.new()
 	shadows.text = "Board casts shadows"
 	shadows.focus_mode = Control.FOCUS_NONE
@@ -255,6 +259,8 @@ func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String
 				plan.get("blow", 0.0), depth])
 	else:
 		parts.append("%.2f mm deep (asked %.2f)" % [depth, s.depth])
+		if plan.get("snapped", false):
+			parts.append("along the edge" + (", level with the cut's floor (%.2f mm)" % plan.level if plan.has("level") else ""))
 		if s.has("angle"):
 			parts.append("%.0f° to the work" % s.angle)
 		if absf(s.get("skew", 0.0)) > 0.5:
@@ -328,6 +334,31 @@ func _choice(parent: Control, label: String, items: Array, selected: int, chosen
 	option.item_selected.connect(chosen)
 	row.add_child(option)
 	return option
+
+
+## A slider for a workshop setting of its own: `changed` gets the value.
+func _value_slider(parent: Control, label: String, lo: float, hi: float, step: float, value: float, format: String,
+		changed: Callable) -> void:
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	var caption := Label.new()
+	caption.text = label
+	caption.custom_minimum_size.x = 60
+	row.add_child(caption)
+	var slider := HSlider.new()
+	slider.min_value = lo
+	slider.max_value = hi
+	slider.step = step
+	slider.value = value
+	slider.custom_minimum_size.x = 120
+	slider.focus_mode = Control.FOCUS_NONE
+	row.add_child(slider)
+	var shown := Label.new()
+	shown.text = format % value
+	row.add_child(shown)
+	slider.value_changed.connect(func(v):
+		shown.text = format % v
+		changed.call(v))
 
 
 ## A slider for one of a tool's settings, over the range the wheel sets it in while

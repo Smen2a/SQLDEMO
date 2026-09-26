@@ -7,7 +7,9 @@ extends Node3D
 ##             is: a radius of 1.5 mm + 12 times its thickness, winding in a thickness a
 ##             turn so the turns never meet). It comes off shorter and thicker than the cut
 ##             (COMPRESSION: the same wood). Where it breaks (across the grain, over a gap)
-##             and when the stroke ends, it comes away: a light rigid body that falls.
+##             and when the stroke ends, it comes away: a light rigid body that falls. It is
+##             the chip the edge took: as wide and as thick as the wood over it (half the
+##             chisel's width, pared half off the work), on that side of the edge.
 ##   chips     tear-out, breakout, a chop's pop-off: a block of the wood thrown off the face.
 ##   dust      the saw's, the rasps', the scraper's and the sanding tools': a puff of grains
 ##             that goes as soon as it lands, what reaches the ground heaped into a pile
@@ -77,12 +79,14 @@ func feed(report: Dictionary, step: int, edge: Transform3D) -> void:
 				_release_live() # it broke: what came before comes away
 			if _live.is_empty():
 				_live = {"points": PackedVector3Array(), "thickness": PackedFloat32Array(),
-						"width": PackedFloat32Array(), "colours": PackedColorArray(), "volume": 0.0,
+						"width": PackedFloat32Array(), "offset": PackedFloat32Array(), "colours": PackedColorArray(),
+						"volume": 0.0,
 						"step": step, "spacing": float(report.get("step", 0.5 * MM)),
 						"rise": float(report.get("rise", 20.0)), "density": float(report.get("density", 0.7))}
 			_live.points.push_back(s.points[i])
 			_live.thickness.push_back(s.thickness[i])
 			_live.width.push_back(s.width[i])
+			_live.offset.push_back(s.offset[i] if s.has("offset") else 0.0)
 			_live.colours.push_back(s.colours[i])
 			_live.volume += s.volume[i]
 		moved = true
@@ -207,7 +211,7 @@ func _curl(live: Dictionary, edge: Transform3D) -> Dictionary:
 	var colours := PackedColorArray()
 	for k in n:
 		var i := n - 1 - k
-		centres.push_back(at)
+		centres.push_back(at + across * live.offset[i]) # (where the wood was across the edge)
 		inwards.push_back(inward)
 		half_widths.push_back(0.5 * live.width[i])
 		half_thick.push_back(0.5 * live.thickness[i] / COMPRESSION)

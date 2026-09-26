@@ -8,6 +8,9 @@ extends "res://tests/harness.gd"
 ##   made, it fades in and cuts as deep as planned, and stops at the plan's end;
 ## - flicked 50 mm in one go, the chisel follows at its working speed (it takes over a second
 ##   to get there), and pushes a loose block lying in its way ahead of it, never riding under;
+## - the edge lock: near the board's arris and aimed 12 degrees off along it, the stroke runs
+##   along it, the chisel's side just inside; 35 degrees off, or with Alt, it goes freely;
+##   beside the flick's cut, it runs flush along it, level with its floor;
 ## - uphill, against the grain, the plan says so;
 ## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
 ## - a #7 gouge goes a millimetre deep there, where the chisel could not; two passes of it
@@ -37,6 +40,7 @@ func _ready() -> void:
 	await _frames(3)
 	var cam: Camera3D = workshop.camera
 	var chisel = workshop.tools["chisel"]
+	workshop.edge_aim = 0.0 # (placed freely, but where the edge lock is tried)
 	workshop.select_tool("chisel")
 	workshop.set_setting("chisel", "depth", 0.3)
 	await _frames(8)
@@ -146,6 +150,55 @@ func _ready() -> void:
 			"the block's back is ahead of where the edge stopped (%.1f mm)" % ((block.global_position.x - 0.008) * 1000.0))
 	block.queue_free()
 
+	# Edge lock: near the board's front arris and aimed 12 degrees off along it, the stroke runs
+	# along the arris, the chisel's side just inside it.
+	workshop.edge_aim = 20.0
+	workshop.set_setting("chisel", "depth", 0.2)
+	var arris_from := Vector3(0.03, 0.025, 0.046)
+	plan = await _plan(arris_from, arris_from + Vector3(cos(deg_to_rad(12.0)), 0, -sin(deg_to_rad(12.0))) * 0.03)
+	var edge: Dictionary = plan.get("edge", {})
+	var along_x: float = plan.get("path", Vector3.ZERO).dot(Vector3.RIGHT)
+	var inside: float = (edge.get("point", Vector3.ZERO).z - plan.get("point", Vector3.ZERO).z) * 1000.0
+	var line: String = workshop._ui.plan_text()
+	print("tool planning: aimed 12 degrees off the arris: %s, along it to %.2f degrees, the chisel's middle %.2f mm in from it" % [
+			"locked" if plan.get("snapped", false) else "free", rad_to_deg(acos(clampf(along_x, -1.0, 1.0))), inside])
+	_check(plan.get("snapped", false) and along_x > cos(deg_to_rad(0.5)), "aimed along the arris, the stroke locks to it")
+	_check(absf(inside - 6.05) < 0.1, "its side 0.05 mm inside the edge (%.2f)" % inside)
+	_check(line.contains("along the edge"), "the line by the pointer says so")
+	workshop.unlock()
+	plan = await _plan(arris_from, arris_from + Vector3(cos(deg_to_rad(35.0)), 0, -sin(deg_to_rad(35.0))) * 0.03)
+	_check(not plan.get("snapped", true), "aimed 35 degrees off, it goes where it is aimed")
+	workshop.unlock()
+	plan = await _plan(arris_from, arris_from + Vector3(0.03, 0, 0), true)
+	_check(not plan.get("snapped", true), "with Alt, freely")
+	workshop.unlock()
+
+	# Beside the flick's cut (0.4 mm deep, its side at z = 21 mm), started on the top 2 mm from
+	# it: along it, flush, and level with its floor.
+	var beside_from := Vector3(0.01, 0.025, 0.023)
+	plan = await _plan(beside_from, beside_from + Vector3(0.03, 0, 0))
+	var level: float = plan.get("level", 0.0)
+	var flush: float = (plan.get("point", Vector3.ZERO).z - plan.get("edge", {}).get("point", Vector3.ZERO).z) * 1000.0
+	print("tool planning: beside the flick's cut: %s, the depth set to %.2f mm (the cut's floor %.2f down), planned %.2f; the chisel's middle %.2f mm from its side" % [
+			"locked" if plan.get("snapped", false) else "free", workshop.settings.chisel.depth, level,
+			plan.get("depth", 0.0), flush])
+	_check(plan.get("snapped", false) and absf(level - 0.4) < 0.05 and absf(workshop.settings.chisel.depth - 0.4) < 0.05,
+			"beside a cut, level with its floor")
+	_check(absf(plan.get("depth", 0.0) - workshop.settings.chisel.depth) < 0.01 and absf(flush - 6.05) < 0.1,
+			"planned that deep, flush against it")
+	workshop.press(cam.unproject_position(beside_from))
+	workshop.drag_screen(cam.unproject_position(beside_from + Vector3(0.035, 0, 0)))
+	await _catch_up()
+	workshop.release()
+	workshop.unlock()
+	workshop.board.flush()
+	var new_floor := _depth_at(Vector3(0.025, 0.0, 0.0245))
+	var old_floor := _depth_at(Vector3(0.025, 0.0, 0.015))
+	print("tool planning: the new floor %.2f mm down, the flick's %.2f" % [new_floor, old_floor])
+	_check(absf(new_floor - old_floor) < 0.03, "the new pass is level with the old")
+	workshop.edge_aim = 0.0
+	workshop.set_setting("chisel", "depth", 0.3)
+
 	# Uphill: pushed the other way along the grain.
 	plan = await _plan(Vector3(0.03, 0.025, 0.025), Vector3(-0.01, 0.025, 0.025))
 	_check(plan.get("slope", 0) == -1, "pushed the other way it goes uphill, against the grain")
@@ -217,7 +270,7 @@ func _ready() -> void:
 	# (Aimed at the channel's floor.)
 	plan = await _plan(Vector3(-0.056, floor, -0.015), Vector3(-0.03, floor, -0.015))
 	var stop_at: float = plan.get("stop_at", -1.0)
-	var line: String = workshop._ui.plan_text()
+	line = workshop._ui.plan_text()
 	print("tool planning: a channel %.2f mm deep; the chisel in it stops at %.1f mm (%s, %.2f mm): %s"
 			% [(0.025 - floor) * 1000.0, stop_at, plan.get("stop", ""), plan.get("wall", 0.0), line.replace("\n", " / ")])
 	_check(plan.get("stop", "") == "blocked" and absf(stop_at - 16.0) < 1.5,
@@ -354,9 +407,9 @@ func _ready() -> void:
 	get_tree().quit(1 if _failed else 0)
 
 
-## Locks a stroke in at `from` and aims it at `to` (world), once the board is idle, and waits
-## for its plan.
-func _plan(from: Vector3, to: Vector3) -> Dictionary:
+## Locks a stroke in at `from` (`free`: no edge lock) and aims it at `to` (world), once the
+## board is idle, and waits for its plan.
+func _plan(from: Vector3, to: Vector3, free := false) -> Dictionary:
 	var cam: Camera3D = workshop.camera
 	workshop.board.flush()
 	# And until the cuts so far are refined: the pointer's rays read the refined surface, and
@@ -367,7 +420,7 @@ func _plan(from: Vector3, to: Vector3) -> Dictionary:
 		await _frames(1)
 	workshop.hover_screen(cam.unproject_position(from))
 	await _frames(2)
-	workshop.lock(cam.unproject_position(from))
+	workshop.lock(cam.unproject_position(from), free)
 	workshop.aim(cam.unproject_position(to))
 	await _frames(1)
 	return workshop.get_plan()

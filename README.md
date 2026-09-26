@@ -62,6 +62,15 @@ abrasive.
      gap narrower than the chisel, a surface rising too steeply), the hatch ends there, a
      red cross marks the spot, and the line says why: *stops at 16 mm: blocked: a 1.3 mm
      step ahead: chop it, or come from the other side.*
+   - **Edge lock** (chisels and gouges). Lock a stroke in within 6 mm of an edge and aim it
+     roughly along the edge (within 20°, *aimed within* on the panel). It then runs exactly
+     along the edge, drawn in blue, with the chisel's side 0.05 mm off it. Any edge
+     counts: a step of 0.1 mm or more (a wall, an earlier cut's side, the board's end) or a
+     fold sharper than 25° (*edges over*: an arris, a chamfer's edge). Started on the
+     surface beside an earlier cut, the depth is set level with that cut's floor, so a
+     second pass widens it at the same depth (the wheel adjusts from there). Hold **Alt**
+     as you lock or press to place a stroke freely. A left-drag without a plan locks the
+     same way, once its drag shows the way.
 
    Then press the left button and drag (the right can come up once you have): the tool
    follows the plan as far as you take it, never past its end. Keep holding the right
@@ -75,7 +84,8 @@ Other controls:
   shavings, chips and dust, and lets the board cast shadows. Its sliders are the same settings
   the wheel changes. **Pace** (¼× to 8×, 1× by default) speeds up or slows down the work
   against real life: every tool's working speed, and in time the rates of the tools that
-  wear the wood away.
+  wear the wood away. **Edge lock** sets how closely a stroke must be aimed along an edge
+  to lock to it (0°: off) and how sharp a fold must be to count as one.
 - *Preview strokes on the GPU* (on by default): the shader draws the cut while you drag,
   and the board applies it once, when you let go. Turned off, every move is applied as it
   happens, for comparison.
@@ -521,20 +531,25 @@ stroke's back. Debris never goes back into a body: it only shows what came off.
 - **The report** (`native/src/core/tools/debris.h`). As a previewed stroke moves, it says
   what it took off since it last said, read from the body as it was before the stroke
   (the body is only changed when the stroke lands). A planned stroke samples its shaving
-  every half millimetre: from the cut's floor up to the surface the edge came in under
-  (thinner over a rounded edge, nothing over a groove), as wide as the edge's chip (a
-  gouge's curved chip: its area over its thickness). Each chip is reported once, when the
+  every half millimetre, as the chip the edge actually takes. It looks at nine columns
+  across the edge, from its section (rising to a gouge's corners) up to the surface
+  over it. The shaving is as wide as the columns holding wood, as thick as their section
+  over that width, and lies across the edge where that wood was. Pared half off the
+  board, it is half as wide and on the board's side; over a groove under its middle it
+  holds together, cut at its sides. It is within 0.1% of the wood the board lost
+  (full-width) and 2.4% (half off the side). Each chip is reported once, when the
   edge reaches it: the material its cut takes beyond the floor's, sampled over its box.
   `SdfBody.take_debris()` hands it over in world space, coloured by the wood where it
   came from (`albedo_at`: the grain and rings run on into the shaving).
 - **Breaking.** Cut along the fibres a shaving holds together; severing them it crumbles:
   it breaks every (1.5 + 3 (1 − split)) / grain mm, about 10 mm across the grain in ash,
-  2.4 mm into end grain. It breaks too wherever the edge passes over air.
+  2.4 mm into end grain. It breaks too wherever the whole edge passes over air.
 - **The curl** (`game/workshop/debris.gd`). The shaving rides up the blade's back and
   curls over, tighter the thinner it is (a radius of 1.5 mm + 12 times its thickness,
   winding in a thickness a turn so the turns never meet). It comes off 0.7 as long and
   1 / 0.7 as thick as the cut (the same wood, compressed along the cut). Drawn as a ribbon
-  with the wood's colours, rebuilt as it grows (at most about 0.5 ms a frame).
+  with the wood's colours, each cross-section as wide as its sample and across the edge
+  where its wood was, rebuilt as it grows (at most about 0.5 ms a frame).
 - **Physics.** Released, a shaving is a rigid body whose collider is the box round the
   curl in its own frame: a hull round the curl rocked from facet to facet and never came
   to rest. It weighs at least a few grams to the solver (lighter bodies this small are

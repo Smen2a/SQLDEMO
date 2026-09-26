@@ -1,6 +1,7 @@
 #include "godot/sdf_body.h"
 
 #include "tools/catalog.h"
+#include "tools/edges.h"
 
 #include "demo/gallery.h"
 #include "eval/query.h"
@@ -770,12 +771,13 @@ Dictionary SdfBody::take_debris() {
 	if (!debris_.shaving.empty()) {
 		const std::size_t n = debris_.shaving.size();
 		PackedVector3Array points;
-		PackedFloat32Array thickness, width, volume;
+		PackedFloat32Array thickness, width, offset, volume;
 		PackedByteArray starts;
 		PackedColorArray colours;
 		points.resize(int64_t(n));
 		thickness.resize(int64_t(n));
 		width.resize(int64_t(n));
+		offset.resize(int64_t(n));
 		volume.resize(int64_t(n));
 		starts.resize(int64_t(n));
 		colours.resize(int64_t(n));
@@ -785,6 +787,7 @@ Dictionary SdfBody::take_debris() {
 			points.set(int64_t(i), xf.xform(to_godot(sample.point)));
 			thickness.set(int64_t(i), float(sample.thickness * scale));
 			width.set(int64_t(i), float(sample.width * scale));
+			offset.set(int64_t(i), float(sample.offset * scale));
 			volume.set(int64_t(i), sample.thickness * sample.width * debris_.step);
 			starts.set(int64_t(i), sample.starts ? 1 : 0);
 			colours.set(int64_t(i), Color(c.x, c.y, c.z));
@@ -793,6 +796,7 @@ Dictionary SdfBody::take_debris() {
 		shaving["points"] = points;
 		shaving["thickness"] = thickness;
 		shaving["width"] = width;
+		shaving["offset"] = offset;
 		shaving["volume"] = volume;
 		shaving["starts"] = starts;
 		shaving["colours"] = colours;
@@ -913,6 +917,28 @@ Transform3D SdfBody::get_tool_pose() const {
 Transform3D SdfBody::pose_at(const Vector3 &contact, const Vector3 &normal, const Vector3 &along, double lift) const {
 	const vec3 n = gl::normalize(to_body_direction(normal));
 	return frame_to_world(tools::Frame::at(to_body(contact) + n * float(lift), n, to_body_direction(along)));
+}
+
+Dictionary SdfBody::find_edge(const Vector3 &point, const Vector3 &normal, double reach_mm, double fold_deg) {
+	Dictionary out;
+	if ((job_.valid() && !job_refines_) || session_.octree().nodes().empty()) {
+		return out; // (the body is being edited on the worker)
+	}
+	const vec3 n = gl::normalize(to_body_direction(normal));
+	const tools::EdgeLock e = tools::find_edge(session_.body(), session_.octree(), to_body(point), n, float(reach_mm),
+			float(fold_deg));
+	if (!e.found) {
+		return out;
+	}
+	const Transform3D xf = get_global_transform();
+	out["point"] = xf.xform(to_godot(e.point));
+	out["direction"] = xf.basis.xform(to_godot(e.direction)).normalized();
+	out["across"] = xf.basis.xform(to_godot(e.across)).normalized();
+	out["distance"] = double(e.distance);
+	out["step"] = double(e.step);
+	out["floor"] = e.floor;
+	out["fold"] = e.fold;
+	return out;
 }
 
 void SdfBody::undo() {
@@ -1775,6 +1801,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
 	ClassDB::bind_method(D_METHOD("raycast", "from", "direction", "max_distance"), &SdfBody::raycast);
+	ClassDB::bind_method(D_METHOD("find_edge", "point", "normal", "reach_mm", "fold_deg"), &SdfBody::find_edge);
 	ClassDB::bind_method(D_METHOD("begin_stroke", "tool", "contact", "normal", "along", "settings"), &SdfBody::begin_stroke,
 			DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("plan_stroke", "tool", "contact", "normal", "along", "length", "settings"),

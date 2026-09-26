@@ -83,7 +83,7 @@ The principles everything is built by (docs/PLAN.md):
 | `adf/` | The **adaptive distance field**, the Live display cache. Bricks of 8³ half-float samples along the surface, refined until trilinear reconstruction is within 10 µm. Crease cells become *exact* cells that evaluate their own short tape. A 64³ lookup grid |
 | `edit/` | `EditSession`: a body's edits, the stroke in progress, undo and redo, the octree and ADF kept up to date incrementally |
 | `eval/` | The CPU reference renderer (ground truth for every GPU path, golden images) and exact ray queries |
-| `tools/` | The hand tools: each one's model, and strokes that turn motion into edits. The cutting model (`cutting.h`), shaping (`shaping.h`: rasps, scraper, spokeshave), the sponge's curvature flow (`smoothing.h`), debris reports (`debris.h`), the variant catalog |
+| `tools/` | The hand tools: each one's model, and strokes that turn motion into edits. The cutting model (`cutting.h`), shaping (`shaping.h`: rasps, scraper, spokeshave), the sponge's curvature flow (`smoothing.h`), debris reports (`debris.h`), edges to lock onto (`edges.h`), the variant catalog |
 | `pieces/` | Bodies that come apart: `plane_clear` (a cut through), `find_parts`, `find_island`, `cut_out` (islands no plane separates), and volumes, centres and hull points |
 
 ### The Godot side
@@ -164,9 +164,9 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
-| T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths |
+| T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 100 native tests (GCC and Clang, including golden images) and 9
+Test counts today: 105 native tests (GCC and Clang, including golden images) and 9
 headless Godot checks.
 
 ## 5. Where things stand

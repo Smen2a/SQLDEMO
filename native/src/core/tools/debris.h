@@ -14,10 +14,11 @@ namespace sdf::tools {
 // A shaving, as a chisel, gouge or spokeshave takes it: sampled along the cut, oldest
 // first, each sample standing for `step` mm of it.
 struct ShavingSample {
-	vec3 point{0.0f};       // at mid-thickness, above the cut's floor
+	vec3 point{0.0f};       // at mid-thickness, above the cut's floor, at its middle across
 	float s = 0.0f;         // mm along the cut
 	float thickness = 0.0f; // mm: from the floor up to the surface the edge came in under
-	float width = 0.0f;     // mm (a gouge's curved chip: its area over its thickness)
+	float width = 0.0f;     // mm: as wide as the edge has wood over it (thickness: its section over that)
+	float offset = 0.0f;    // mm its middle lies across the edge's (towards normal x path)
 	bool starts = false;    // a new piece begins here (it broke off, or after a gap)
 };
 

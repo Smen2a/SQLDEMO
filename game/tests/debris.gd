@@ -6,6 +6,8 @@ extends "res://tests/harness.gd"
 ##   at the edge during the drag, and comes away as one body when the stroke ends, as much
 ##   wood as the board lost; it comes to rest on the board or the bench, lies there a couple
 ##   of seconds, fades and is gone;
+## - pared along the front edge with half the chisel off the board, the shaving is only as wide
+##   as the wood under the edge;
 ## - pared across the grain, the shaving comes off in pieces;
 ## - against the grain in oak (planned, uphill), the tear-out comes off as chips, which fade
 ##   and go too;
@@ -69,6 +71,36 @@ func _ready() -> void:
 		print("debris: it faded and was gone %.1f s after it came away" % faded)
 		_check(not is_instance_valid(body) and not workshop.debris.pieces.has(shaving) and alpha < 1.0,
 				"it fades and goes")
+
+	# Pared along the board's front edge with half the chisel off it (Alt: no edge lock): the
+	# shaving is only as wide as the wood under the edge.
+	workshop.set_setting("chisel", "depth", 0.3)
+	var view: Camera3D = workshop.camera
+	var half_from := _on_top(-0.0785, 0.0485)
+	workshop.select_tool("chisel")
+	await _frames(8)
+	await _idle()
+	workshop.hover_screen(view.unproject_position(half_from))
+	await _frames(2)
+	workshop.press(view.unproject_position(half_from), true)
+	workshop.drag_screen(view.unproject_position(half_from + Vector3(0.004, 0, 0)))
+	workshop.drag_screen(view.unproject_position(half_from + Vector3(0.035, 0, 0)))
+	var widest := 0.0
+	var half_waited := 0.0
+	while workshop.lagging() and half_waited < 60.0:
+		await _frames(1)
+		half_waited += get_process_delta_time()
+		if workshop.debris.live_samples() > 0:
+			for w in workshop.debris._live.width:
+				widest = maxf(widest, w)
+	workshop.release()
+	workshop.board.flush()
+	var chisel_width: float = workshop.variant().width * 0.001
+	print("debris: pared half off the front edge, the shaving %.1f mm wide at most (the chisel %.0f)" % [widest * 1000.0,
+			chisel_width * 1000.0])
+	_check(widest > 0.3 * chisel_width and widest < 0.7 * chisel_width, "the shaving is as wide as the wood under the edge")
+	workshop.undo()
+	workshop.board.flush()
 
 	# Across the grain from the side: it crumbles into pieces.
 	var pieces_before := _count("shaving")

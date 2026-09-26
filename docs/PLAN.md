@@ -72,7 +72,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
-| T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths |
+| T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths. After play: an edge lock (along any edge, flush, level with an earlier cut's floor) and shavings the size of the chip |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -207,6 +207,15 @@ one tool at a time, each tried before the next.
 - Found on the way: the board's convex hull (17 points bunched at its eased corners) let
   loose pieces sink 3 mm into it in Jolt; the board's collider is now a box while it fills
   its bounds, as an offcut's is.
+- **After play:**
+  - **Edge lock** (`tools/edges`, `SdfBody.find_edge`). A chisel's or gouge's stroke locked
+    near an edge and aimed within a set angle of it runs along it, flush. Any edge counts:
+    a step of 0.1 mm or more, or a fold sharper than a set angle. It is found on a height
+    map of rays and bisected to the edge line exactly. Beside an earlier cut, the depth is
+    set level with its floor. Alt places a stroke freely.
+  - **The shaving is the chip:** nine columns across the edge give its width, thickness
+    and place across the edge. Half off the board it is half as wide; it matches the
+    board's loss to 0.1–2.4%.
 - Tests: `test_cutting` (step, groove, overhang, rising surfaces, a gouge's second pass and
   the chisel blocked at its channel's end, splinters, blows); `tool_planning` (a flick
   follows at the working speed and pushes a loose block aside; the channel's stop and its
