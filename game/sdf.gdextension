@@ -1,0 +1,11 @@
+[configuration]
+
+entry_symbol = "sdf_library_init"
+compatibility_minimum = "4.7"
+reloadable = true
+
+[libraries]
+
+linux.x86_64 = "res://bin/sdf_godot.linux.so"
+windows.x86_64 = "res://bin/sdf_godot.windows.dll"
+macos = "res://bin/sdf_godot.darwin.dylib"
