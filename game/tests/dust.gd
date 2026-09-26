@@ -118,6 +118,7 @@ func _ready() -> void:
 func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, planned: bool) -> void:
 	workshop.select_tool(tool)
 	await _frames(8)
+	await _idle()
 	var cam: Camera3D = workshop.camera
 	var at := cam.unproject_position(start)
 	workshop.hover_screen(at)
@@ -190,6 +191,16 @@ func _check(ok: bool, what: String) -> void:
 	if not ok:
 		_failed = true
 		push_error("dust: " + what)
+
+
+## Until the board is idle (edits applied, refined): while it is busy, the pointer's rays
+## answer with their last hit, and nothing can be locked on it.
+func _idle() -> void:
+	workshop.board.flush()
+	for i in 1200:
+		if not workshop.board.is_busy() and not workshop.board.get_stats().get("refine_pending", false):
+			return
+		await _frames(1)
 
 
 func _frames(n: int) -> void:
