@@ -18,6 +18,8 @@ struct EdgeLock {
 	float step = 0.0f;     // mm the far side stands above (+, a wall) or below (-) the near side
 	bool floor = false;    // the far side is a floor within kFloorReach below (an earlier cut's)
 	bool fold = false;     // it is a fold, not a step: the surface turns there, all of a piece
+	bool convex = false;   // the far side falls away (a drop, a step down, a fold turning down)
+	vec3 far_normal{0.0f}; // the face beyond the edge (zero: not found): a drop's side face too
 };
 
 // How far below the near side a floor may lie (mm) and still be one.

@@ -64,13 +64,21 @@ abrasive.
      step ahead: chop it, or come from the other side.*
    - **Edge lock** (chisels and gouges). Lock a stroke in within 6 mm of an edge and aim it
      roughly along the edge (within 20°, *aimed within* on the panel). It then runs exactly
-     along the edge, drawn in blue, with the chisel's side 0.05 mm off it. Any edge
-     counts: a step of 0.1 mm or more (a wall, an earlier cut's side, the board's end) or a
-     fold sharper than 25° (*edges over*: an arris, a chamfer's edge). Started on the
-     surface beside an earlier cut, the depth is set level with that cut's floor, so a
-     second pass widens it at the same depth (the wheel adjusts from there). Hold **Alt**
-     as you lock or press to place a stroke freely. A left-drag without a plan locks the
-     same way, once its drag shows the way.
+     along the edge, drawn in blue. Any edge counts: a step of 0.1 mm or more (a wall, an
+     earlier cut's side, the board's end) or a fold sharper than 25° (*edges over*: an
+     arris, a chamfer's edge). How it sits depends on the edge:
+     - **An outside corner** (an arris, a chamfer's edge): across the corner, the chisel's
+       face bisecting the two faces (45° on a square arris). It cuts the corner off, a
+       chamfer as deep into it as the depth is set: 1 mm makes one about 2 mm wide on each
+       face, a thin chip easily pushed (47 of 200 N in ash).
+     - **An inside corner** (a floor meeting a wall): on the floor, its side 0.05 mm off the
+       wall.
+     - **The surface beside an earlier cut:** its side 0.05 mm off the cut's edge, and the
+       depth is set level with that cut's floor, so a second pass widens it at the same
+       depth (the wheel adjusts from there).
+
+     Hold **Alt** as you lock or press to place a stroke freely. A left-drag without a plan
+     locks the same way, once its drag shows the way.
 
    Then press the left button and drag (the right can come up once you have): the tool
    follows the plan as far as you take it, never past its end. Keep holding the right

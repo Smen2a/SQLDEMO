@@ -41,8 +41,9 @@ extends Node3D
 ## blade meeting the work, a gap too narrow, a chip too thick) a red mark shows where, and the
 ## line by the pointer says why. Ctrl+wheel sets depths in hundredths of a millimetre.
 ## Locked or pressed near an edge (a step, or a fold sharper than edge_fold) and aimed within
-## edge_aim of its way, a chisel's or gouge's stroke runs along the edge, its side flush with
-## it (the edge drawn in blue); beside an earlier cut, level with its floor. Alt: freely.
+## edge_aim of its way, a chisel's or gouge's stroke runs along the edge (drawn in blue):
+## across an outside corner, cutting it off (a chamfer); otherwise its side flush with it,
+## and beside an earlier cut level with its floor. Alt: freely.
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 ## Middle-drag orbits the camera, Shift+middle-drag pans, the wheel zooms.
 ##
@@ -349,7 +350,9 @@ func _note_edge(free: bool, surface: Vector3) -> void:
 	_lock.free_point = _lock.point
 	_lock.free_normal = _lock.normal
 	_lock.free_plane = _lock.plane
+	_lock.surface_normal = surface
 	_lock.snapped = false
+	_lock.corner = false
 	_lock.edge = {}
 	if free or edge_aim <= 0.0 or not (current == "chisel" or current == "gouge") or is_chopping():
 		return
@@ -357,14 +360,19 @@ func _note_edge(free: bool, surface: Vector3) -> void:
 
 
 ## The stroke asks to go `asked` (unit, in the plane it was locked on). Within `edge_aim` of
-## the way of the edge it was locked near, it runs along that edge instead, the tool's side
-## FLUSH off it; started on the higher side of an earlier cut, its depth is set (once) level
-## with that cut's floor. Otherwise it starts where it was locked.
+## the way of the edge it was locked near, it runs along that edge instead:
+##   - an outside corner (the far side falls away, no floor beyond: an arris): across it,
+##     the tool's face bisecting the two faces, cutting the corner off (a chamfer);
+##   - otherwise (a wall, an earlier cut's edge, a fold turning up): the tool's side FLUSH
+##     off it; started on the higher side of an earlier cut, its depth is set (once) level
+##     with that cut's floor.
+## Otherwise it starts where it was locked.
 func _snap(asked: Vector3) -> void:
 	_lock.point = _lock.get("free_point", _lock.point)
 	_lock.normal = _lock.get("free_normal", _lock.normal)
 	_lock.plane = _lock.get("free_plane", _lock.plane)
 	_lock.snapped = false
+	_lock.corner = false
 	var edge: Dictionary = _lock.get("edge", {})
 	if edge.is_empty():
 		return
@@ -374,6 +382,21 @@ func _snap(asked: Vector3) -> void:
 	if way.dot(asked) < 0.0:
 		way = -way
 	if rad_to_deg(way.angle_to(asked)) > edge_aim:
+		return
+	var far: Vector3 = edge.get("far_normal", Vector3.ZERO)
+	if edge.convex and not edge.floor and far != Vector3.ZERO:
+		# Across the corner: onto it along the bisector of its two faces.
+		var face: Vector3 = _lock.get("surface_normal", n)
+		var bisector := (face + far).normalized()
+		var on: Dictionary = board.raycast(edge.point + bisector * 0.005, -bisector, 0.01)
+		if on.is_empty() or on.get("stale", false):
+			return
+		_lock.point = on.position
+		_lock.normal = bisector
+		_lock.plane = Plane(bisector, on.position)
+		_lock.path = (way - bisector * bisector.dot(way)).normalized()
+		_lock.snapped = true
+		_lock.corner = true
 		return
 	var width: float = variant().get("width", 12.0) * MM
 	var start: Vector3 = edge.point + edge.across * (0.5 * width + FLUSH * MM)

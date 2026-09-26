@@ -215,13 +215,25 @@ EdgeLock find_edge(const Body &body, const Octree &octree, vec3 point, vec3 norm
 	e.across = gl::normalize(look.frame.direction({perp.x, perp.y, 0.0f}));
 	if (!far.hit) {
 		e.step = -1e3f; // off the work: a drop
+		e.convex = true;
+		// The face beyond: looked for back towards the work from beyond the edge, below the
+		// near surface (and an arris's rounding).
+		const vec3 from = look.frame.point({out.x, out.y, (near.hit ? near.height : 0.0f) - kSide});
+		const auto side = raycast(body, octree, from, look.frame.direction({perp.x, perp.y, 0.0f}), 3.0f * kSide);
+		if (side) {
+			e.far_normal = side->normal;
+		}
 	} else if (!near.hit) {
 		e.step = 1e3f;
 	} else if (kind == Kind::Fold) {
 		e.fold = true; // the surface turns: no step to speak of
+		e.far_normal = far.normal;
+		e.convex = far.height < near.height; // it turns down
 	} else {
 		e.step = far.height - near.height;
 		e.floor = e.step < -kStep && -e.step <= kFloorReach && gl::dot(far.normal, n) >= std::cos(kFloorTilt);
+		e.far_normal = far.normal;
+		e.convex = e.step < 0.0f;
 	}
 	return e;
 }

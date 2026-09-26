@@ -259,7 +259,9 @@ func _edge_text(plan: Dictionary, s: Dictionary, parts: Array[String]) -> String
 				plan.get("blow", 0.0), depth])
 	else:
 		parts.append("%.2f mm deep (asked %.2f)" % [depth, s.depth])
-		if plan.get("snapped", false):
+		if plan.get("corner", false):
+			parts.append("across the corner")
+		elif plan.get("snapped", false):
 			parts.append("along the edge" + (", level with the cut's floor (%.2f mm)" % plan.level if plan.has("level") else ""))
 		if s.has("angle"):
 			parts.append("%.0f° to the work" % s.angle)

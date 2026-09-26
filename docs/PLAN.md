@@ -212,7 +212,10 @@ one tool at a time, each tried before the next.
     near an edge and aimed within a set angle of it runs along it, flush. Any edge counts:
     a step of 0.1 mm or more, or a fold sharper than a set angle. It is found on a height
     map of rays and bisected to the edge line exactly. Beside an earlier cut, the depth is
-    set level with its floor. Alt places a stroke freely.
+    set level with its floor. At an outside corner (the far side falls away, no floor
+    beyond; the face beyond found by a ray back towards the work), the chisel sits across
+    the corner on the bisector of its faces and pares a chamfer. Alt places a stroke
+    freely.
   - **The shaving is the chip:** nine columns across the edge give its width, thickness
     and place across the edge. Half off the board it is half as wide; it matches the
     board's loss to 0.1–2.4%.

@@ -74,7 +74,9 @@ public:
 	// tools/edges.h): {point (world, on the edge line), direction, across (world, unit: along
 	// it, and from it towards the point's side), distance (mm), step (mm the far side stands
 	// above the near: negative below, -1000 off the work), floor (the far side is a floor, an
-	// earlier cut's), fold}, or {} (none, or an edit is being applied).
+	// earlier cut's), fold, convex (the far side falls away), far_normal (world: the face
+	// beyond, a drop's side face too; zero if not found)}, or {} (none, or an edit is being
+	// applied).
 	godot::Dictionary find_edge(const godot::Vector3 &point, const godot::Vector3 &normal, double reach_mm, double fold_deg);
 
 	// Engages a tool at `contact` (world space, on this body's surface) with the surface

@@ -6,6 +6,7 @@
 #include "tools/catalog.h"
 #include "tools/cutting.h"
 #include "tools/debris.h"
+#include "eval/query.h"
 
 #include <cstdio>
 #include <cstring>
@@ -413,4 +414,30 @@ TEST(mallet_blows_tap_firm_heavy) {
 	}
 	std::printf("    tap %.2f mm, firm %.2f mm, heavy %.2f mm\n", double(blows[0]), double(blows[1]), double(blows[2]));
 	CHECK(blows[0] < blows[1] && blows[1] < blows[2] && blows[0] < 1.0f);
+}
+
+// Held across the board's front arris (its flat face bisecting the top and the side) and
+// pared along it from the end, a chisel cuts a chamfer: the chip is a thin triangle, easily
+// pushed, and the top is cut back only near the edge.
+TEST(a_chisel_across_an_arris_pares_a_chamfer) {
+	Board ash;
+	const vec3 bisector = gl::normalize(vec3{0, 1, 1});
+	const auto on = raycast(ash.body, ash.octree, vec3{-79.5f, 50, kTop} + bisector * 5.0f, -bisector, 10.0f, 1e-4f);
+	CHECK(on.has_value());
+	if (!on) {
+		return;
+	}
+	const CutPlan plan = plan_cut(variant("bench_12", 30.0f), ash.work(), on->point, bisector, {1, 0, 0}, 40.0f, 1.0f,
+			0.0f, 1);
+	describe("across the front arris, 1 mm", plan);
+	CHECK(plan.stop_at < 0.0f && std::fabs(plan.depth - 1.0f) < 0.01f && plan.force < 0.5f * plan.available);
+	auto top = [](const Board &b, float y) {
+		const auto hit = raycast(b.body, b.octree, {-60, y, kTop + 5.0f}, {0, 0, -1}, 20.0f, 1e-4f);
+		return hit ? hit->point.z : 0.0f;
+	};
+	const float near_before = top(ash, 49.5f), far_before = top(ash, 47.5f);
+	ash.add(plan.edits());
+	const float near_cut = near_before - top(ash, 49.5f), far_cut = far_before - top(ash, 47.5f);
+	std::printf("    the top 0.5 mm from the edge %.2f mm lower, 2.5 mm from it %.2f\n", double(near_cut), double(far_cut));
+	CHECK(near_cut > 1.1f && near_cut < 1.8f && far_cut < 0.05f);
 }

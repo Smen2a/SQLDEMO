@@ -8,8 +8,9 @@ extends "res://tests/harness.gd"
 ##   made, it fades in and cuts as deep as planned, and stops at the plan's end;
 ## - flicked 50 mm in one go, the chisel follows at its working speed (it takes over a second
 ##   to get there), and pushes a loose block lying in its way ahead of it, never riding under;
-## - the edge lock: near the board's arris and aimed 12 degrees off along it, the stroke runs
-##   along it, the chisel's side just inside; 35 degrees off, or with Alt, it goes freely;
+## - the edge lock: near the board's arris and aimed 12 degrees off along it, the chisel sits
+##   across the corner and runs along it, cutting a chamfer; 35 degrees off, or with Alt, it
+##   goes freely;
 ##   beside the flick's cut, it runs flush along it, level with its floor;
 ## - uphill, against the grain, the plan says so;
 ## - chopped (C), a click is a mallet blow: a slit about 2.4 mm deep;
@@ -150,21 +151,35 @@ func _ready() -> void:
 			"the block's back is ahead of where the edge stopped (%.1f mm)" % ((block.global_position.x - 0.008) * 1000.0))
 	block.queue_free()
 
-	# Edge lock: near the board's front arris and aimed 12 degrees off along it, the stroke runs
-	# along the arris, the chisel's side just inside it.
+	# Edge lock: near the board's front arris and aimed 12 degrees off along it, the chisel sits
+	# across the corner (its face bisecting the top and the front) and runs along it; made, it
+	# cuts a chamfer.
 	workshop.edge_aim = 20.0
-	workshop.set_setting("chisel", "depth", 0.2)
+	workshop.set_setting("chisel", "depth", 1.0)
 	var arris_from := Vector3(0.03, 0.025, 0.046)
 	plan = await _plan(arris_from, arris_from + Vector3(cos(deg_to_rad(12.0)), 0, -sin(deg_to_rad(12.0))) * 0.03)
-	var edge: Dictionary = plan.get("edge", {})
 	var along_x: float = plan.get("path", Vector3.ZERO).dot(Vector3.RIGHT)
-	var inside: float = (edge.get("point", Vector3.ZERO).z - plan.get("point", Vector3.ZERO).z) * 1000.0
+	var tilt: float = rad_to_deg(plan.get("normal", Vector3.UP).angle_to(Vector3(0, 1, 1).normalized()))
 	var line: String = workshop._ui.plan_text()
-	print("tool planning: aimed 12 degrees off the arris: %s, along it to %.2f degrees, the chisel's middle %.2f mm in from it" % [
-			"locked" if plan.get("snapped", false) else "free", rad_to_deg(acos(clampf(along_x, -1.0, 1.0))), inside])
-	_check(plan.get("snapped", false) and along_x > cos(deg_to_rad(0.5)), "aimed along the arris, the stroke locks to it")
-	_check(absf(inside - 6.05) < 0.1, "its side 0.05 mm inside the edge (%.2f)" % inside)
-	_check(line.contains("along the edge"), "the line by the pointer says so")
+	print("tool planning: aimed 12 degrees off the arris: %s, along it to %.2f degrees, its face %.1f degrees off the bisector: %s" % [
+			"across the corner" if plan.get("corner", false) else ("locked" if plan.get("snapped", false) else "free"),
+			rad_to_deg(acos(clampf(along_x, -1.0, 1.0))), tilt, line.replace("\n", " / ")])
+	_check(plan.get("corner", false) and along_x > cos(deg_to_rad(0.5)), "aimed along the arris, the stroke locks across it")
+	_check(tilt < 2.0, "its face bisecting the corner (%.1f degrees off)" % tilt)
+	_check(line.contains("across the corner"), "the line by the pointer says so")
+	var near_before := _depth_at(Vector3(0.045, 0.0, 0.0495))
+	var inside_before := _depth_at(Vector3(0.045, 0.0, 0.0475))
+	workshop.press(cam.unproject_position(arris_from))
+	workshop.drag_screen(cam.unproject_position(arris_from + Vector3(0.03, 0, 0)))
+	await _catch_up()
+	workshop.release()
+	workshop.unlock()
+	workshop.board.flush()
+	var near_cut := _depth_at(Vector3(0.045, 0.0, 0.0495)) - near_before
+	var inside_cut := _depth_at(Vector3(0.045, 0.0, 0.0475)) - inside_before
+	print("tool planning: the chamfer: the top 0.5 mm from the edge %.2f mm lower, 2.5 mm from it %.2f" % [near_cut, inside_cut])
+	_check(near_cut > 0.5 and inside_cut < 0.05, "it cut the corner off, and only the corner")
+	workshop.set_setting("chisel", "depth", 0.2)
 	workshop.unlock()
 	plan = await _plan(arris_from, arris_from + Vector3(cos(deg_to_rad(35.0)), 0, -sin(deg_to_rad(35.0))) * 0.03)
 	_check(not plan.get("snapped", true), "aimed 35 degrees off, it goes where it is aimed")

@@ -938,6 +938,8 @@ Dictionary SdfBody::find_edge(const Vector3 &point, const Vector3 &normal, doubl
 	out["step"] = double(e.step);
 	out["floor"] = e.floor;
 	out["fold"] = e.fold;
+	out["convex"] = e.convex;
+	out["far_normal"] = gl::length(e.far_normal) > 0.5f ? xf.basis.xform(to_godot(e.far_normal)).normalized() : Vector3();
 	return out;
 }
 

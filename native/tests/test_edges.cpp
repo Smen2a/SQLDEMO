@@ -46,6 +46,9 @@ TEST(an_edge_lock_finds_the_boards_arris) {
 	describe("3-4 mm from the end", e);
 	CHECK(e.found && std::fabs(e.direction.y) > 0.999f && e.step < -100.0f && !e.floor);
 	CHECK(e.distance > 2.5f && e.distance < 4.5f && e.across.x < -0.99f);
+	std::printf("    the face beyond: (%.2f, %.2f, %.2f)%s\n", double(e.far_normal.x), double(e.far_normal.y),
+			double(e.far_normal.z), e.convex ? ", falling away" : "");
+	CHECK(e.convex && e.far_normal.x > 0.99f); // the end face
 	const EdgeLock none = find_edge(b.body, b.octree, {0, 0, kTop}, kUp, 6.0f, 25.0f);
 	describe("the middle of the top", none);
 	CHECK(!none.found);
@@ -78,6 +81,7 @@ TEST(an_edge_lock_finds_a_fold_as_sharp_as_it_is_set_to) {
 	describe("the chamfer's edge, folds of 25 degrees", sharp);
 	describe("folds of 60 degrees", blunt);
 	CHECK(sharp.found && sharp.fold && std::fabs(sharp.direction.y) > 0.999f);
+	CHECK(sharp.convex && std::fabs(sharp.far_normal.x + 0.7071f) < 0.02f && std::fabs(sharp.far_normal.z - 0.7071f) < 0.02f);
 	CHECK(std::fabs(sharp.point.x + 80.0f - 3.0f * std::sqrt(2.0f)) < 0.1f);
 	CHECK(!blunt.found || blunt.point.x < -77.0f); // (only the chamfer's own foot, off the work, if anything)
 }
