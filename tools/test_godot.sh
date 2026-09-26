@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Godot-side checks, run after building native/ (which also builds the GDExtension).
 #
-#   tools/test_godot.sh         the headless tier: logic, not pixels (under a minute on a CPU)
+#   tools/test_godot.sh         the headless tier: logic, not pixels (about a minute on a CPU)
 #   tools/test_godot.sh --gpu   the GPU tier: everything that renders and compares images
 #
 # The headless tier:

@@ -23,7 +23,8 @@ Also build and test with Clang, in a separate build directory with the extension
 Set `GODOT` to a Godot 4.7 binary (e.g. `Godot_v4.7.2-stable_linux.x86_64`), then:
 
 - `tools/test_godot.sh`: the **headless tier**. Everything runs headless apart from one
-  software-rendered frame that checks the Live shader compiles. It takes under a minute.
+  software-rendered frame that checks the Live shader compiles. It takes about a minute
+  (strokes go at the tools' working speed, so they take real time).
 - `tools/test_godot.sh --gpu`: the **GPU tier**, which covers live renders, screenshots,
   preview-against-commit image comparison, GPU/CPU parity (`tools/parity.sh`) and Vulkan.
 

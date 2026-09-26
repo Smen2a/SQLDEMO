@@ -160,7 +160,7 @@ shared cores and from the tests; the README has the tables.
 | T3 | Rasps (coarse to fine, tilted to chamfer, the round face hollowing), a card scraper, and a spokeshave whose sole follows curves and bridges hollows |
 | P1 | Sawn through, the board comes apart: `plane_clear` (about 13 ms), both sides measured on the worker, and `split` in about 3 ms of the frame. The offcut is a rigid body; undo rejoins |
 | P2 | Islands: cuts meeting free a piece no plane separates. `find_parts` (the whole board in about 35 ms), `cut_out` (a region proved apart), `Op::Keep`. The board's collider becomes convex pieces round the hollows. A rebate: about 600 ms on the worker, 3.5 ms to split |
-| Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about 30 s) and a GPU tier (renders, image comparisons, parity, Vulkan) |
+| Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). Grains fly, land where their arc meets something, and pile up: sawdust heaps beyond the kerf's ends, sanding dust lies on the face. Every tool's dust is within 1.5% of what the board lost |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths |
@@ -315,7 +315,7 @@ materials. Every detail knob is already a parameter, so it is a settings change.
 git submodule update --init
 cmake -S native -B native/build -G Ninja && cmake --build native/build   # also builds game/bin/sdf_godot.*
 native/build/sdf_tests                                                   # 93 tests, golden images
-GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about 30 s)
+GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about a minute)
 GODOT=/path/to/godot tools/test_godot.sh --gpu                           # GPU tier: renders, images, parity
 ```
 

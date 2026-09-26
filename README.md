@@ -847,7 +847,7 @@ native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, 
 ```
 
 The Godot tests come in two tiers:
-- **Headless** (`tools/test_godot.sh`, under a minute on a CPU):
+- **Headless** (`tools/test_godot.sh`, about a minute on a CPU):
   - the extension loads;
   - the workshop's tools cut and undo;
   - stroke previews commit as previewed;
