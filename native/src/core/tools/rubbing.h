@@ -54,6 +54,9 @@ public:
 	float median(const Region &r) const;
 	// Cut down to `floor` over a region.
 	void lower(const Region &r, float floor);
+	// The volume (mm^3) above the lowest of the floors over each sample: what cuts down to
+	// those floors over those regions would take out of the surface as mapped.
+	float removed(const std::vector<std::pair<Region, float>> &cuts) const;
 	int samples() const { return nx_ * ny_; }
 
 private:
@@ -83,6 +86,14 @@ struct RubFace {
 	// (a half-round face's is not width x depth); unset: the patch's width x depth.
 	std::function<float(float depth)> section;
 };
+
+// The plane a flat face set on the work at `plane` is held in: turned to lie along the
+// work's own face under it (`half` its size either way, plane x, y), the plane most of 45
+// points there lie on (a bump, a groove or the rounded end of a board does not tip it; a
+// normal taken from the pointer a degree or two off is put right). Turned by at most 10
+// degrees: where the work under it is not near flat, the face was set at an angle on
+// purpose, and is left so.
+Frame settle(const Work &work, const Frame &plane, vec2 half);
 
 // How far a free face's stroke looks round where it was set for the work it may reach (mm).
 constexpr float kRubReach = 250.0f;

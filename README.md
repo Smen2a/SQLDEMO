@@ -34,8 +34,9 @@ abrasive.
      rate: slower the longer the chord of wood under its teeth and the harder the wood,
      faster pressed harder. Its brass back stops it 60 mm down; the kerf runs where the
      teeth have been. See *Rates and working speeds* below.
-   - **Rasp, card scraper:** back and forth along their line, taking the surface down
-     steadily; see *Shaping and finishing* below.
+   - **Rasp, card scraper:** back and forth along their line at their working speed,
+     cutting on the push (the way you first drag), resting on the high spots and taking the
+     surface down only where their face goes; see *Shaping and finishing* below.
    - **Spokeshave:** pushed along the drag at its working speed, taking its shaving.
    - **Sanding block** (a cork block or a small pad): follows the pointer anywhere at its
      working speed. It rests on the highest points under it and takes them down first,
@@ -397,7 +398,12 @@ physics step, so pieces are moved with the edge, not given its velocity.
 
 ### Sanding block: a hard face, rubbed
 
-`native/src/core/tools/rubbing.h` (shared with the rasps and the scraper, T4-4 and T4-5):
+`native/src/core/tools/rubbing.h` (shared with the rasps and, T4-5, the scraper):
+- **It is held flat to the work.** The hand holds a block flat to the face it is on: of the
+  planes through three of 45 points under it (within 10° of the normal it was set with), it
+  lies in the one most of them are on, to 5 µm. A normal from the pointer a degree or two off
+  (four hits 4 mm apart, one on an earlier cut) is put right; a bump, a groove or the
+  board's rounded end does not tip it; a rasp tilted on purpose stays tilted.
 - **It rests on the high spots.** When the stroke starts, a height map of the surface under
   the plane is read from the work: rays every 2.5 mm over the board (about 2,500 on the
   workshop board, under a millisecond). Each piece of ground the block covers is cut
@@ -443,7 +449,8 @@ one at a time (docs/PLAN.md, T4).
 | chisel, gouge | as deep as a hand can push it (200 N) | 40, 30 mm/s; a fifth at the hand's limit | a step ahead, the blade meeting the work, a gap too narrow, a chip too thick |
 | sanding block | 1e-5 mm per mm rubbed at 120 grit (0.01 mm a metre) | 300 mm/s | resting on high spots (the line shows its contact) |
 | saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
-| rasp, scraper, spokeshave, sponge | (as before; T4-4 to T4-7) | rasp 250, scraper 200, spokeshave 150, sponge 300 mm/s | |
+| rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
+| scraper, spokeshave, sponge | (as before; T4-5 to T4-7) | scraper 200, spokeshave 150, sponge 300 mm/s | |
 
 The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
 less (a corner, a thin stick) goes 2.5 times as fast as 25 mm, a 100 mm chord a quarter as
@@ -461,12 +468,18 @@ loose pieces in its way aside.
 
 `native/src/core/tools/shaping.h`:
 - **Rasps** (a coarse wood rasp, a cabinet rasp flat or round, a fine patternmaker's) take
-  a tiny bite with each tooth, so they never tear the grain, whichever way they go.
-  - They remove steadily, faster the coarser they are and the harder they are pressed,
-    slower in harder wood. A cabinet rasp takes about 0.03 mm of ash per 40 mm stroke there
-    and back, 0.24 mm in ten 60 mm strokes.
+  a tiny bite with each tooth on the push, so they never tear the grain.
+  - A rasp's face is a rubbed face (`tools/rubbing.h`, as the sanding block's): stiff, it
+    rests on the highest points under it and takes them down first, and it cuts only where
+    its 200 mm face has been, faster where it bears on less (over the board's end, on an
+    arris, on a raised strip).
+  - It removes steadily, faster the coarser it is and the harder it is pressed, slower in
+    harder wood: 6.7e-4 × coarseness × pressure × 5740 / Janka mm per mm pushed. A cabinet
+    rasp takes 0.05 mm of oak in a 150 mm push with all its face bearing; on the workshop
+    board, its face overhanging an end, about 0.02 mm in a 40 mm push.
   - The flat face lowers what it is rubbed over. Tilted about its line (Shift+wheel) along
-    an arris, it takes a chamfer off it. The round face hollows.
+    an arris, it takes a chamfer off it, fast at first (it bears on the arris alone), then
+    slower as the chamfer widens. The round face hollows.
 - **The card scraper**, flexed, takes a whisper: about 0.006 mm a 100 mm stroke, feathered
   at its sides, and it cannot tear out. It is for cleaning up tear-out and tool marks.
 - **The spokeshave** is a plane with a 40 mm sole.
@@ -660,10 +673,11 @@ included; *Sweep* clears the piles.
   - **The saw:** each slice of kerf it goes down through is the kerf's width times the
     material along the blade's line at that depth (sampled every millimetre, kept per half
     millimetre of depth). It leaves at that chord's two ends.
-  - **The rasps and the scraper:** each bit deeper is the pass's width at that depth (a
-    round face's grows as it goes in) times its length, as far as it is over material.
-  - **The sanding block:** each patch's depth over its ground, as far as that is over
-    material.
+  - **The rasps and the scraper:** their pass's section (a round face's grows as it goes
+    in) times the length its face covered, as far as that is over material (probed every
+    5 mm or so, once for each cut).
+  - **The sanding block:** what its patches' floors take off the surface as mapped when
+    the stroke began (where they overlap, the lowest floor).
   - **The sponge:** its own flow measures what it moves out of the material. That runs on
     the worker, so the last of it arrives just after the stroke ends.
 - **The grains** (`game/workshop/dust.gd`, one MultiMesh):
@@ -684,7 +698,7 @@ included; *Sweep* clears the piles.
 ![Sawdust heaped on the bench where a kerf across the ash board came out at its side](docs/images/dust_sawdust.png)
 
 - **Measured** (`native/tests/test_debris.cpp`, `game/tests/dust`):
-  - against what the board lost: saw 0.1%, sanding block 1.4%, rasps 0.0% (flat and
+  - against what the board lost: saw 0.1%, sanding block 0.4%, rasps 0.7–0.8% (flat and
     half-round), sponge 1.0%;
   - in the workshop, a kerf 5.7 mm deep across the board gives 455 mm³ of sawdust (its
     width × depth × the board's width: 456), all of it in two piles on the bench, one

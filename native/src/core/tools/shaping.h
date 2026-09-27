@@ -7,10 +7,12 @@
 #include <memory>
 
 // Shaping and finishing tools: a rasp, a card scraper and a spokeshave.
-// - A rasp's teeth each take a tiny bite, so it never tears the grain whichever way it
-//   goes; it removes steadily, faster the coarser it is and the harder it is pressed, and
-//   slower in harder wood. Its flat face lowers what it is rubbed over (tilted about its
-//   stroke, it takes a chamfer off an arris); its half-round face hollows.
+// - A rasp's teeth each take a tiny bite on the push, so it never tears the grain; it
+//   removes steadily, faster the coarser it is and the harder it is pressed, and slower in
+//   harder wood. Its face is stiff: it rests on the highest points under it and takes them
+//   down first, only where it has been, faster where it bears on less (an edge, a bump:
+//   tools/rubbing.h). Its flat face lowers what it is rubbed over (tilted about its stroke,
+//   it takes a chamfer off an arris); its half-round face hollows.
 // - A card scraper, flexed, takes a whisper (about a hundredth of a millimetre a stroke)
 //   and cannot tear out: it is for cleaning up tear-out and tool marks.
 // - A spokeshave is a plane with a 40 mm sole. Its sole rests on the work and its blade
@@ -18,8 +20,7 @@
 //   (where a chisel struggles), following convex curves, bridging hollows shorter than
 //   its sole. It is pushed by two hands, and tears out against the grain as a chisel does
 //   (less: its mouth keeps the split short).
-// Rasps and scrapers work back and forth along the line they were set on, as the saw does:
-// every millimetre of travel deepens the pass over the planned length.
+// Rasps and scrapers work back and forth along the line they were set on, as the saw does.
 namespace sdf::tools {
 
 struct Rasp {
@@ -31,7 +32,9 @@ struct Rasp {
 	float tilt_deg = 0.0f;   // the face turned about the stroke's line (a chamfer off an arris)
 
 	Body model() const;
-	// Depth taken per millimetre of travel in `wood`.
+	// Depth taken per millimetre pushed over a point in `wood`, bearing with all its face:
+	// 3.35e-4 mm for a cabinet rasp in oak (a 150 mm push takes 0.05 mm), in proportion
+	// to its coarseness and the pressure, less in harder wood.
 	float removal_per_mm(const Wood &wood) const;
 	// The face's cross-section, `height` above its deepest point.
 	ToolProfile profile(float height) const;
@@ -56,9 +59,11 @@ struct Spokeshave {
 };
 
 // A rasp or scraper set on the work at `contact` and worked back and forth along `path`
-// over `length` mm from there.
-std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Wood &wood, vec3 contact, vec3 normal, vec3 path,
-		float length);
+// over `length` mm from there, cutting on the push (along `path`; the handle is behind),
+// at its rate times the pace (tools/rubbing.h). Reads the work (its shape under the line,
+// its wood) when it is set.
+std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Work &work, vec3 contact, vec3 normal, vec3 path,
+		float length, float pace = 1.0f);
 std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Wood &wood, vec3 contact, vec3 normal,
 		vec3 path, float length);
 

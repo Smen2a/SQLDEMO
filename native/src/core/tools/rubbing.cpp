@@ -128,6 +128,21 @@ void HeightMap::lower(const Region &r, float floor) {
 	over(r, [&](std::size_t k) { h_[k] = std::min(h_[k], floor); });
 }
 
+float HeightMap::removed(const std::vector<std::pair<Region, float>> &cuts) const {
+	std::vector<float> lowest(h_.size(), std::numeric_limits<float>::infinity());
+	for (const auto &cut : cuts) {
+		const float floor = cut.second;
+		over(cut.first, [&](std::size_t k) { lowest[k] = std::min(lowest[k], floor); });
+	}
+	double volume = 0.0;
+	for (std::size_t k = 0; k < h_.size(); ++k) {
+		if (h_[k] != kNone && lowest[k] < h_[k]) {
+			volume += double(h_[k] - lowest[k]);
+		}
+	}
+	return float(volume) * step_.x * step_.y;
+}
+
 float HeightMap::share_above(vec2 lo, vec2 hi, float level) const {
 	if (nx_ == 0) {
 		return 0.0f;
@@ -166,7 +181,8 @@ struct Patch {
 	Region cut_region;
 	float cut_floor = 0.0f, cut_depth = 0.0f;
 	float cut_typical = 0.0f; // how far below most of its ground its floor is
-	float dusted = 0.0f; // mm^3 of its dust reported
+	float dusted = 0.0f;  // mm^3 of its dust reported
+	int dust_version = 0; // the cut it was reported for
 
 	Region ground() const {
 		Region g = centre;
@@ -183,6 +199,7 @@ public:
 		const vec2 lo = face_.line ? vec2(face_.from - half_.x, -half_.y) : vec2(-kRubReach);
 		const vec2 hi = face_.line ? vec2(face_.to + half_.x, half_.y) : vec2(kRubReach);
 		map_ = HeightMap(work.body, work.octree, plane_, lo, hi, face_.line ? kLineStep : kFreeStep);
+		base_ = map_;
 		at_ = face_.line ? vec2(std::clamp(0.0f, face_.from, face_.to), 0.0f) : vec2(0.0f);
 		begin(at_);
 		const Patch &p = patches_.back();
@@ -257,21 +274,46 @@ public:
 		return s;
 	}
 
-	// Its dust: each patch's depth over its ground, as far as that is over material (probed
-	// half way down), less what was reported; it leaves from where the face is.
+	// Its dust, less what was reported, leaving from where the face is: a free face's, what
+	// its patches' floors take off the surface as mapped (where they overlap, the lowest);
+	// a line face's (one patch, with its own section), its depth over its ground as far as
+	// that is over material (probed half way down).
 	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
 		out.ended = out.ended || ended;
+		if (!face_.section) {
+			std::vector<std::pair<Region, float>> cuts;
+			int versions = 0;
+			for (const Patch &p : patches_) {
+				if (p.cut) {
+					cuts.push_back({p.cut_region, p.cut_floor});
+					versions += p.version + 1000 * p.id;
+				}
+			}
+			if (versions != dusted_versions_) {
+				const float taken = base_.removed(cuts);
+				pending_ += std::max(taken - dusted_, 0.0f);
+				dusted_ = std::max(dusted_, taken);
+				dusted_versions_ = versions;
+			}
+		}
 		for (Patch &p : patches_) {
-			if (!p.cut) {
+			if (!face_.section) {
+				break;
+			}
+			if (!p.cut || p.dust_version == p.version) {
 				continue;
 			}
+			// Probed every 5 mm or so (at least 7 by 7), once for each cut.
 			const Region &r = p.cut_region;
+			const int nx = std::clamp(int(std::ceil((r.hi.x - r.lo.x) / 5.0f)), 7, 64);
+			const int ny = std::clamp(int(std::ceil((r.hi.y - r.lo.y) / 5.0f)), 7, 32);
 			const float fraction = material_fraction(body, octree, frame(r, p.cut_floor + p.cut_depth), r.lo, r.hi,
-					std::max(0.5f * p.cut_depth, 0.005f), 7, 7);
+					std::max(0.5f * p.cut_depth, 0.005f), nx, ny);
 			const float across = face_.section ? face_.section(p.cut_depth) : (r.hi.y - r.lo.y) * p.cut_depth;
 			const float taken = across * (r.hi.x - r.lo.x) * fraction;
 			pending_ += std::max(taken - p.dusted, 0.0f);
 			p.dusted = std::max(p.dusted, taken);
+			p.dust_version = p.version;
 		}
 		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
 			return;
@@ -451,7 +493,8 @@ private:
 	Frame plane_;
 	float rate_;
 	vec2 half_;
-	HeightMap map_;
+	HeightMap map_;  // the surface as the patches finished so far left it
+	HeightMap base_; // as it was
 	std::vector<Patch> patches_;
 	std::vector<std::pair<int, int>> held_; // (id, version) of the cuts the session holds
 	int next_id_ = 1;
@@ -459,9 +502,66 @@ private:
 	float heading_ = 1.0f;
 	float contact_ = 1.0f;
 	float pending_ = 0.0f; // dust held back (mm^3)
+	float dusted_ = 0.0f;  // a free face's dust reported (mm^3)
+	int dusted_versions_ = 0;
 };
 
 } // namespace
+
+Frame settle(const Work &work, const Frame &plane, vec2 half) {
+	// Heights under the face, 9 by 5.
+	std::vector<vec3> at;
+	for (int j = 0; j < 5; ++j) {
+		for (int i = 0; i < 9; ++i) {
+			const vec2 p(half.x * (float(i) / 4.0f - 1.0f), half.y * (float(j) / 2.0f - 1.0f));
+			const auto hit = raycast(work.body, work.octree, plane.point({p.x, p.y, 10.0f}), -plane.z, 30.0f, 1e-3f);
+			if (hit) {
+				at.push_back({p.x, p.y, gl::dot(hit->point - plane.origin, plane.z)});
+			}
+		}
+	}
+	// The hand holds it flat to the work's own face: of the planes through three of the points
+	// (within 10 degrees of how it was set), the one most of the points lie on (a bump, a
+	// groove or the rounded end of the board do not tip it); of those, the least turned.
+	const float cos_most = std::cos(10.0f * 3.14159265f / 180.0f);
+	constexpr float kOn = 0.005f; // (the rays find the surface to a micrometre; a plane a hair
+	                               // tilted over a long face could otherwise take in two levels)
+	vec3 best(0, 0, 1);
+	int support = 0;
+	float turned = 0.0f;
+	const std::size_t n = at.size();
+	for (std::size_t i = 0; i < n; ++i) {
+		for (std::size_t j = i + 1; j < n; ++j) {
+			for (std::size_t k = j + 1; k < n; ++k) {
+				vec3 normal = gl::cross(at[j] - at[i], at[k] - at[i]);
+				const float length = gl::length(normal);
+				if (length < 1.0f) {
+					continue; // (nearly in a line)
+				}
+				normal = normal / length;
+				if (normal.z < 0.0f) {
+					normal = -normal;
+				}
+				if (normal.z < cos_most) {
+					continue;
+				}
+				int on = 0;
+				for (const vec3 &p : at) {
+					on += std::fabs(gl::dot(p - at[i], normal)) <= kOn;
+				}
+				if (on > support || (on == support && normal.z > turned)) {
+					best = normal;
+					support = on;
+					turned = normal.z;
+				}
+			}
+		}
+	}
+	if (support < 3) {
+		return plane;
+	}
+	return Frame::at(plane.origin, gl::normalize(plane.direction(best)), plane.x);
+}
 
 std::unique_ptr<Stroke> rub_stroke(const RubFace &face, const Work &work, const Frame &plane, float pace) {
 	return std::make_unique<RubStroke>(face, work, plane, pace);

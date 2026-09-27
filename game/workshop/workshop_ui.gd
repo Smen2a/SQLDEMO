@@ -221,6 +221,8 @@ func stroke_text() -> String:
 			parts.append("on %.0f%% of its face" % (100.0 * contact))
 			if contact < 0.5:
 				lines.append("resting on the high spots" if contact > 0.0 else "off the work")
+			if tool != "sanding_block":
+				lines.append("cuts on the push")
 		"saw":
 			parts.append("%.2f mm deep" % state.depth)
 			lines.append("cuts on the push")

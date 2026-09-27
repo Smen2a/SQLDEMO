@@ -286,8 +286,9 @@ TEST(sawdust_is_the_kerf_taken) {
 	CHECK(ends && d.shaving.empty() && d.chips.empty());
 }
 
-// A sanding block's dust is the depth of its pass over the patch it covered; a rasp's, the
-// depth of its pass over its face's width and length. Both leave where the tool is.
+// A sanding block's dust is the depth of its patches over the ground they covered; a
+// rasp's, the depth of its pass over its face's width and where its face went. Both leave
+// where the tool is.
 TEST(sanding_and_rasp_dust_is_what_they_take) {
 	const Board ash;
 	SandingBlock block;
@@ -302,7 +303,7 @@ TEST(sanding_and_rasp_dust_is_what_they_take) {
 	const Debris d = rub(ash, *sanding, circle, edits);
 	Board sanded = ash;
 	sanded.add(edits);
-	const float taken = removed(ash, sanded, {-70.0f, -40.0f}, {40.0f, 40.0f}, 0.5f);
+	const float taken = removed(ash, sanded, {-79.5f, -49.5f}, {79.5f, 49.5f}, 0.5f); // (its patches lie along its way)
 	std::printf("    sanding block: %zu puffs, %.1f mm^3 of dust; the board lost %.1f mm^3 (%.1f%%)\n", d.dust.size(),
 			double(d.dust_volume()), double(taken), double(100.0f * (d.dust_volume() - taken) / taken));
 	CHECK(taken > 5.0f && std::fabs(d.dust_volume() - taken) < 0.2f * taken);
@@ -312,11 +313,12 @@ TEST(sanding_and_rasp_dust_is_what_they_take) {
 	for (const bool round : {false, true}) {
 		Rasp rasp = cabinet ? cabinet->rasp : Rasp{};
 		rasp.round = round;
-		auto rasping = rasp_stroke(rasp, ash.work().wood({0, 0, 10}), {-30, 0, kTop}, kUp, {1, 0, 0}, 60.0f);
+		auto rasping = rasp_stroke(rasp, ash.work(), {-30, 0, kTop}, kUp, {1, 0, 0}, 60.0f, 3.0f);
 		const Debris r = rub(ash, *rasping, reciprocate({-30, 0, kTop}, {30, 0, kTop}, 10), edits);
 		Board rasped = ash;
 		rasped.add(edits);
-		const float lost = removed(ash, rasped, {-32.0f, -14.0f}, {32.0f, 14.0f}, 0.25f);
+		// (Its 200 mm face covers the board's length.)
+		const float lost = removed(ash, rasped, {-79.5f, -14.0f}, {79.5f, 14.0f}, 0.25f);
 		std::printf("    %s rasp: %zu puffs of %.2f mm grains, %.1f mm^3; the board lost %.1f mm^3 (%.1f%%)\n",
 				round ? "half-round" : "flat", r.dust.size(), r.dust.empty() ? 0.0 : double(r.dust[0].grain),
 				double(r.dust_volume()), double(lost), double(100.0f * (r.dust_volume() - lost) / lost));

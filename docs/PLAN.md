@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-3 done; T4-4 next)
+### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-4 done; T4-5 next)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -262,8 +262,21 @@ one tool at a time, each tried before the next.
   strokes, the back, the kerf's span, small steps through); `tool_planning` (pull, then
   push, in the workshop).
 
+**T4-4, the rasp: done.**
+- A rubbed face along its line (`tools/rubbing`): 200 × 25 mm, cutting on the push only,
+  resting on high spots, only where its face went (the board's whole length, for a face as
+  long as the board), faster where it bears on less (over an end, on an arris, a strip).
+- 6.7e-4 × coarseness × pressure × 5740 / Janka mm per mm pushed: a cabinet rasp takes
+  0.05 mm of oak in a 150 mm push, bearing fully.
+- Dust: probed every 5 mm or so once for each cut (was 7 by 7 over the whole pass); the
+  block's from its map (the union of its patches' floors). Within 1% of what the board lost.
+- Found in the workshop: the pointer's normal (a plane through four hits 4 mm apart) was 2°
+  off beside an earlier cut, and a 25 mm face set by it bore on one edge and cut a wedge.
+  Rubbed faces now settle: the plane most of 45 points under the face lie on, to 5 µm (a
+  0.03 mm band let a long face tilt a hair to take in two levels, and rest on its far end).
+- Tests: `test_shaping` (push only, the rate, a raised strip first, an arris chamfered).
+
 **Next:**
-- **T4-4 Rasp.** Removal only where its face passes, resting on high spots; calibrated rates.
 - **T4-5 Card scraper.** About 0.01 mm a pass, only where the burr touches.
 - **T4-6 Spokeshave.** The chisel's access and chip rules, its sole's rest, a real depth and
   speed.

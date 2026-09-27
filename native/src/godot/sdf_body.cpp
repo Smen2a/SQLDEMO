@@ -500,7 +500,7 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 	const float length = float(double(settings.get("length", 40.0)));
 	const float pace = float(double(settings.get("pace", 1.0))); // the workshop's pace: rates times it
 	if (tool == "rasp") {
-		return tools::rasp_stroke(rasp_from(settings), work.wood(p - n * 0.5f), p, n, a, length);
+		return tools::rasp_stroke(rasp_from(settings), work, p, n, a, length, pace);
 	}
 	if (tool == "scraper") {
 		tools::CardScraper scraper;

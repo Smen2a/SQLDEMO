@@ -28,7 +28,8 @@ extends Node3D
 ##   saw             stroke it back and forth along its line: the kerf deepens on each push
 ##                   (towards its toe), slower through a long chord and harder wood, as far
 ##                   as its back lets it (60 mm); the kerf runs where the teeth have been
-##   rasp            back and forth along its line: takes the surface down steadily and never
+##   rasp            back and forth along its line, cutting on the push: takes the surface
+##                   down steadily where its face goes, resting on the high spots, and never
 ##                   tears the grain; tilted, chamfers an arris; its round face hollows
 ##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
 ##                   flat face, over a curve, bridging hollows shorter than its sole

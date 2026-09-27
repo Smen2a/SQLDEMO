@@ -44,19 +44,31 @@ std::vector<Edit> worked(Stroke &stroke, vec3 start, float length, int strokes) 
 
 } // namespace
 
-// A rasp removes steadily: a cabinet rasp takes about a quarter of a millimetre of ash in
-// ten 60 mm strokes; a coarse one twice that, a fine one half, walnut goes faster, pressing
-// harder takes more. It never tears out, whichever way it goes.
-TEST(a_rasp_removes_steadily_and_never_tears_out) {
+// A rasp removes steadily, on the push: a cabinet rasp takes 0.05 mm of oak in a 150 mm
+// push with all its face on the work (more where it bears on less: here its 200 mm face
+// overhangs the board's end); nothing on the pull. A coarse one twice that, a fine one
+// half, walnut goes faster, pressing harder takes more. It never tears out.
+TEST(a_rasp_removes_steadily_on_the_push_and_never_tears_out) {
 	Work_ ash(demo::board(mat::Ash));
 	const Wood wood = ash.work().wood({0, 0, 10});
+	const Wood oak = Wood::of(MaterialTable::standard()[mat::Oak]);
 	Rasp cabinet;
-	auto stroke = rasp_stroke(cabinet, wood, {-30, 0, kTop}, kUp, {1, 0, 0}, 60.0f);
-	ash.apply(worked(*stroke, {-30, 0, kTop}, 60.0f, 10));
+	CHECK(std::fabs(cabinet.removal_per_mm(oak) * 150.0f - 0.05f) < 0.001f);
+	auto stroke = rasp_stroke(cabinet, ash.work(), {-30, 0, kTop}, kUp, {1, 0, 0}, 60.0f);
+	stroke->move_to({30, 0, kTop});
+	const float pushed = stroke->state().depth;
+	stroke->move_to({-30, 0, kTop});
+	CHECK(stroke->state().depth == pushed && pushed > 0.0f); // the pull takes nothing
+	for (int i = 1; i <= 8; ++i) {
+		stroke->move_to({i % 2 ? 30.0f : -30.0f, 0, kTop});
+	}
+	ash.apply(stroke->edits());
 	const float taken = kTop - ash.height(0, 0);
-	const float expected = cabinet.removal_per_mm(wood) * 600.0f;
-	std::printf("    a cabinet rasp, ten 60 mm strokes on ash: %.3f mm (%.3f expected)\n", double(taken), double(expected));
-	CHECK(std::fabs(taken - expected) < 0.02f && taken > 0.2f && taken < 0.3f);
+	// Five 60 mm pushes, its face three quarters on the board.
+	const float full = cabinet.removal_per_mm(wood) * 300.0f;
+	std::printf("    a cabinet rasp, five 60 mm pushes on ash: %.3f mm (%.3f bearing fully, on %.0f%% of its face)\n",
+			double(taken), double(full), double(100.0f * stroke->state().contact));
+	CHECK(taken > full / 0.8f - 0.01f && taken < full / 0.75f + 0.01f);
 	CHECK(stroke->edits().size() == 1); // one pass, no chips, uphill or down
 
 	Rasp coarse = cabinet, fine = cabinet, hard = cabinet;
@@ -70,6 +82,52 @@ TEST(a_rasp_removes_steadily_and_never_tears_out) {
 	CHECK(cabinet.removal_per_mm(walnut.work().wood({0, 0, 10})) > cabinet.removal_per_mm(wood));
 }
 
+// Its stiff face rests on what stands highest: rasped over a raised strip, it takes the
+// strip down and leaves the face beside it alone.
+TEST(a_rasp_rests_on_the_high_spots) {
+	Body b = demo::board(mat::Ash);
+	Edit strip;
+	strip.prim = Primitive::box({0, 0, kTop + 0.5f}, {30, 4, 0.5f});
+	strip.op = Op::Union;
+	strip.material = mat::Ash;
+	CHECK(b.add(strip));
+	Work_ raised(b);
+	auto stroke = rasp_stroke(Rasp{}, raised.work(), {-30, 0, kTop + 1.0f}, kUp, {1, 0, 0}, 60.0f);
+	for (int i = 1; i <= 6; ++i) {
+		stroke->move_to({i % 2 ? 30.0f : -30.0f, 0, kTop + 1.0f});
+	}
+	raised.apply(stroke->edits());
+	const float took = kTop + 1.0f - raised.height(0, 0);
+	std::printf("    three pushes over an 8 mm strip: %.2f mm off it, on %.0f%% of its face\n", double(took),
+			double(100.0f * stroke->state().contact));
+	CHECK(took > 0.1f && took < 1.0f);
+	CHECK(std::fabs(raised.height(0, 10) - kTop) < 1e-3f);
+}
+
+// Set on the board with a normal two degrees off (as the pointer's can be), a rasp still
+// lies flat on it and takes an even cut across its face, not a wedge off one side; nor does
+// an earlier shallow cut under part of its long face tip it.
+TEST(a_rasp_set_a_little_askew_lies_flat) {
+	Body board = demo::board(mat::Ash);
+	Edit shaved;
+	shaved.prim = Primitive::box({-65, 0, kTop}, {15, 60, 0.04f});
+	shaved.op = Op::Subtract;
+	CHECK(board.add(shaved)); // 0.04 mm off x -80..-50
+	Work_ ash(board);
+	auto stroke = rasp_stroke(Rasp{}, ash.work(), {-30, 0, kTop}, gl::normalize(vec3(0, -0.036f, 1)), {1, 0, 0}, 60.0f,
+			5.0f);
+	for (int i = 1; i <= 5; ++i) {
+		stroke->move_to({i % 2 ? 30.0f : -30.0f, 0, kTop});
+	}
+	ash.apply(stroke->edits());
+	const float left = kTop - ash.height(0, -8), right = kTop - ash.height(0, 8);
+	const float before = kTop - ash.height(-20, 0), after = kTop - ash.height(20, 0);
+	std::printf("    set 2 degrees askew: %.3f and %.3f mm off either side, %.3f and %.3f along; on %.0f%% of its face\n",
+			double(left), double(right), double(before), double(after), double(100.0f * stroke->state().contact));
+	CHECK(left > 0.1f && std::fabs(left - right) < 0.005f && std::fabs(before - after) < 0.005f);
+	CHECK(stroke->state().contact > 0.5f);
+}
+
 // Tilted 45 degrees about its stroke along the board's front top arris, a rasp takes a
 // chamfer off it: the arris goes, the faces either side keep their places a little way off.
 TEST(a_tilted_rasp_chamfers_an_arris) {
@@ -78,14 +136,15 @@ TEST(a_tilted_rasp_chamfers_an_arris) {
 	rasp.tilt_deg = -45.0f; // set on the top face, turned out over the front edge
 	// The front top arris runs along x at y = -50, z = 12.5.
 	const vec3 arris{-30, -50, kTop};
-	auto stroke = rasp_stroke(rasp, ash.work().wood({0, 0, 10}), arris, kUp, {1, 0, 0}, 60.0f);
+	auto stroke = rasp_stroke(rasp, ash.work(), arris, kUp, {1, 0, 0}, 60.0f);
 	for (int i = 1; i <= 30; ++i) {
 		stroke->move_to(arris + vec3(i % 2 ? 60.0f : 0.0f, 0, 0));
 	}
 	ash.apply(stroke->edits());
 	const float corner = ash.body.distance({0, -49.6f, kTop - 0.4f}), top = ash.body.distance({0, -40, kTop - 0.1f});
-	std::printf("    after 30 strokes: the old corner %.2f mm outside the work, the top face 10 mm in %.2f\n", double(corner),
-			double(top));
+	std::printf("    after 15 pushes: %.2f mm into the corner, the old corner %.2f mm outside the work, the top face "
+				"10 mm in %.2f\n",
+			double(stroke->state().depth), double(corner), double(top));
 	CHECK(corner > 0.1f && top < 0.0f);
 }
 

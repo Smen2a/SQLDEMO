@@ -749,7 +749,7 @@ std::unique_ptr<Stroke> saw_stroke(const Saw &saw, const Work &work, vec3 contac
 
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,
 		vec3 along, float pace) {
-	const Frame plane = Frame::at(contact, normal, along);
+	const Frame plane = settle(work, Frame::at(contact, normal, along), {0.5f * block.length, 0.5f * block.breadth});
 	RubFace face;
 	face.length = block.length;
 	face.width = block.breadth;
