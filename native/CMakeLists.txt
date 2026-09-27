@@ -41,6 +41,7 @@ add_library(sdf_core STATIC
 	src/core/tools/cutting.cpp
 	src/core/tools/debris.cpp
 	src/core/tools/edges.cpp
+	src/core/tools/layout.cpp
 	src/core/tools/rubbing.cpp
 	src/core/tools/shaping.cpp
 	src/core/tools/smoothing.cpp
@@ -92,6 +93,7 @@ if(ZLIB_FOUND)
 		tests/test_edges.cpp
 		tests/test_rubbing.cpp
 		tests/test_sawing.cpp
+		tests/test_layout.cpp
 	)
 	target_link_libraries(sdf_tests PRIVATE sdf_core sdf_demo sdf_io)
 	target_compile_definitions(sdf_tests PRIVATE SDF_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")

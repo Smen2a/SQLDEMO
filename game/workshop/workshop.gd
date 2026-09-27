@@ -2,7 +2,7 @@ extends Node3D
 
 ## The workshop: a room with a workbench, and eight hand tools, every one an SDF body. You
 ## walk about it in first person (WASD, the mouse to look, Shift to hurry; room.gd,
-## player.gd); the hotbar at the bottom holds the tools (1 to 8, the wheel; 0 empty-handed),
+## player.gd); the hotbar at the bottom holds the tools (1 to 9, the wheel; 0 empty-handed),
 ## the one in hand held in view. E picks up a piece of work lying about (carried in front
 ## of the eyes; R turns it, the wheel reaches it), takes a new board from a stack on the
 ## lumber rack, or lets go of what is carried: let go on the vise, an empty vise takes it,
@@ -88,6 +88,7 @@ const Room := preload("res://workshop/room.gd")
 const Player := preload("res://workshop/player.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 const Debris := preload("res://workshop/debris.gd")
+const Layout := preload("res://workshop/layout.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
@@ -138,6 +139,7 @@ const INTENSITY := {
 	"scraper": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_block": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_sponge": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
+	"layout": ["distance", 0.5, 1.0, 60.0, "%.1f mm in"], # (the marking gauge's)
 }
 ## And what Shift+wheel sets (a chisel's or gouge's angle to the work: 60 or more chops).
 const TILT := {
@@ -153,7 +155,7 @@ const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.
 const DIRECT_LENGTH := {"chisel": 300.0, "gouge": 300.0, "spokeshave": 300.0, "rasp": 150.0, "scraper": 150.0}
 
 const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper", "sanding_block",
-		"sanding_sponge"]
+		"sanding_sponge", "layout"]
 const TOOL_COLOURS := {
 	"chisel": Color(1.0, 0.82, 0.25),
 	"gouge": Color(1.0, 0.58, 0.2),
@@ -163,6 +165,7 @@ const TOOL_COLOURS := {
 	"scraper": Color(0.95, 0.95, 0.55),
 	"sanding_block": Color(0.6, 1.0, 0.45),
 	"sanding_sponge": Color(1.0, 0.55, 0.8),
+	"layout": Color(1.0, 0.45, 0.3),
 }
 const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
@@ -177,6 +180,7 @@ var settings := {
 	"scraper": {"pressure": 1.0},
 	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
+	"layout": {"variant": "gauge", "distance": 6.0}, # a marking gauge (mm in from the edge) or a knife
 }
 var wood := "board" ## the board in the vise at the start (and set_wood's): board, board_oak or board_walnut
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
@@ -223,6 +227,7 @@ var _lock := {}
 var _plan := {}           # what SdfBody.plan_stroke made of it
 ## The chisels and gouges (SdfBody.tool_catalog()): family -> [{id, label, width, ...}].
 var variants := {}
+var layout # layout.gd: the marking gauge and knife, and the lines they leave
 var _progress := 0.0      # mm a push tool has gone along its path
 var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
@@ -257,13 +262,18 @@ func _ready() -> void:
 	add_child(debris)
 	for tool in TOOL_NAMES:
 		var body = _new_body()
-		body.load_tool(tool, settings[tool])
+		_load_tool(body, tool)
 		tools[tool] = body
 		_show_tool(tool, 0.0) # (out of sight until it is taken from the hotbar)
 	for v in tools["chisel"].tool_catalog():
 		if not variants.has(v.family):
 			variants[v.family] = []
 		variants[v.family].append(v)
+	variants["layout"] = [{"id": "gauge", "family": "layout", "label": "Marking gauge"},
+			{"id": "knife", "family": "layout", "label": "Marking knife and square"}]
+	layout = Layout.new()
+	layout.workshop = self
+	add_child(layout)
 	# An ash board in the vise.
 	_clamp(_new_piece(wood))
 
@@ -583,6 +593,7 @@ func select_tool(tool: String) -> void:
 	_drop_plan()
 	current = tool
 	_opacity = 0.0
+	_orbit.wheel_zoom = tool != "layout" # (with the layout tool, the wheel sets the gauge)
 	_show_tool_in_hand()
 	_ui.refresh()
 
@@ -597,6 +608,9 @@ func next_slot(steps: int) -> void:
 ## Moves the pointer to a screen position and looks at what is under it.
 func hover_screen(position: Vector2) -> void:
 	_pointer = position
+	if current == "layout":
+		layout.hover(position)
+		return
 	if _state == IDLE:
 		_hit = _surface_at(position)
 
@@ -635,7 +649,7 @@ func _surface_at(position: Vector2) -> Dictionary:
 ## `free` (Alt): no edge lock.
 func lock(position: Vector2, free := false) -> void:
 	_right_held = true
-	if _state != IDLE or current == "":
+	if _state != IDLE or current == "" or current == "layout":
 		return
 	hover_screen(position)
 	if _hit.is_empty() or _hit.get("stale", false):
@@ -781,6 +795,9 @@ func adjust(steps: int, tilt: bool, fine := false) -> void:
 ## tool in hand sets to work where the pointer is on the board, without a plan: the sanding
 ## tools (and a chop) at once, the others once the drag shows which way they go.
 func press(position: Vector2, free := false) -> void:
+	if current == "layout":
+		layout.press(position)
+		return
 	if _state == PLANNING:
 		act()
 		return
@@ -822,6 +839,7 @@ func act() -> void:
 		return
 	_state = ACTING
 	_debris_step = _step_key(board.get_stats().get("steps", 0) + 1)
+	layout.forget_redo(clamped)
 	if _lock.get("direct", false):
 		# What the stroke comes to, for the line by the pointer (a chisel's, gouge's or
 		# spokeshave's: the plan it was made from; nothing for the others).
@@ -838,6 +856,9 @@ func act() -> void:
 ## Each follows at its working speed (_process).
 func drag_screen(position: Vector2) -> void:
 	_pointer = position
+	if current == "layout":
+		layout.drag(position)
+		return
 	if _state == ARMED:
 		# A direct stroke goes the way the drag goes, once it has gone far enough to tell.
 		var at = _lock.plane.intersects_ray(camera.project_ray_origin(position), camera.project_ray_normal(position))
@@ -873,6 +894,9 @@ func drag_screen(position: Vector2) -> void:
 ## Left button up: the cut is finished and becomes one undo step. With the right button
 ## still held, the next pass is planned from the same spot.
 func release() -> void:
+	if current == "layout":
+		layout.release()
+		return
 	if _state == ARMED:
 		_drop_plan() # pressed and let go without a drag: nothing to make
 		return
@@ -963,7 +987,7 @@ func _drop_plan() -> void:
 	_plan = {}
 	if board != null:
 		board.clear_plan()
-	_orbit.wheel_zoom = true
+	_orbit.wheel_zoom = current != "layout" # (with the layout tool, the wheel sets the gauge)
 
 
 ## A tool's visibility: `opacity` 0 hides it (the tool in hand, until it works).
@@ -995,8 +1019,10 @@ func undo() -> void:
 		_refresh_collider(clamped)
 		_ui.refresh()
 		return
-	# What the stroke took off goes back (this piece's, from that step on).
+	# What the stroke took off goes back (this piece's, from that step on), and the lines it
+	# scribed.
 	debris.undo_step(_step_key(board.get_stats().get("steps", 0)), _step_key(STEPS_PER_PIECE))
+	layout.undo_step(clamped, board.get_stats().get("steps", 0))
 	board.undo()
 
 
@@ -1004,6 +1030,8 @@ func redo() -> void:
 	cancel()
 	if board != null:
 		board.redo()
+		board.flush()
+		layout.redo_step(clamped, board.get_stats().get("steps", 0))
 
 
 ## A fresh board of `choice` (board, board_oak, board_walnut) in the vise, and every other
@@ -1247,13 +1275,21 @@ func _step_key(step: int) -> int:
 	return board.get_meta("piece_id", 0) * STEPS_PER_PIECE + step
 
 
+## Loads a tool's model into `body` (the Layout slot's: its gauge, set, or its knife).
+func _load_tool(body, tool: String) -> void:
+	if tool == "layout":
+		body.load_tool("marking_gauge" if settings.layout.variant == "gauge" else "marking_knife", settings.layout)
+	else:
+		body.load_tool(tool, settings[tool])
+
+
 func set_setting(tool: String, key: String, value) -> void:
 	settings[tool][key] = value
 	# A chisel's or gouge's model is its variant, held at its angle; a sanding block's, its
 	# block or pad; the others' look does not change.
 	if ((tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle")) or \
-			(tool == "sanding_block" and key == "variant"):
-		tools[tool].load_tool(tool, settings[tool])
+			(tool == "sanding_block" and key == "variant") or tool == "layout":
+		_load_tool(tools[tool], tool)
 		if tool == current:
 			_show_tool(tool, _opacity)
 	if _state == PLANNING and tool == current:
@@ -1286,10 +1322,10 @@ func stroke_state() -> Dictionary:
 # --- per frame ---------------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
-	# The hotbar, walking or working: 1 to 8 the tools, 0 empty hands.
+	# The hotbar, walking or working: 1 to 9 the tools, 0 empty hands.
 	if event is InputEventKey and event.pressed and not event.echo:
 		var code := (event as InputEventKey).keycode
-		if code >= KEY_1 and code <= KEY_8:
+		if code >= KEY_1 and code <= KEY_9:
 			select_tool(TOOL_NAMES[code - KEY_1])
 			return
 		if code == KEY_0:
@@ -1320,7 +1356,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					unlock()
 			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
-				if button.pressed and _state == PLANNING:
+				if button.pressed and current == "layout":
+					layout.adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.ctrl_pressed)
+				elif button.pressed and _state == PLANNING:
 					adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.shift_pressed,
 							button.ctrl_pressed)
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -1594,7 +1632,7 @@ func _along(normal: Vector3) -> Vector3:
 func _draw_outline() -> void:
 	var mesh: ImmediateMesh = _outline.mesh
 	mesh.clear_surfaces()
-	if current == "" or _engaged or mode != Mode.WORK:
+	if current == "" or current == "layout" or _engaged or mode != Mode.WORK:
 		return
 	var n: Vector3
 	var p: Vector3

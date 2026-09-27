@@ -20,8 +20,9 @@ the world is in metres, the bench top at y = 0 with the vise at its middle.
 - **WASD** or the arrows walk (1.5 m/s), **Shift** hurries (3 m/s), the mouse looks about.
   Esc frees the mouse; a click takes it back.
 - **The hotbar** along the bottom holds the tools: a chisel and a carving gouge (each in
-  several kinds), a back saw, a rasp, a spokeshave, a card scraper, a sanding block and a
-  sanding sponge. Keys **1 to 8** (or a click, or the wheel) put one in hand, held in view;
+  several kinds), a back saw, a rasp, a spokeshave, a card scraper, a sanding block, a
+  sanding sponge, and the layout tools (a marking gauge, a knife and square). Keys **1 to 9**
+  (or a click, or the wheel) put one in hand, held in view;
   **0** empties the hands. Every tool is an SDF body, built by the engine in steel, brass,
   ash, walnut, cork and abrasive.
 - **E** does what the line under the crosshair says, within 2 m:
@@ -47,7 +48,20 @@ there, as below. **Esc** drops a plan or a stroke in progress, and with nothing 
 steps back to your own eyes. With the vise empty there is nothing to step up to; the line
 under the crosshair says to put a piece in it.
 
-1. **Take a tool.** Press 1 to 8 (or click it on the hotbar); Tab (or the panel) picks its
+**Laying out** (9, `game/workshop/layout.gd`), as a joiner marks the work before cutting it:
+- **The marking gauge.** The wheel sets it (0.5 mm a notch, Ctrl finely). Its fence rides
+  the face beside the edge nearest the pointer, and the line shows where it would go:
+  parallel to that edge, that far in, on the face under the pointer.
+- **The knife and square** (Tab). The square's stock rides the nearest edge, and the line
+  runs across the face, square to it, through the pointer.
+- **Scribing.** A click scribes the line the whole way across the face; a drag, only as
+  far as it goes. The line is a real cut, a knife's V 0.3 mm deep (core
+  `tools/layout.h`), and one undo step.
+- **Marks.** The line is also a mark on the piece, in its body space so it moves with the
+  piece. Marks are drawn while a tool is in hand, and undo and redo take them with their
+  cuts.
+
+1. **Take a tool.** Press 1 to 9 (or click it on the hotbar); Tab (or the panel) picks its
    kind. It stays out of sight while you aim, so it never hides the spot you are working
    on.
 2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,

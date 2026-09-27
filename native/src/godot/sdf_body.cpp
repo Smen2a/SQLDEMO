@@ -2,6 +2,7 @@
 
 #include "tools/catalog.h"
 #include "tools/edges.h"
+#include "tools/layout.h"
 #include "tools/rubbing.h"
 
 #include "demo/gallery.h"
@@ -341,6 +342,12 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 		model = block_from(settings).model();
 	} else if (name == "sanding_sponge") {
 		model = tools::SandingSponge{}.model();
+	} else if (name == "marking_gauge") {
+		tools::MarkingGauge gauge;
+		gauge.distance = float(double(settings.get("distance", 6.0)));
+		model = gauge.model();
+	} else if (name == "marking_knife") {
+		model = tools::MarkingKnife{}.model();
 	} else {
 		UtilityFunctions::push_error("SdfBody: unknown tool ", name);
 		return false;
@@ -531,6 +538,11 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 		sponge.pressure = float(double(settings.get("pressure", 1.0)));
 		sponge.hardness = work.wood(p - n * 0.5f).hardness;
 		return tools::hand_sanding_stroke(sponge, p, n, a, 0.25f, pace);
+	}
+	if (tool == "scribe") {
+		// A marking gauge's or knife's line: a narrow V drawn along it, `depth` deep.
+		return tools::chisel_stroke(tools::scribe_edge(), p, n, a,
+				float(double(settings.get("depth", double(tools::kScribeDepth)))));
 	}
 	UtilityFunctions::push_error("SdfBody: unknown tool ", tool);
 	return nullptr;

@@ -1,12 +1,13 @@
 extends CanvasLayer
 
-## The workshop's controls: the hotbar (the tools, 1 to 8; 0 empty hands), a crosshair and
+## The workshop's controls: the hotbar (the tools, 1 to 9; 0 empty hands), a crosshair and
 ## what E would do while walking; at the bench, the tool in hand's settings, the wood, undo /
 ## redo / reset, and a status line (edits, how long the last edit took to apply and upload,
 ## GPU frame time).
 
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
-		"spokeshave": "5 Spokeshave", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge"}
+		"spokeshave": "5 Spokeshave", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
+		"layout": "9 Layout"}
 ## What stands in a planned cut's way (SdfBody.plan_stroke's warnings), in words.
 const WARNINGS := {
 	"skates": "skates on its bevel: tip it past %d°",
@@ -38,7 +39,7 @@ const SLOT := Vector2(92, 40) # a hotbar slot's size (pixels)
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
 		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
-const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-8, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
+const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
 		"E: pick up, let go (over the vise: into it), take a board from the rack, work at the bench   F: out of the vise   R: turn what you carry"
 
 var workshop
@@ -116,8 +117,14 @@ func _ready() -> void:
 	_choice(sponge, "Grit", ["60", "120", "220"], 1,
 			func(i): workshop.set_setting("sanding_sponge", "grit", [60, 120, 220][i]))
 	_slider(sponge, "sanding_sponge", "pressure", "Pressure", "%.2f")
+	# Layout: the marking gauge (how far in it is set) or the knife and square.
+	var layout := VBoxContainer.new()
+	left.add_child(layout)
+	_variants["layout"] = _choice(layout, "Kind", workshop.variants.layout.map(func(v): return v.label), 0,
+			func(i): workshop.set_setting("layout", "variant", workshop.variants.layout[i].id))
+	_slider(layout, "layout", "distance", "Gauge", "%.1f mm")
 	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "rasp": rasp, "spokeshave": shave,
-			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge}
+			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge, "layout": layout}
 
 	# The work in the vise, top right (new boards come from the rack).
 	var right := _panel(root, Vector2.ZERO)
@@ -160,7 +167,7 @@ func _ready() -> void:
 	_pin(bottom, Control.PRESET_BOTTOM_LEFT)
 	(bottom.get_parent() as Control).offset_bottom = -(12 + SLOT.y + 8) # (over the hotbar)
 
-	# The hotbar, bottom middle: 1 to 8 the tools, 0 empty hands.
+	# The hotbar, bottom middle: 1 to 9 the tools, 0 empty hands.
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 4)
 	root.add_child(bar)
@@ -211,6 +218,8 @@ func _ready() -> void:
 ## One line on the stroke being planned or made: the tool, what the wheel has set, how far
 ## it goes and what it comes to.
 func plan_text() -> String:
+	if workshop.current == "layout":
+		return workshop.layout.describe()
 	var plan: Dictionary = workshop.get_plan()
 	if plan.is_empty():
 		return stroke_text()

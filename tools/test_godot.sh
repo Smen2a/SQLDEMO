@@ -26,6 +26,8 @@
 #     carrying, the vise, the rack
 #   - shavings, chips and pieces land and lie still: on the board, the bench and the floor,
 #     pushed by a tool, dropped from carry height; never sunk into what they rest on
+#   - laying out: the marking gauge's and knife's lines, scribed where they should be, and
+#     undone and redone
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -92,6 +94,7 @@ if [[ "$GPU" == 0 ]]; then
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
 	check physics_calm "physics calm: pieces and debris land and lie still" res://tests/physics_calm.tscn
+	check layout_lines "layout lines: the lines are laid out" res://tests/layout_lines.tscn
 	exit $status
 fi
 
