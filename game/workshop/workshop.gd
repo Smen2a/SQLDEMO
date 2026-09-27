@@ -309,7 +309,7 @@ func enter_work(glide := true) -> bool:
 	player.move_input = Vector2.ZERO
 	_glide_from = player.camera.global_transform
 	_glide = 0.0 if glide else 1.0
-	_orbit.target = clamped.global_position
+	_orbit.target = board.global_transform * board.get_body_bounds().get_center()
 	_orbit._apply()
 	_orbit.set_process_unhandled_input(true)
 	_orbit.make_current()
@@ -387,18 +387,74 @@ func pick_up(piece: RigidBody3D) -> void:
 	_show_tool_in_hand()
 
 
-## Lets the carried piece go where it is: it falls (gently: its speed as it leaves the hands
-## is at most LET_GO_SPEED).
+## Lets the carried piece go. With the eyes on the empty vise, it goes in (squared: see
+## _put_in_vise); anywhere else it falls where it is (gently: its speed as it leaves the
+## hands is at most LET_GO_SPEED).
 func let_go() -> void:
 	if held == null:
 		return
 	var piece := held
+	var into_vise := clamped == null and at_vise()
 	held = null
 	piece.gravity_scale = 1.0
 	piece.can_sleep = true
-	piece.linear_velocity = piece.linear_velocity.limit_length(LET_GO_SPEED)
-	piece.angular_velocity = piece.angular_velocity.limit_length(2.0)
+	if into_vise:
+		_put_in_vise(piece)
+	else:
+		piece.linear_velocity = piece.linear_velocity.limit_length(LET_GO_SPEED)
+		piece.angular_velocity = piece.angular_velocity.limit_length(2.0)
 	_show_tool_in_hand()
+	_ui.refresh()
+
+
+## Whether the eyes are on the vise (the bench between its jaws, or the piece in it), in reach.
+func at_vise() -> bool:
+	var hit := look_at_thing()
+	return not hit.is_empty() and (hit.collider == room.bench or (clamped != null and hit.collider == clamped)) \
+			and room.in_vise(hit.position)
+
+
+## Puts a piece in the vise, squared as a vise holds it: the way through it nearest the
+## vertical turned exactly up (a board flat, on its edge or on end, as it was held), the
+## longer of its other two along the bench (to the nearer end), and set down on the bench
+## top between the jaws, its middle at the vise's.
+func _put_in_vise(piece: RigidBody3D) -> void:
+	var sdf = piece.get_meta("sdf")
+	var inner: Basis = sdf.transform.basis.orthonormalized() # the body's turn in its rigid body
+	var axes: Basis = piece.global_basis.orthonormalized() * inner # its x, y, z in the world
+	var size: Vector3 = sdf.get_body_bounds().size
+	var up := 0
+	for i in 3:
+		if absf(axes[i].y) > absf(axes[up].y):
+			up = i
+	var along := (up + 1) % 3
+	if size[(up + 2) % 3] > size[along]:
+		along = (up + 2) % 3
+	var square: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+	square[up] = Vector3.UP * signf(axes[up].y)
+	square[along] = Vector3.RIGHT * (1.0 if axes[along].x >= 0.0 else -1.0)
+	var third := 3 - up - along
+	square[third] = square[(third + 1) % 3].cross(square[(third + 2) % 3])
+	var turn := Basis(square[0], square[1], square[2]) * inner.inverse()
+	piece.freeze = true
+	piece.linear_velocity = Vector3.ZERO
+	piece.angular_velocity = Vector3.ZERO
+	var extent := _extent(sdf, Transform3D(turn, Vector3.ZERO) * sdf.transform)
+	var middle := extent.get_center()
+	piece.global_transform = Transform3D(turn, Vector3(-middle.x, -extent.position.y, -middle.z))
+	_clamp(piece)
+
+
+## Where a piece's surface reaches (its hull, or failing that its bounds) with its body at
+## `placed` (world): an axis-aligned box.
+func _extent(sdf, placed: Transform3D) -> AABB:
+	var points: PackedVector3Array = sdf.get_hull_points()
+	if points.is_empty():
+		return placed * sdf.get_body_bounds()
+	var box := AABB(placed * points[0], Vector3.ZERO)
+	for p in points:
+		box = box.expand(placed * p)
+	return box
 
 
 ## R: the carried piece turned a quarter about the vertical.
@@ -416,7 +472,7 @@ func reach_held(steps: int) -> void:
 ## ray's result ({"collider", "position", ...}), or {}.
 func look_at_thing() -> Dictionary:
 	var query := PhysicsRayQueryParameters3D.create(player.eye(), player.eye() + player.forward() * REACH, 1)
-	query.exclude = [player.get_rid()]
+	query.exclude = [player.get_rid()] if held == null else [player.get_rid(), held.get_rid()]
 	return get_world_3d().direct_space_state.intersect_ray(query)
 
 
@@ -425,7 +481,12 @@ func prompt() -> String:
 	if mode != Mode.WALK:
 		return ""
 	if held != null:
-		return "E: let go   R: turn it   wheel: nearer, farther"
+		var turning := "   R: turn it   wheel: nearer, farther"
+		if at_vise():
+			if clamped == null:
+				return "E: put the %s in the vise" % _name_of(held) + turning
+			return "E: let go (the vise holds the %s)" % _name_of(clamped) + turning
+		return "E: let go" + turning
 	var hit := look_at_thing()
 	if hit.is_empty():
 		return ""
@@ -907,7 +968,7 @@ func set_wood(choice: String) -> void:
 	wood = choice
 	_clamp(_new_piece(wood))
 	if mode == Mode.WORK:
-		_orbit.target = clamped.global_position
+		_orbit.target = board.global_transform * board.get_body_bounds().get_center()
 		_orbit._apply()
 	_ui.refresh()
 
@@ -1084,12 +1145,13 @@ func _as_piece(sdf, at: Transform3D, placed: Transform3D, wood_name: String, kin
 	return body
 
 
-## Puts a piece in the vise: held still where it is, the one the tools work on.
+## Puts a piece in the vise: held still where it is, the one the tools work on; the jaws
+## close on it.
 func _clamp(piece: RigidBody3D) -> void:
 	clamped = piece
 	board = piece.get_meta("sdf")
 	piece.freeze = true
-	room.close_jaws(0.1)
+	room.close_jaws(_extent(board, board.global_transform).size.z)
 
 
 ## Takes the piece out of the vise (it is loose again; its edits go with it).

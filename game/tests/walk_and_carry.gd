@@ -10,7 +10,9 @@ extends "res://tests/harness.gd"
 ##   Esc steps back;
 ## - carrying: F takes the board out of the vise (then there is no stepping up to the bench);
 ##   it is held in front of the eyes, comes round as the player turns, R turns it; E lets it
-##   go and it lies flat on the floor; E picks it up again.
+##   go and it lies flat on the floor; E picks it up again;
+## - the vise: the board carried back and let go with the eyes on the vise (held askew) goes
+##   in squared: flat, along the bench, on the bench top between the jaws, which close on it.
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -124,6 +126,39 @@ func _ready() -> void:
 	_key(KEY_E)
 	await _frames(1)
 	_check(workshop.held == ash, "E picks it up again")
+
+	# The vise: carried back to the bench, held askew (tipped and turned along the bench's
+	# depth), let go with the eyes on the vise.
+	player.face(Vector3(0.0, 0.1, 0.0))
+	player.move_input = Vector2(0, 1)
+	await _seconds(1.5)
+	player.move_input = Vector2.ZERO
+	workshop._hold_turn = Basis(Vector3.RIGHT, 0.3) * workshop._hold_turn
+	player.face(Vector3(0.05, 0.0, -0.03))
+	await _seconds(0.6)
+	_check(workshop.at_vise() and workshop.prompt().contains("put the ash board in the vise"),
+			"the line offers the vise: " + workshop.prompt())
+	_key(KEY_E)
+	await _frames(2)
+	var sdf = ash.get_meta("sdf")
+	_check(workshop.held == null and workshop.clamped == ash and ash.freeze and workshop.board == sdf,
+			"E puts it in the vise, held still, the one the tools work on")
+	var face_up: float = rad_to_deg(sdf.global_basis.z.normalized().angle_to(Vector3.UP))
+	var length_off: float = rad_to_deg(acos(absf(sdf.global_basis.x.normalized().dot(Vector3.RIGHT))))
+	var extent: AABB = workshop._extent(sdf, sdf.global_transform)
+	print("walk and carry: in the vise, its face %.2f degrees off up, its length %.2f degrees off the bench's," % [
+			face_up, length_off], " its underside %.3f mm off the bench top, its middle %.2f mm off the vise's" % [
+			extent.position.y * 1000.0, Vector2(extent.get_center().x, extent.get_center().z).length() * 1000.0])
+	_check(face_up < 1.0 and length_off < 1.0, "squared: flat, along the bench")
+	_check(absf(extent.position.y) < 0.0001 and Vector2(extent.get_center().x, extent.get_center().z).length() < 0.001,
+			"set down on the bench top, in the middle of the vise")
+	var jaws: Array = workshop.room.jaws
+	var gap: float = absf(jaws[1].position.z - jaws[0].position.z) - workshop.room.JAW.z
+	_check(absf(gap - extent.size.z) < 0.001, "the jaws closed on it (%.1f mm apart)" % (gap * 1000.0))
+	await _seconds(0.5)
+	_check(ash.global_transform.origin.distance_to(Vector3(0.0, 0.0125, 0.0)) < 0.001, "and it stays put")
+	_check(workshop.enter_work(false), "with it in the vise, stepping up to the bench")
+	workshop.leave_work()
 
 	print("walk and carry: %s" % ("the workshop is walked and worked in" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)

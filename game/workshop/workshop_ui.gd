@@ -38,7 +38,7 @@ const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
 		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
-const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   E: reach (work at the bench)   1-8, wheel: tools   0: empty hands   Esc: free the mouse"
+const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   E: pick up, let go (over the vise: into it), work at the bench   F: out of the vise   R: turn what you carry   1-8, wheel: tools   0: empty hands   Esc: free the mouse"
 
 var workshop
 
