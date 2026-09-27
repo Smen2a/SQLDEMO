@@ -20,8 +20,11 @@
 // - A spokeshave is a plane with a 40 mm sole. Its sole rests on the work and its blade
 //   takes a shaving of the depth it is set to below it: an even shaving on a flat face
 //   (where a chisel struggles), following convex curves, bridging hollows shorter than
-//   its sole. It is pushed by two hands, and tears out against the grain as a chisel does
-//   (less: its mouth keeps the split short).
+//   its sole, riding on the highest part across its blade. It is pushed by two hands, as
+//   deep as they can push the chip's own section (deeper on a narrow edge), and no deeper
+//   than its mouth passes. Its toe stops at a rise it cannot ride (a step of a millimetre
+//   within two). It tears out against the grain as a chisel does (less: its mouth keeps
+//   the split short).
 // Rasps and scrapers work back and forth along the line they were set on, as the saw does.
 namespace sdf::tools {
 
@@ -58,6 +61,7 @@ struct Spokeshave {
 	float sole = 40.0f;         // its sole's length, the edge in the middle
 	float bed_deg = 45.0f;      // the blade's bed (how steeply it lifts out)
 	float hand_force = 250.0f;  // N, two hands
+	float mouth = 0.8f;         // mm: the thickest shaving its mouth passes
 
 	Body model() const;
 };
@@ -72,8 +76,9 @@ std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &w
 		vec3 path, float length, float pace = 1.0f);
 
 // A spokeshave's pass along `path` for `length` mm from `start`, its blade set `depth` mm
-// below its sole: the floor its sole's rest leaves, the force two hands can put behind it,
-// tear-out against the grain. Made with planned_stroke() (cutting.h).
+// below its sole (held flat on the work: tools/rubbing.h settle()): the floor its sole's
+// rest leaves, the force two hands can put behind the chip, where its toe is stopped (and
+// why), tear-out against the grain. Made with planned_stroke() (cutting.h).
 CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
 		float depth, std::uint32_t seed);
 

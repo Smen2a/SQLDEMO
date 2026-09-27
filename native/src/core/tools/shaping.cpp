@@ -3,6 +3,7 @@
 #include "body/materials.h"
 #include "tools/debris.h"
 #include "tools/rubbing.h"
+#include "eval/query.h"
 
 #include <algorithm>
 #include <cmath>
@@ -189,7 +190,8 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	CutPlan p;
 	p.chisel = blade;
 	p.width = blade.width;
-	const Frame frame = Frame::at(start, normal, path);
+	// Held flat on the work: its sole settles on the face under it.
+	const Frame frame = settle(work, Frame::at(start, normal, path), {0.5f * shave.sole, 0.5f * shave.blade_width});
 	p.start = start;
 	p.normal = frame.z;
 	p.path = frame.x;
@@ -204,27 +206,31 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	const float along = std::fabs(gl::dot(f, t)), rise = gl::dot(ahead, n);
 	p.slope = along < 0.5f || std::fabs(rise) < 0.005f ? 0 : (rise > 0.0f ? 1 : -1);
 	p.available = shave.hand_force;
+	auto stop = [&](float s, unsigned why) {
+		p.stop_at = std::max(s, 0.0f);
+		p.stop = why;
+		p.warnings |= why;
+	};
 
-	// The surface's height above the plane it was set on, along the path (NaN off the work).
+	// Its mouth passes a shaving so thick, and no thicker.
+	if (depth > shave.mouth) {
+		depth = shave.mouth;
+		p.warnings |= kMouth;
+	}
+
+	// The surface's height above the plane it was set on along the path (NaN off the work):
+	// the highest across its blade, which its sole spans.
 	const float nan = std::numeric_limits<float>::quiet_NaN();
 	auto height_at = [&](float s) {
-		const vec3 at = start + t * s;
-		float hi = 20.0f;
-		if (work.field(at + n * hi) <= 0.0f) {
-			return hi;
-		}
-		for (float z = hi - 0.5f; z > -40.0f; z -= 0.5f) {
-			if (work.field(at + n * z) <= 0.0f) {
-				float lo = z;
-				for (int i = 0; i < 20; ++i) {
-					const float mid = 0.5f * (lo + hi);
-					(work.field(at + n * mid) <= 0.0f ? lo : hi) = mid;
-				}
-				return 0.5f * (lo + hi);
+		float top = nan;
+		for (const float across : {-0.5f * blade.width + 1.0f, 0.0f, 0.5f * blade.width - 1.0f}) {
+			const auto hit = raycast(work.body, work.octree, start + t * s + b * across + n * 40.0f, -n, 100.0f, 1e-3f);
+			if (hit) {
+				const float h = gl::dot(hit->point - start, n);
+				top = std::isnan(top) ? h : std::max(top, h);
 			}
-			hi = z;
 		}
-		return nan;
+		return top;
 	};
 	const float half = 0.5f * shave.sole;
 	const int from = int(std::floor(-half)), to = int(std::ceil(length + half));
@@ -232,7 +238,7 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	for (int i = from; i <= to; ++i) {
 		heights.push_back(height_at(float(i)));
 	}
-	auto h = [&](int i) { return heights[std::size_t(i - from)]; };
+	auto h = [&](int i) { return heights[std::size_t(std::clamp(i, from, to) - from)]; };
 	// Where the sole rests: the lowest line lying on the surface under it, at its middle
 	// (the upper hull of the heights under the sole): the surface itself where it is convex,
 	// bridging hollows shorter than the sole.
@@ -254,25 +260,82 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 		return best;
 	};
 
-	// How deep two hands can push it: F = k (width + attached sides) d.
+	// Its toe, half a sole ahead of the blade, stops at a rise it cannot ride: over a
+	// millimetre within two (a step, not a curve). The blade stops half a sole short of it.
+	const int steps = std::max(1, int(std::ceil(length)));
+	int last = steps;
+	for (int i = 0; i <= steps; ++i) {
+		const int toe = i + int(half);
+		if (toe - 2 < from || toe > to || std::isnan(h(toe))) {
+			continue;
+		}
+		const float before = std::isnan(h(toe - 2)) ? h(toe - 1) : std::isnan(h(toe - 1)) ? h(toe - 2)
+																			   : std::min(h(toe - 1), h(toe - 2));
+		if (!std::isnan(before) && h(toe) > before + 1.0f) {
+			float wall = h(toe);
+			for (int k = toe; k <= std::min(to, toe + 6); ++k) {
+				wall = std::isnan(h(k)) ? wall : std::max(wall, h(k));
+			}
+			last = std::max(i - 1, 0);
+			stop(float(last) * length / float(steps), kBlocked);
+			p.wall = wall - before;
+			break;
+		}
+	}
+
+	// How deep two hands can push it: the chip's own section across the blade (columns under
+	// its floor at the start: on a narrow edge, only as wide as the edge), and the strips its
+	// attached sides tear.
 	const float k = kCuttingResistance * wood.hardness * g;
 	const float side_strip = 1.5f * (1.0f - 0.6f * wood.split * along * along);
 	const int sides = std::min(2, int(work.field(start - n * 0.2f + b * (0.5f * p.width + 0.4f)) < 0.0f) +
 			int(work.field(start - n * 0.2f - b * (0.5f * p.width + 0.4f)) < 0.0f));
-	const float per_mm = k * (p.width + float(sides) * side_strip);
-	const float d = std::min(depth, p.available / std::max(per_mm, 1e-6f));
-	if (d < depth - 1e-3f) {
+	auto rest_or_plane = [&](int s) {
+		const float r = rest_at(std::min(s, to));
+		return std::isinf(r) ? 0.0f : r; // off the work: at the plane
+	};
+	// The force of the chip `d` deep under the sole resting at s (the columns read `asked` deep).
+	auto force = [&](const float over[kChipColumns], float asked, float d) {
+		float area = 0.0f, thick = 0.0f;
+		for (int j = 0; j < kChipColumns; ++j) {
+			const float o = std::max(over[j] - (asked - d), 0.0f);
+			area += o;
+			thick = std::max(thick, o);
+		}
+		return k * (area * p.width / float(kChipColumns) + float(sides) * side_strip * thick);
+	};
+	float over[kChipColumns];
+	chip_columns(p, work.body, work.octree, 0.0f, depth - rest_or_plane(0), over);
+	float d = depth;
+	if (force(over, depth, depth) > p.available) {
+		float lo = 0.0f, hi = depth;
+		for (int i = 0; i < 24; ++i) {
+			const float mid = 0.5f * (lo + hi);
+			(force(over, depth, mid) <= p.available ? lo : hi) = mid;
+		}
+		d = lo;
 		p.warnings |= kShallow;
 	}
 	p.depth = d;
-	p.force = per_mm * d;
-	const int steps = std::max(1, int(std::ceil(length)));
-	for (int i = 0; i <= steps; ++i) {
-		const float rest = rest_at(std::min(i, to));
-		const float floor = std::isinf(rest) ? -d : rest - d; // off the work: at the plane
-		p.floor.push_back({float(i) * length / float(steps), -floor});
+	p.force = force(over, depth, d);
+	// Along the path, every 2 mm: the chip there, which two hands must still push (a harder
+	// or wider part of the work ahead can stall it).
+	for (int i = 0; i <= last; ++i) {
+		const float s = float(i) * length / float(steps);
+		if (i > 0 && i % 2 == 0) {
+			chip_columns(p, work.body, work.octree, s, d - rest_or_plane(i), over);
+			const float here = force(over, d, d);
+			if (here > 1.05f * p.available) {
+				last = i - 2;
+				stop(float(last) * length / float(steps), kStalls);
+				p.floor.resize(std::size_t(std::max(last, 0) + 1));
+				break;
+			}
+			p.force = std::max(p.force, here);
+		}
+		p.floor.push_back({s, d - rest_or_plane(i)});
 	}
-	p.length = length;
+	p.length = p.stop_at >= 0.0f ? p.stop_at : length;
 	p.height = d + 2.0f;
 	p.lift_depth = d;
 	add_tear_out(p, work, 0.5f, seed);

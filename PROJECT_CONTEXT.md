@@ -164,13 +164,14 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
+| T4-6 | The spokeshave: held flat, its sole riding the highest across its blade; as deep as two hands push the chip's own section (deeper on a narrow edge), its mouth passes (0.8 mm) and its toe rides (a step blocks it) |
 | T4-5 | The card scraper: a burr line pushed over the work, 0.01 mm from each point it passes, only where it went, on the push |
 | T4-4 | The rasp: a rubbed face along its line, cutting on the push at a calibrated rate (a cabinet rasp 0.05 mm of oak a 150 mm push), resting on high spots, only where its face went |
 | T4-3 | The saw: cuts on the push at a tenon saw's rate, by the chord under its teeth and the wood's hardness (through 25 mm of oak in about 70 strokes); its back stops it; the kerf runs where the teeth have been |
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 118 native tests (GCC and Clang, including golden images) and 9
+Test counts today: 121 native tests (GCC and Clang, including golden images) and 9
 headless Godot checks.
 
 ## 5. Where things stand
@@ -220,15 +221,16 @@ so correctness can be checked here, but not speed.
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
 
-### T4. The rules of the real tools (under way: T4-1 to T4-5 done)
+### T4. The rules of the real tools (under way: T4-1 to T4-6 done)
 
 From play, the tools went too fast and hit too hard. One tool at a time, each tried by the
 user before the next, they are held to six rules (docs/PLAN.md, T4): access (only the edge
 or face meets the wood), chips must escape, real rates times a workshop pace, a working
 speed, loose pieces pushed not cut under, and a reason wherever a tool stops. T4-1 (chisels
-and gouges), T4-2 (the sanding block), T4-3 (the saw), T4-4 (the rasp) and T4-5 (the
-scraper) are done; the user asked for the rest in one go, to try them together after. Next:
-- **T4-6 spokeshave** (the chisel's rules), **T4-7 sponge**.
+and gouges), T4-2 (the sanding block), T4-3 (the saw), T4-4 (the rasp), T4-5 (the scraper)
+and T4-6 (the spokeshave) are done; the user asked for the rest in one go, to try them
+together after. Next:
+- **T4-7 sponge**.
 
 D3 waits until T4 is through.
 

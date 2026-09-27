@@ -92,6 +92,7 @@ enum CutWarning : unsigned {
 	kBladeMeets = 1u << 11,   // wood where the blade's body goes (an overhang, a ridge)
 	kTooWide = 1u << 12,      // the gap is narrower than the chisel: its sides meet the walls
 	kStalls = 1u << 13,       // the chip grows thicker than the hand can push
+	kMouth = 1u << 14,        // a spokeshave's mouth passes no thicker shaving
 };
 // The warnings' names ("skates", "shallow", ...), in bit order.
 std::vector<std::string> warning_names(unsigned warnings);
@@ -147,6 +148,14 @@ struct CutPlan {
 // `blow` times a firm one (0.3 a tap, 1.6 a heavy blow).
 CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
 		float depth, float skew_deg, std::uint32_t seed, float blow = 1.0f);
+
+// The chip over a plan's edge is looked at in this many columns across it.
+constexpr int kChipColumns = 9;
+// The wood over the plan's edge `floor` deep at s, in columns across it: over each (0 where
+// the edge is in the air there), measured from the edge's own section (rising to its
+// corners). Column j is ((j + 0.5) / kChipColumns - 0.5) of the plan's width across.
+void chip_columns(const CutPlan &plan, const Body &body, const Octree &octree, float s, float floor,
+		float over[kChipColumns]);
 
 // Tear-out below a pared cut going against the grain (uphill): seeded chips, `scale` times
 // the wood's own readiness to tear (a plane's mouth keeps the split short: 0.5).

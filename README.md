@@ -37,7 +37,9 @@ abrasive.
    - **Rasp, card scraper:** back and forth along their line at their working speed,
      cutting on the push (the way you first drag), resting on the high spots and taking the
      surface down only where their face goes; see *Shaping and finishing* below.
-   - **Spokeshave:** pushed along the drag at its working speed, taking its shaving.
+   - **Spokeshave:** pushed along the drag at its working speed, taking its shaving: as
+     deep as two hands push the chip (deeper on a narrow edge) and its mouth passes
+     (0.8 mm), stopped where its toe meets a step it cannot ride.
    - **Sanding block** (a cork block or a small pad): follows the pointer anywhere at its
      working speed. It rests on the highest points under it and takes them down first,
      only where it has rubbed, at a real rate: about a hundredth of a millimetre per metre
@@ -451,7 +453,8 @@ one at a time (docs/PLAN.md, T4).
 | saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
 | rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
 | card scraper | 0.01 mm of oak from each point its burr is pushed over; nothing on the pull | 200 mm/s | resting on high spots |
-| spokeshave, sponge | (as before; T4-6, T4-7) | spokeshave 150, sponge 300 mm/s | |
+| spokeshave | as deep as two hands (250 N) push the chip's section, up to its mouth (0.8 mm) | 150 mm/s; a fifth at the hands' limit | a step ahead of its toe (*blocked*), a chip too much to push (*stalls*), its mouth |
+| sponge | (as before; T4-7) | 300 mm/s | |
 
 The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
 less (a corner, a thin stick) goes 2.5 times as fast as 25 mm, a 100 mm chord a quarter as
@@ -486,12 +489,19 @@ loose pieces in its way aside.
   resting on what stands highest under it), feathered 4 mm at its sides. Nothing on the
   pull, and it cannot tear out. It is for cleaning up tear-out and tool marks.
 - **The spokeshave** is a plane with a 40 mm sole.
-  - Its sole rests on the work, the lowest line lying on the surface under it: the surface
+  - It is held flat on the work (settled as a rubbed face is), and its sole rests on the
+    lowest line lying on the surface under it, the highest across its blade: the surface
     itself where it is convex, bridging hollows shorter than the sole.
   - Its blade takes a shaving that far below: an even 0.1 mm on a flat face from its first
     millimetre (where a chisel has to dive in), following a curve, leaving a groove alone.
-  - Two hands push it (250 N). Against the grain it tears out as a chisel does, at half
-    the rate: its mouth keeps the split short.
+  - Two hands push it (250 N) through the chip's own section (columns across the blade, as
+    a chisel's): 0.16 mm on the face of an oak board, 0.51 mm on a 20 mm edge; along the
+    stroke a chip too much for them stalls it. Its mouth passes 0.8 mm at most (*its mouth
+    passes no thicker a shaving*).
+  - Its toe, half a sole ahead of the blade, stops at a rise of over a millimetre within two
+    (*blocked*): the stroke ends half a sole short of the step.
+  - Against the grain it tears out as a chisel does, at half the rate: its mouth keeps the
+    split short.
 - `native/tests/test_shaping.cpp` checks each of these, and `game/tests/tool_planning`
   makes a spokeshave pass and ten rasp strokes in the workshop.
 

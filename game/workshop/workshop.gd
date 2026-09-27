@@ -32,7 +32,9 @@ extends Node3D
 ##                   down steadily where its face goes, resting on the high spots, and never
 ##                   tears the grain; tilted, chamfers an arris; its round face hollows
 ##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
-##                   flat face, over a curve, bridging hollows shorter than its sole
+##                   flat face, over a curve, bridging hollows shorter than its sole; as deep
+##                   as two hands push the chip (deeper on a narrow edge), its mouth passes
+##                   (0.8 mm) and its toe rides (a step stops it)
 ##   card scraper    back and forth, cutting on the push: a hundredth of a millimetre from
 ##                   each point its burr passes over, for cleaning up tear-out
 ##   sanding block   rests on the highest points under it and takes them down first, only
@@ -107,7 +109,7 @@ const INTENSITY := {
 	"gouge": ["depth", 0.05, 0.01, 2.5, "%.2f mm deep"],
 	"saw": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"rasp": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
-	"spokeshave": ["depth", 0.02, 0.02, 0.5, "%.2f mm shaving"],
+	"spokeshave": ["depth", 0.02, 0.02, 1.0, "%.2f mm shaving"],
 	"scraper": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_block": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"sanding_sponge": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],

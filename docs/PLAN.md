@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-5 done; T4-6 next)
+### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-6 done; T4-7 next)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -285,9 +285,19 @@ one tool at a time, each tried before the next.
 - Tests: `test_shaping` (a push, ten, the pull, half the way); `tool_planning` (four pushes
   in the workshop).
 
+**T4-6, the spokeshave: done.**
+- Held flat on the work (the rubbed faces' settle, which now turns a face only where 40% of
+  the points under it lie on one plane: a crown is left as set). Its sole rests on the
+  highest across its blade as well as along (three rays a millimetre).
+- Chips escape: its mouth passes 0.8 mm at most (*mouth*). Access: its toe, half a sole
+  ahead, stops at a rise of over a millimetre within two (*blocked*, with the step's height).
+- Force from the chip's own section (the chisel's columns, `chip_columns`, now in
+  `cutting.h`): at the start it limits the depth (0.16 mm on oak's face, 0.51 on a 20 mm
+  edge); every 2 mm along, a chip over 5% beyond the hands stalls it (*stalls*).
+- Working speed 150 mm/s (was 40), slower at the hands' limit; the depth slider to 1 mm.
+- Tests: `test_shaping` (a step ahead, a narrow edge, the mouth, set askew).
+
 **Next:**
-- **T4-6 Spokeshave.** The chisel's access and chip rules, its sole's rest, a real depth and
-  speed.
 - **T4-7 Sanding sponge.** Rate by grit and pressure, calibrated, and a working speed.
 
 ## 1. Pieces — bodies that come apart (current: P1 and P2 done)

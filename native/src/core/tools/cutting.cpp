@@ -103,7 +103,7 @@ float resistance(const Wood &wood, vec3 fibre, vec3 travel, vec3 edge) {
 std::vector<std::string> warning_names(unsigned warnings) {
 	static const char *names[] = {"skates", "shallow", "tears out", "corners buried", "breaks out", "not struck",
 			"slit only", "pops off", "digs in", "splits", "blocked", "blade meets the work", "too wide for the gap",
-			"stalls"};
+			"stalls", "mouth"};
 	std::vector<std::string> out;
 	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
 		if (warnings & (1u << i)) {
@@ -309,17 +309,17 @@ float splinter_limit(const CutPlan &p, float s) {
 	return std::min(1.5f * std::max(p.depth_at(s), 0.05f), 1.0f);
 }
 
-// The chip over an edge is looked at in this many columns across it.
-constexpr int kColumns = 9;
+constexpr int kColumns = kChipColumns;
 
 // Column j's offset across the edge (mm, towards b = normal x path).
 float column_across(const CutPlan &p, int j) {
 	return ((float(j) + 0.5f) / float(kColumns) - 0.5f) * p.width;
 }
 
-// The wood over the edge `floor` deep at s, in columns across it: over each (0 where the
-// edge is in the air there), measured from the edge's own section (rising to its corners).
-void wood_over(const CutPlan &p, const Body &body, const Octree &octree, float s, float floor, float over[kColumns]) {
+} // namespace
+
+void chip_columns(const CutPlan &p, const Body &body, const Octree &octree, float s, float floor,
+		float over[kChipColumns]) {
 	const vec3 n = p.normal, b = gl::cross(p.normal, p.path);
 	for (int j = 0; j < kColumns; ++j) {
 		const float across = column_across(p, j);
@@ -328,8 +328,6 @@ void wood_over(const CutPlan &p, const Body &body, const Octree &octree, float s
 		over[j] = std::max(depth_below_surface(body, octree, at, n, floor + 30.0f), 0.0f);
 	}
 }
-
-} // namespace
 
 void add_tear_out(CutPlan &p, const Work &work, float scale, std::uint32_t seed) {
 	if (p.slope >= 0 || p.depth <= 0.0f || p.chips.size() >= kMaxChips) {
@@ -427,7 +425,7 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	auto column = [&](float s, float floor) {
 		Column c;
 		c.floor = floor;
-		wood_over(p, work.body, work.octree, s, floor, c.over);
+		chip_columns(p, work.body, work.octree, s, floor, c.over);
 		for (int j = 0; j < kColumns; ++j) {
 			const float over = c.over[j];
 			if (over > 0.0f) {
@@ -711,7 +709,7 @@ public:
 			const float s = shaved_;
 			const float depth = plan_.depth_at(s);
 			float over[kColumns];
-			wood_over(plan_, body, octree, s, depth, over);
+			chip_columns(plan_, body, octree, s, depth, over);
 			float area = 0.0f, moment = 0.0f;
 			int first = -1, last = -1;
 			for (int j = 0; j < kColumns; ++j) {

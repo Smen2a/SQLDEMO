@@ -34,14 +34,6 @@ struct Work_ {
 	}
 };
 
-// `strokes` strokes of the tool back and forth over `length` mm from `start` along +x.
-std::vector<Edit> worked(Stroke &stroke, vec3 start, float length, int strokes) {
-	for (int i = 1; i <= strokes; ++i) {
-		stroke.move_to(start + vec3(i % 2 ? length : 0.0f, 0, 0));
-	}
-	return stroke.edits();
-}
-
 } // namespace
 
 // A rasp removes steadily, on the push: a cabinet rasp takes 0.05 mm of oak in a 150 mm
@@ -226,6 +218,58 @@ TEST(a_spokeshave_follows_a_curve_and_bridges_a_hollow) {
 }
 
 // Against the grain it tears out, but less than a chisel: its mouth keeps the split short.
+// Its toe, half a sole ahead of the blade, stops at a step it cannot ride: the stroke ends
+// half a sole short of it, and says why.
+TEST(a_spokeshave_stops_at_a_step_ahead) {
+	Body b = demo::board(mat::Ash);
+	Edit step;
+	step.prim = Primitive::box({30, 0, kTop + 1.5f}, {10, 60, 1.5f});
+	step.op = Op::Union;
+	step.material = mat::Ash;
+	CHECK(b.add(step)); // 3 mm high from x = 20 to 40
+	const Work_ w(b);
+	const CutPlan plan = plan_spokeshave(Spokeshave{}, w.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 80.0f, 0.1f, 1);
+	std::printf("    stops at %.1f mm (%s, a %.2f mm step)\n", double(plan.stop_at),
+			warning_names(plan.stop).empty() ? "" : warning_names(plan.stop)[0].c_str(), double(plan.wall));
+	CHECK(plan.stop == kBlocked && std::fabs(plan.stop_at - 39.0f) < 1.5f && std::fabs(plan.wall - 3.0f) < 0.2f);
+	CHECK(std::fabs(plan.length - plan.stop_at) < 1e-4f);
+}
+
+// Two hands push the chip's own section: on an edge narrower than the blade it goes deeper
+// than on a wide face; and no deeper than its mouth passes.
+TEST(a_spokeshave_goes_deeper_on_a_narrow_edge_up_to_its_mouth) {
+	Body oak = demo::board(mat::Oak);
+	Body strip;
+	strip.base = Primitive::box({0, 0, 0}, {80, 10, 12.5f});
+	strip.base_material = mat::Oak;
+	strip.grain_axis = oak.grain_axis;
+	Body stick = strip;
+	stick.base = Primitive::box({0, 0, 0}, {80, 2.5f, 12.5f});
+	const Work_ wide(oak), narrow(strip), thin(stick);
+	const CutPlan face = plan_spokeshave(Spokeshave{}, wide.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 60.0f, 0.8f, 1);
+	const CutPlan edge = plan_spokeshave(Spokeshave{}, narrow.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 60.0f, 0.8f, 1);
+	const CutPlan mouth = plan_spokeshave(Spokeshave{}, thin.work(), {-40, 0, kTop}, kUp, {1, 0, 0}, 60.0f, 1.5f, 1);
+	std::printf("    in oak, asked 0.8 mm: %.2f mm on the face (%.0f N), %.2f on a 20 mm edge (%.0f N); asked 1.5 on a "
+				"5 mm stick: %.2f\n",
+			double(face.depth), double(face.force), double(edge.depth), double(edge.force), double(mouth.depth));
+	CHECK((face.warnings & kShallow) && face.force <= face.available + 1.0f);
+	CHECK(edge.depth > 2.0f * face.depth);
+	CHECK(std::fabs(mouth.depth - Spokeshave{}.mouth) < 1e-4f && (mouth.warnings & kMouth));
+}
+
+// Set with a normal two degrees off across its blade, its sole still lies flat on the face:
+// an even shaving across, not a wedge.
+TEST(a_spokeshave_set_askew_lies_flat) {
+	Work_ ash(demo::board(mat::Ash));
+	const CutPlan plan = plan_spokeshave(Spokeshave{}, ash.work(), {-40, 0, kTop}, gl::normalize(vec3(0, -0.036f, 1)),
+			{1, 0, 0}, 60.0f, 0.2f, 1);
+	ash.apply(plan.edits());
+	const float left = kTop - ash.height(-10, -18), right = kTop - ash.height(-10, 18);
+	std::printf("    set 2 degrees askew: %.3f and %.3f mm off either side (planned %.3f)\n", double(left), double(right),
+			double(plan.depth));
+	CHECK(std::fabs(left - plan.depth) < 0.01f && std::fabs(right - plan.depth) < 0.01f);
+}
+
 TEST(a_spokeshave_tears_out_uphill) {
 	const Work_ oak(demo::board(mat::Oak));
 	int uphill = 0, downhill = 0;

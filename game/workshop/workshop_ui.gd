@@ -21,6 +21,7 @@ const WARNINGS := {
 	"blade meets the work": "its blade meets the work behind the edge: come at it another way",
 	"too wide for the gap": "too wide for the gap: take a narrower one",
 	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
+	"mouth": "its mouth passes no thicker a shaving",
 }
 ## What stops a stroke going on (SdfBody.get_stroke_state's "limit"), in words.
 const LIMITS := {

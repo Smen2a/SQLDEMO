@@ -90,9 +90,9 @@ struct RubFace {
 // The plane a flat face set on the work at `plane` is held in: turned to lie along the
 // work's own face under it (`half` its size either way, plane x, y), the plane most of 45
 // points there lie on (a bump, a groove or the rounded end of a board does not tip it; a
-// normal taken from the pointer a degree or two off is put right). Turned by at most 10
-// degrees: where the work under it is not near flat, the face was set at an angle on
-// purpose, and is left so.
+// normal taken from the pointer a degree or two off is put right). Only where 40% of the
+// points lie on one plane, and by at most 10 degrees: where the work under it is curved,
+// or it was set at an angle on purpose, it is left as it was set.
 Frame settle(const Work &work, const Frame &plane, vec2 half);
 
 // How far a free face's stroke looks round where it was set for the work it may reach (mm).

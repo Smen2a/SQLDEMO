@@ -556,7 +556,9 @@ Frame settle(const Work &work, const Frame &plane, vec2 half) {
 			}
 		}
 	}
-	if (support < 3) {
+	// Only where much of the work under it is one plane: on a curve (a crown, a round) the
+	// hand holds it as it was set.
+	if (support < 3 || float(support) < 0.4f * float(n)) {
 		return plane;
 	}
 	return Frame::at(plane.origin, gl::normalize(plane.direction(best)), plane.x);
