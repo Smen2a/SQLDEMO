@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 and T4-2 done; T4-3 next)
+### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-3 done; T4-4 next)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -247,10 +247,22 @@ one tool at a time, each tried before the next.
 - Tests: `test_rubbing` (the rate, only where it rubbed, a diagonal band, a bump first, a
   narrow edge faster, dust); `tool_planning` (the block rubs, its line).
 
+**T4-3, the saw: done.**
+- Cuts on the push only (towards its toe; its handle is towards the way the drag first
+  goes): 0.0038 × pressure × 25 / max(chord, 10) × pitch / 3.2 × 5740 / Janka mm per mm.
+  The chord is the wood along its teeth at their depth within the blade, from columns of
+  the work read when it is set (a top and a bottom every millimetre). Through 25 mm of oak
+  50 mm wide in 68 strokes of 200 mm.
+- Its back stops it 59.5 mm below the highest wood under the blade (*its back meets the
+  work*). The kerf spans where the teeth have been, not a fixed blade length; once they go
+  further along, it is cut again as one edit.
+- The last slice down to *through* is always cut (the follower's small steps stopped 0.03 mm
+  short). A set feed stays for tests. The panel's feed became pressure.
+- Tests: `test_sawing` (push only, the rate, a long chord and walnut, through in 50–80
+  strokes, the back, the kerf's span, small steps through); `tool_planning` (pull, then
+  push, in the workshop).
+
 **Next:**
-- **T4-3 Saw.** Real feed by wood and teeth (a tenon saw cross-cuts 25 mm oak in about
-  50–80 strokes); cuts on the push stroke; the kerf only where the teeth have been; the back
-  stops its depth.
 - **T4-4 Rasp.** Removal only where its face passes, resting on high spots; calibrated rates.
 - **T4-5 Card scraper.** About 0.01 mm a pass, only where the burr touches.
 - **T4-6 Spokeshave.** The chisel's access and chip rules, its sole's rest, a real depth and

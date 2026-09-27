@@ -11,7 +11,7 @@ extends Node3D
 ##   plan  or first hold the right button on the board: the stroke is locked in there and
 ##         runs towards the pointer, its cut hatched on the board before it is made. The
 ##         wheel sets how hard it works (a chisel's or gouge's depth, the spokeshave's
-##         shaving, the saw's feed, the pressure on the others); Shift+wheel a chisel's or
+##         shaving, the pressure on the others); Shift+wheel a chisel's or
 ##         gouge's angle to the work (C: straight up, to chop), or the rasp's tilt about
 ##         its line; Q / E skew a chisel's edge, or turn the sanding tools. Then press the
 ##         left button and drag: the tool follows the plan as far as you take it. Keep
@@ -25,7 +25,9 @@ extends Node3D
 ##                   a paring chisel (never struck), a mortise chisel, a skew chisel
 ##   gouge           a carving gouge (#3, #7), a veiner or a V-tool: with its corners out of
 ##                   the wood it goes deeper, anywhere, than a chisel
-##   saw             stroke it back and forth along its line: the kerf deepens as it goes
+##   saw             stroke it back and forth along its line: the kerf deepens on each push
+##                   (towards its toe), slower through a long chord and harder wood, as far
+##                   as its back lets it (60 mm); the kerf runs where the teeth have been
 ##   rasp            back and forth along its line: takes the surface down steadily and never
 ##                   tears the grain; tilted, chamfers an arris; its round face hollows
 ##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
@@ -101,7 +103,7 @@ enum { IDLE, PLANNING, ARMED, ACTING }
 const INTENSITY := {
 	"chisel": ["depth", 0.05, 0.01, 1.5, "%.2f mm deep"],
 	"gouge": ["depth", 0.05, 0.01, 2.5, "%.2f mm deep"],
-	"saw": ["feed", 0.005, 0.005, 0.1, "feed %.3f mm per mm"],
+	"saw": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"rasp": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"spokeshave": ["depth", 0.02, 0.02, 0.5, "%.2f mm shaving"],
 	"scraper": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
@@ -136,12 +138,11 @@ const TOOL_COLOURS := {
 const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
 ## Per tool: a chisel's or gouge's variant (SdfBody.tool_catalog()), depth (mm, at most),
-## angle to the work and skew (degrees); saw feed (mm deeper per mm of stroke); grit and
-## pressure (1: an ordinary hand's worth).
+## angle to the work and skew (degrees); grit and pressure (1: an ordinary hand's worth).
 var settings := {
 	"chisel": {"variant": "bench_12", "depth": 0.2, "angle": 30.0, "skew": 0.0, "blow": 1.0},
 	"gouge": {"variant": "gouge_7_12", "depth": 0.3, "angle": 30.0, "skew": 0.0, "blow": 1.0},
-	"saw": {"feed": 0.03},
+	"saw": {"pressure": 1.0}, # ("feed": a set feed, either way, for tests)
 	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
 	"spokeshave": {"depth": 0.1},
 	"scraper": {"pressure": 1.0},

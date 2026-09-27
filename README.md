@@ -29,8 +29,11 @@ abrasive.
      and the stroke ends where it got to. Its blade pushes loose pieces in its way aside.
      Held up to chop (**C**), each click is a mallet blow (a tap, a firm blow or a heavy one,
      from the panel or the wheel), at most one every 0.35 s.
-   - **Saw:** slides back and forth along its line. Every millimetre of travel deepens the
-     kerf by the feed, until it is through the board.
+   - **Saw:** slides back and forth along its line at its working speed, its handle towards
+     the way you first drag. It cuts on the push (back towards its toe), at a tenon saw's
+     rate: slower the longer the chord of wood under its teeth and the harder the wood,
+     faster pressed harder. Its brass back stops it 60 mm down; the kerf runs where the
+     teeth have been. See *Rates and working speeds* below.
    - **Rasp, card scraper:** back and forth along their line, taking the surface down
      steadily; see *Shaping and finishing* below.
    - **Spokeshave:** pushed along the drag at its working speed, taking its shaving.
@@ -53,8 +56,8 @@ abrasive.
    and runs from there towards the pointer. Nothing is cut yet:
    - The cut it would make shows on the board, hatched in the tool's colour.
    - The **wheel** sets how hard the tool works (a chisel's or gouge's depth in steps of
-     0.05 mm, the spokeshave's shaving, the saw's feed, the pressure on the rasp, the
-     scraper and the sanding tools; held up to chop, the blow). **Ctrl+wheel** steps a
+     0.05 mm, the spokeshave's shaving, the pressure on the saw, the rasp, the scraper and
+     the sanding tools; held up to chop, the blow). **Ctrl+wheel** steps a
      fifth as far: a chisel's depth by hundredths of a millimetre. **Shift+wheel** sets a
      chisel's or gouge's angle to the work, or tilts the rasp about its line. **Q / E**
      skew a chisel's edge, or turn the sanding tools. (The panel's sliders set the same
@@ -439,7 +442,15 @@ one at a time (docs/PLAN.md, T4).
 |---|---|---|---|
 | chisel, gouge | as deep as a hand can push it (200 N) | 40, 30 mm/s; a fifth at the hand's limit | a step ahead, the blade meeting the work, a gap too narrow, a chip too thick |
 | sanding block | 1e-5 mm per mm rubbed at 120 grit (0.01 mm a metre) | 300 mm/s | resting on high spots (the line shows its contact) |
-| saw, rasp, scraper, spokeshave, sponge | (as before; T4-3 to T4-7) | saw 300, rasp 250, scraper 200, spokeshave 150, sponge 300 mm/s | |
+| saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
+| rasp, scraper, spokeshave, sponge | (as before; T4-4 to T4-7) | rasp 250, scraper 200, spokeshave 150, sponge 300 mm/s | |
+
+The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
+less (a corner, a thin stick) goes 2.5 times as fast as 25 mm, a 100 mm chord a quarter as
+fast. Through 25 mm of oak 50 mm wide it takes 68 strokes of 200 mm (a tenon saw takes
+50–80). It reads the work along its line when it is set: every millimetre, a column's top
+and bottom (two rays), for the chord at any depth and the highest wood under its back. A
+set feed (`"feed"`, either way) remains for tests.
 
 In the workshop the tool follows the pointer at its working speed: dragged ahead, it
 follows; let go, the stroke ends where it got to. Whatever part of it meets the work (a

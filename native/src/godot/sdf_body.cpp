@@ -284,7 +284,7 @@ bool planned_tool(const String &tool) {
 
 // Tools whose stroke reads the body (its wood, its shape): only while no edit is applied.
 bool reads_body(const String &tool) {
-	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block";
+	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block" || tool == "saw";
 }
 
 
@@ -515,7 +515,11 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 					c & 4 ? bounds_.hi.z : bounds_.lo.z);
 			through = std::max(through, gl::dot(p - corner, n));
 		}
-		return tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))), through + 1.0f);
+		if (settings.has("feed")) { // a set feed, either way (tests)
+			return tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings["feed"])), through + 1.0f);
+		}
+		return tools::saw_stroke(tools::Saw{}, work, p, n, a, float(double(settings.get("pressure", 1.0))), pace,
+				through + 1.0f);
 	}
 	if (tool == "sanding_block") {
 		return tools::sanding_stroke(block_from(settings), work, p, n, a, pace);

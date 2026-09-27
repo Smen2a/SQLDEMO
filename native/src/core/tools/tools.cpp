@@ -3,6 +3,7 @@
 #include "tools/debris.h"
 
 #include "body/materials.h"
+#include "eval/query.h"
 #include "tools/rubbing.h"
 #include "tools/smoothing.h"
 
@@ -266,13 +267,21 @@ Edit Saw::kerf_cut(vec3 centre, vec3 along, vec3 normal, float depth) const {
 	return kerf_slice(centre, along, normal, 0.0f, depth);
 }
 
-Edit Saw::kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth) const {
+float Saw::feed_per_mm(float chord, float hardness, float pressure) const {
+	return 0.0038f * pressure * (25.0f / std::max(chord, 10.0f)) * (tooth_pitch / 3.2f) * 5740.0f /
+			std::max(hardness, 1.0f);
+}
+
+Edit Saw::kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth, float lo, float hi) const {
 	const Frame f = Frame::at(centre, normal, along);
-	const float half = blade_length * 0.5f;
+	if (lo > hi) {
+		lo = -0.5f * blade_length;
+		hi = 0.5f * blade_length;
+	}
 	// A slice reaches a millimetre up into the one above it (the seam between overlapping
 	// cuts must not read as a surface: see ChiselStroke); the first, well above the work.
 	const float height = from_depth > 1.0f ? to_depth - from_depth + 1.0f : to_depth + 5.0f;
-	return cut(Primitive::sweep(centre - f.x * half - f.z * to_depth, centre + f.x * half - f.z * to_depth, f.z,
+	return cut(Primitive::sweep(centre + f.x * lo - f.z * to_depth, centre + f.x * hi - f.z * to_depth, f.z,
 			ToolProfile::flat(kerf, height)));
 }
 
@@ -403,26 +412,86 @@ private:
 
 class SawStroke : public Stroke {
 public:
+	// At a set feed, either way.
 	SawStroke(const Saw &s, vec3 contact, vec3 normal, vec3 along, float feed, float max_depth)
 		: saw_(s), frame_(Frame::at(contact, normal, along)), feed_(feed), max_depth_(max_depth) {}
 
+	// At the real rate, on the push: the work's columns along the kerf's line read now.
+	SawStroke(const Saw &s, const Work &work, vec3 contact, vec3 normal, vec3 along, float pressure, float pace,
+			float max_depth)
+		: SawStroke(s, contact, normal, along, 0.0f, max_depth) {
+		real_ = true;
+		pressure_ = pressure * pace;
+		hardness_ = work.wood(contact - frame_.z * 0.5f).hardness;
+		// Each column's top and bottom (frame z), every millimetre along the line as far as
+		// the blade can reach.
+		const Aabb box = work.body.bounds();
+		float top = -1e30f, bottom = 1e30f;
+		for (int c = 0; c < 8; ++c) {
+			const vec3 corner(c & 1 ? box.hi.x : box.lo.x, c & 2 ? box.hi.y : box.lo.y, c & 4 ? box.hi.z : box.lo.z);
+			top = std::max(top, gl::dot(corner - frame_.origin, frame_.z));
+			bottom = std::min(bottom, gl::dot(corner - frame_.origin, frame_.z));
+		}
+		const float span = top - bottom + 2.0f;
+		const float half = saw_.blade_length * 0.5f;
+		for (float x = -half - reach(); x <= half + reach(); x += 1.0f) {
+			Column col;
+			const auto down = raycast(work.body, work.octree, frame_.point({x, 0.0f, top + 1.0f}), -frame_.z, span, 1e-3f);
+			const auto up = raycast(work.body, work.octree, frame_.point({x, 0.0f, bottom - 1.0f}), frame_.z, span, 1e-3f);
+			if (down && up) {
+				col.top = gl::dot(down->point - frame_.origin, frame_.z);
+				col.bottom = gl::dot(up->point - frame_.origin, frame_.z);
+			}
+			columns_.push_back(col);
+		}
+	}
+
 	StrokeUpdate move_to(vec3 point) override {
-		const float s = gl::dot(point - frame_.origin, frame_.x);
-		depth_ = std::min(depth_ + feed_ * std::fabs(s - position_), max_depth_);
-		// The blade slides with the hand but stays in the board.
-		const float reach = saw_.blade_length * 0.5f - 20.0f;
-		position_ = std::clamp(s, -reach, reach);
+		const float s = std::clamp(gl::dot(point - frame_.origin, frame_.x), -reach(), reach());
+		const float step = s - position_;
+		if (!real_) {
+			depth_ = std::min(depth_ + feed_ * std::fabs(step), max_depth_);
+		} else if (step < 0.0f) {
+			// Pushed towards its toe the teeth cut, a bite each: in pieces of at most 5 mm,
+			// through the chord under the teeth where each piece is, as far as the back lets
+			// them.
+			const int pieces = int(std::ceil(-step / 5.0f));
+			for (int k = 0; k < pieces; ++k) {
+				const float at = position_ + step * (float(k) + 0.5f) / float(pieces);
+				const float deepest = std::min(max_depth_, saw_.under_back() - highest(at));
+				const float next = depth_ + saw_.feed_per_mm(chord(depth_, at), hardness_, pressure_) * -step / float(pieces);
+				backed_ = next >= deepest && deepest < max_depth_;
+				depth_ = std::max(depth_, std::min(next, deepest));
+			}
+		}
+		position_ = s;
+		lo_ = std::min(lo_, s);
+		hi_ = std::max(hi_, s);
 		StrokeUpdate u;
 		// The kerf's newest slice is re-cut as it deepens (and once it is through), and left
-		// behind at 1 mm.
-		if (depth_ >= cut_ + 0.05f || (depth_ >= max_depth_ && cut_ < depth_)) {
-			u.drop = open_ ? 1 : 0;
-			u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, frozen_, depth_));
-			cut_ = depth_;
-			open_ = depth_ - frozen_ < 1.0f;
-			if (!open_) {
+		// behind at 1 mm; it runs where the teeth have been, so once they have gone further
+		// along, the kerf is cut again as one.
+		const float half = saw_.blade_length * 0.5f;
+		const bool wider = lo_ - half < span_lo_ - 2.0f || hi_ + half > span_hi_ + 2.0f;
+		if (depth_ >= cut_ + 0.05f || (depth_ >= max_depth_ && cut_ < depth_) || (wider && depth_ > 0.0f)) {
+			span_lo_ = lo_ - half;
+			span_hi_ = hi_ + half;
+			if (wider) {
+				u.drop = slices_;
+				u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, 0.0f, depth_, span_lo_, span_hi_));
+				slices_ = 1;
 				frozen_ = depth_;
+				open_ = false;
+			} else {
+				u.drop = open_ ? 1 : 0;
+				slices_ += open_ ? 0 : 1;
+				u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, frozen_, depth_, span_lo_, span_hi_));
+				open_ = depth_ - frozen_ < 1.0f;
+				if (!open_) {
+					frozen_ = depth_;
+				}
 			}
+			cut_ = depth_;
 		}
 		return u;
 	}
@@ -431,13 +500,20 @@ public:
 		if (cut_ <= 0.0f) {
 			return {};
 		}
-		return {saw_.kerf_cut(frame_.origin, frame_.x, frame_.z, cut_)};
+		return {saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, 0.0f, cut_, span_lo_, span_hi_)};
 	}
 
 	Frame pose() const override {
 		Frame f = frame_;
 		f.origin = frame_.point({position_, 0.0f, -cut_});
 		return f;
+	}
+
+	StrokeState state() const override {
+		StrokeState s;
+		s.depth = cut_;
+		s.limit = cut_ >= max_depth_ - 1e-3f && max_depth_ < 1e8f ? "through" : backed_ ? "back" : "";
+		return s;
 	}
 
 	// Through the work: the kerf's middle plane, which holds the saw's line and the normal.
@@ -502,10 +578,45 @@ private:
 		return chords_.emplace(key, c).first->second;
 	}
 
+	// A column of the work across the kerf's line: its top and bottom (frame z), or none.
+	struct Column {
+		float top = -1e30f, bottom = 1e30f;
+	};
+
+	// How far along its line the saw slides from where it was set, either way.
+	float reach() const { return saw_.blade_length * 0.5f - 20.0f; }
+	// The wood along the teeth `depth` down, with the blade's middle at `at` (mm).
+	float chord(float depth, float at) const {
+		float length = 0.0f;
+		for (int i = column(at - 0.5f * saw_.blade_length); i <= column(at + 0.5f * saw_.blade_length); ++i) {
+			const Column &c = columns_[std::size_t(i)];
+			length += c.bottom <= -depth && -depth <= c.top ? 1.0f : 0.0f;
+		}
+		return length;
+	}
+	// The highest wood under the blade with its middle at `at` (0 on a flat face).
+	float highest(float at) const {
+		float top = 0.0f;
+		for (int i = column(at - 0.5f * saw_.blade_length); i <= column(at + 0.5f * saw_.blade_length); ++i) {
+			top = std::max(top, columns_[std::size_t(i)].top);
+		}
+		return top;
+	}
+	int column(float x) const {
+		return std::clamp(int(std::lround(x + 0.5f * saw_.blade_length + reach())), 0, int(columns_.size()) - 1);
+	}
+
 	Saw saw_;
 	Frame frame_;
 	float feed_, max_depth_;
+	bool real_ = false;
+	float pressure_ = 1.0f, hardness_ = 5870.0f;
+	std::vector<Column> columns_;
+	bool backed_ = false; // the back has met the work
 	float depth_ = 0.0f, position_ = 0.0f;
+	float lo_ = 0.0f, hi_ = 0.0f; // the range the blade's middle has covered
+	float span_lo_ = 0.0f, span_hi_ = 0.0f; // the kerf's, as cut
+	int slices_ = 0;      // the kerf's edits held by the session
 	float cut_ = 0.0f;    // depth the kerf has been cut to
 	float frozen_ = 0.0f; // depth where the open slice starts
 	bool open_ = false;
@@ -629,6 +740,11 @@ std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 n
 
 std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed, float max_depth) {
 	return std::make_unique<SawStroke>(saw, contact, normal, along, feed, max_depth);
+}
+
+std::unique_ptr<Stroke> saw_stroke(const Saw &saw, const Work &work, vec3 contact, vec3 normal, vec3 along,
+		float pressure, float pace, float max_depth) {
+	return std::make_unique<SawStroke>(saw, work, contact, normal, along, pressure, pace, max_depth);
 }
 
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,

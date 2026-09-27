@@ -23,7 +23,10 @@ const WARNINGS := {
 	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
 }
 ## What stops a stroke going on (SdfBody.get_stroke_state's "limit"), in words.
-const LIMITS := {}
+const LIMITS := {
+	"back": "its back meets the work: it goes no deeper",
+	"through": "through",
+}
 ## A workshop's pace against real life (workshop.pace).
 const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 ## Sanding blocks' grits, coarse to fine.
@@ -95,7 +98,7 @@ func _ready() -> void:
 	_slider(scraper, "scraper", "pressure", "Pressure", "%.2f")
 	var saw := VBoxContainer.new()
 	left.add_child(saw)
-	_slider(saw, "saw", "feed", "Feed", "%.3f mm per mm")
+	_slider(saw, "saw", "pressure", "Pressure", "%.2f")
 	var block := VBoxContainer.new()
 	left.add_child(block)
 	var pads: Array = []
@@ -219,7 +222,8 @@ func stroke_text() -> String:
 			if contact < 0.5:
 				lines.append("resting on the high spots" if contact > 0.0 else "off the work")
 		"saw":
-			parts.append("%.1f mm deep" % state.depth)
+			parts.append("%.2f mm deep" % state.depth)
+			lines.append("cuts on the push")
 	lines.push_front("   ".join(parts))
 	var limit: String = state.get("limit", "")
 	if limit != "":

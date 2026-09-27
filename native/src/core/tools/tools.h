@@ -72,7 +72,11 @@ struct Chisel {
 	vec3 edge(vec3 start, vec3 end, vec3 normal, float depth) const;
 };
 
-// A back saw. Its kerf is a straight slot along the blade, as deep as the saw has gone.
+// A back saw (a tenon saw: 250 mm of plate, 8 teeth to the inch). Its kerf is a straight
+// slot along the blade, as deep as the saw has gone. It cuts on the push (towards its toe,
+// -x; the handle is at +x): each tooth takes a bite, and the hand's weight on the saw is
+// shared by the teeth in the wood, so a long chord (the wood along the teeth) goes slower.
+// It goes no deeper than its brass back lets it.
 struct Saw {
 	float kerf = 0.8f;
 	float plate = 0.6f;
@@ -81,10 +85,19 @@ struct Saw {
 	float tooth_pitch = 3.2f;
 
 	Body model() const;
+	// How far below the highest wood under it the teeth go before the back meets it (mm).
+	float under_back() const { return blade_height - 0.5f; }
+	// Depth taken per mm pushed through `chord` mm of wood of this hardness (N, Janka; ash by
+	// default), pressed with `pressure` (1: a hand's weight on it): 0.0038 mm through a 25 mm
+	// chord of oak, in proportion to 25 / chord (a chord under 10 mm as 10) and the teeth's
+	// pitch. A tenon saw goes through 25 mm of oak 50 mm wide in about 70 strokes of 200 mm.
+	float feed_per_mm(float chord, float hardness = 5870.0f, float pressure = 1.0f) const;
 	Edit kerf_cut(vec3 centre, vec3 along, vec3 normal, float depth) const;
 	// The part of a kerf between two depths (from 0: the whole slot up to the surface), so
-	// sawing deeper only adds what is new.
-	Edit kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth) const;
+	// sawing deeper only adds what is new: along the blade's line over [lo, hi] (mm from
+	// `centre`; the blade's own length when lo > hi).
+	Edit kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth, float lo = 1.0f,
+			float hi = -1.0f) const;
 };
 
 // A cork sanding block with abrasive paper (or a smaller pad). A hard block flattens: it
@@ -201,8 +214,15 @@ public:
 // A chisel set on the surface at `contact`, facing `facing` until the push shows its
 // direction (after 2 mm), cutting `depth` deep. It cannot un-cut: pulling back does nothing.
 std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 normal, vec3 facing, float depth);
-// A saw set on the surface at `contact` along `along`: each millimetre of blade travel,
-// either way, deepens the kerf by `feed`, down to `max_depth` (through the work).
+// A saw set on the surface at `contact` along `along`, at the real rate (times the pace): each
+// millimetre it is pushed (towards -along, its toe) deepens the kerf by feed_per_mm() through
+// the chord of `work` under its teeth there, down to `max_depth` (through the work) or as far
+// as its back lets it. The kerf runs where the teeth have been. Reads the work's shape (along
+// the kerf's line) and wood when it is set.
+std::unique_ptr<Stroke> saw_stroke(const Saw &saw, const Work &work, vec3 contact, vec3 normal, vec3 along,
+		float pressure = 1.0f, float pace = 1.0f, float max_depth = 1e9f);
+// The same at a set feed: each millimetre of blade travel, either way, deepens the kerf by
+// `feed` (for tests, and a workshop setting that asks for it).
 std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed,
 		float max_depth = 1e9f);
 // A sanding block pressed flat at `contact` (its length along `along`), rubbed about the

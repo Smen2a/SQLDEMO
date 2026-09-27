@@ -419,6 +419,32 @@ func _ready() -> void:
 	_check(state.get("depth", 0.0) > 0.001 and state.get("contact", 0.0) > 0.9 and said.contains("of its face"),
 			"the line by the pointer says what it has taken, and on how much of its face")
 
+	# The saw, at its real rate (eight times the pace): its handle towards the way the drag
+	# first goes, it cuts on the push back, not the pull.
+	workshop.pace = 8.0
+	workshop.select_tool("saw")
+	await _frames(4)
+	var saw_at := Vector3(0.05, 0.025, -0.03)
+	workshop.hover_screen(cam.unproject_position(saw_at))
+	await _frames(2)
+	workshop.press(cam.unproject_position(saw_at))
+	workshop.drag_screen(cam.unproject_position(saw_at + Vector3(0.03, 0, 0)))
+	await _frames(1)
+	await _catch_up()
+	var pulled: float = workshop.stroke_state().get("depth", -1.0)
+	for k in 6:
+		workshop.drag_screen(cam.unproject_position(saw_at + Vector3(-0.03 if k % 2 == 0 else 0.03, 0, 0)))
+		await _frames(1)
+		await _catch_up()
+	var sawn: float = workshop.stroke_state().get("depth", 0.0)
+	var saw_line: String = workshop._ui.plan_text()
+	workshop.release()
+	workshop.board.flush()
+	workshop.pace = 1.0
+	print("tool planning: the saw pulled %.3f mm, then three pushes %.3f mm: \"%s\"" % [pulled, sawn,
+			saw_line.replace("\n", " / ")])
+	_check(pulled == 0.0 and sawn > 0.2 and saw_line.contains("cuts on the push"), "the saw cuts on the push, not the pull")
+
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw
 	var target: Vector3 = cam.target
