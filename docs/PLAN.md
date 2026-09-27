@@ -65,7 +65,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W2a | Strokes drawn by the shader while the tool moves (no CPU), applied once on release, merged |
 | W2c | Sanding sponge: a curvature-flow smoothing layer (`Op::Layer`) |
 | W4 | Precision 10 µm; coarse crease cells refined when idle; cuts folded into old bricks; 512² upload layers; GPU brick sampler. Commits take 3–9 ms (were 57–95), a sponge update 23 ms |
-| P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D |
+| P1 | Sawn through, the board comes apart: `plane_clear` detects it (about 13 ms) and the worker measures both sides; `SdfBody.split` makes two editable bodies at once (about 3 ms of the frame) (the overlay draws each half-space until it lands); the offcut is a rigid body (a box or a cleaned convex hull) resting on the bench; undo rejoins. Physics tolerances set for millimetres; Jolt stays the default after a side-by-side with Box3D (that side was GodotPhysics3D, found in W5-5; Jolt is now named) |
 | T1 | Plan a stroke first: hold the right button to lock it in and see it hatched on the board, the wheel for its intensity; left-drag makes it along the plan. Or left-drag alone: the tool works the way the drag goes, cutting just as a planned stroke would, without the preview. The tool in hand stays out of sight until it acts, then fades in. Middle-drag orbits |
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
@@ -74,6 +74,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 | T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths. After play: an edge lock (along any edge, flush, level with an earlier cut's floor) and shavings the size of the chip |
 | W5 | A workshop to work in: a room built in code (bench and vise, side table, lumber rack), a first-person player, tools on a hotbar (none on the table), every piece of work a rigid body you pick up and carry, the vise squaring what is let go on it, the rack's stacks giving new boards; the old bench view is the work view you step into at the vise |
+| W5-5 | Pieces and debris land and lie still: Jolt named (DEFAULT had been GodotPhysics3D), debris resting on the board in the vise, CCD and a plane floor, guarded pushes and vise, old debris fading. `physics_calm` |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -87,7 +88,7 @@ path needs compute passes.
 | # | Capability | Replaces | Builds on |
 | --- | --- | --- | --- |
 | T | **Tools**: plan, lock, act; cutting by the wood; the real tools' rules (T4, under way) | the fixed-depth tools of W1 | the overlay (W2a) |
-| W5 | **A workshop to work in**: walk, carry, clamp, take stock (done) | the fixed bench view, tools on the table | Pieces (rigid bodies) |
+| W5 | **A workshop to work in**: walk, carry, clamp, take stock; pieces that lie still (done) | the fixed bench view, tools on the table | Pieces (rigid bodies) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
 | 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
@@ -207,7 +208,7 @@ one tool at a time, each tried before the next.
   5 g piece, or tipped it and buried it in the board; a plate at the edge flung pieces off.
   And a velocity as slow as the edge is lost to friction within a physics step.
 - Found on the way: the board's convex hull (17 points bunched at its eased corners) let
-  loose pieces sink 3 mm into it in Jolt; the board's collider is now a box while it fills
+  loose pieces sink 3 mm into it (under GodotPhysics3D, as it turned out); the board's collider is now a box while it fills
   its bounds, as an offcut's is.
 - **After play:**
   - **Edge lock** (`tools/edges`, `SdfBody.find_edge`). A chisel's or gouge's stroke locked
@@ -356,6 +357,41 @@ walnut.
   askew, a board from the rack, the taken vise, the side table, a chisel stroke at the
   bench, and the board carried off and dropped with its cut and undo.
 
+- **W5-5, pieces and debris that land and lie still.** From play: shavings (chisel,
+  spokeshave) and sawn-off blocks stuck in the bench and floor and shook there, right after
+  cutting, when carried or dropped, and when a tool pushed them. `physics_calm` measured
+  each case first (how deep a body goes into anything, from the physics space, and when it
+  lies still):
+  - the chisel's shaving lay 15 mm into the board;
+  - the spokeshave's sat 7 mm into the bench top and never came to rest;
+  - a chip off the bench went 43 mm into the floor;
+  - a block pushed by the sanding block went 62 mm into the bench;
+  - a strip let go over the bench went 25 mm into it.
+
+  The causes and fixes:
+  - **The engine was not Jolt.** `3d/physics_engine` was left at DEFAULT, which Godot 4.7
+    ran as GodotPhysics3D: the Jolt tolerances did nothing, and P1's "Jolt" figures were
+    GodotPhysics3D's. On it, small light bodies rock and gain energy (a 4 mm chip spun at
+    300 rad/s; Jolt caps at 47). `project.godot` now names Jolt. Every headless test
+    passes unchanged; the offcut slides 4.3 mm (was 5.7) and sinks 0.00 mm.
+  - **Debris went through the board.** `debris.gd` let a new piece pass through any
+    `RigidBody3D` it was born in (meant for a loose piece the blade pushes), checked before
+    lifting it clear. Since W5-2 the board in the vise is a frozen `RigidBody3D`. Now: only
+    loose (unfrozen) pieces, checked where it is born, and a piece still inside something is
+    set down on it from above.
+  - **Tunnelling.** Pieces and debris have continuous collision detection, and the floor's
+    collider is a plane again (it was before the room).
+  - **Teleports.** A tool's push moves a piece only as far as its shapes, swept from just
+    above what it rests on, are free to go. The vise won't take a piece where a loose one
+    lies, and fades the debris there.
+  - **Also:** debris past the newest 24 fades instead of freezing solid (it hung in the
+    air once its support was carried off), and a piece's collider is left alone when an
+    edit doesn't change it.
+
+  After: every case goes at most 0.2 mm into what it rests on (2.6 mm at worst, landing)
+  and is still within 0.7 s. The carry drive was measured too, held out past the bench top
+  the eyes are on; it rests on the bench, and was left as it is.
+
 **Left for later:** a view model per tool that looks held (it floats at a fixed offset);
 putting tools down; the rack's stacks running out; a vise that holds a piece off the bench
 (for sawing down, or working an end).
@@ -378,7 +414,7 @@ As built, it differs from the design below in these ways:
   reduced to the outermost of points within 1 mm: tight clusters made sliver faces that
   rocked and sank.
 - **Tolerances.** `project.godot` sets 0.2 mm tolerances.
-- **Engines.** `tools/compare_physics.sh` compares Jolt with Box3D.
+- **Engines.** `tools/compare_physics.sh` compares Jolt with GodotPhysics3D and Box3D.
 - **Measured on the worker.** The worker measures both sides (volumes, centres, hull
   points) right after the separation check, and turns the plane so that the smaller side
   is in front. `split()` takes those measurements and waits on nothing: about 3 ms of the

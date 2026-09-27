@@ -22,7 +22,11 @@
 #     takes them back
 #   - sawdust is the kerf taken and heaps up beyond the kerf's ends; sanding dust lies on
 #     the face; the sponge's arrives; undo takes each stroke's back
-#   - the workshop as a place: walking, the hotbar, stepping up to the bench and back
+#   - the workshop as a place: walking, the hotbar, stepping up to the bench and back;
+#     carrying, the vise, the rack
+#   - shavings, chips and pieces land and lie still: on the board, the bench and the floor,
+#     pushed by a tool, dropped from carry height; never sunk into what they rest on
+#
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
 #   - the Live path renders a shaded scene with shadows and mesh intersections
@@ -87,6 +91,7 @@ if [[ "$GPU" == 0 ]]; then
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
+	check physics_calm "physics calm: pieces and debris land and lie still" res://tests/physics_calm.tscn
 	exit $status
 fi
 

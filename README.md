@@ -592,24 +592,49 @@ Fracture and failing joints will split bodies the same way later
     board is a box: pieces sank 3 mm into its hull, whose points still bunch within a
     little over a millimetre at its eased corners. Its collider is rebuilt at the split,
     before the half-space lands, so the offcut never starts inside it.
+- **The engine: Jolt, named.** `project.godot` names Jolt (`3d/physics_engine`). Until W5-5
+  it was left at DEFAULT, which Godot 4.7 ran as GodotPhysics3D. So the Jolt tolerances
+  below did nothing, and the figures this section gave for "Jolt" were GodotPhysics3D's.
+  Under GodotPhysics3D, small light bodies never came to rest: a 4 mm chip, a shaving or a
+  16 mm block rocked on the bench, gaining energy, spinning at up to hundreds of radians a
+  second and digging millimetres into what they lay on (`game/tests/physics_calm`).
 - **Millimetre tolerances.** Godot's physics engines are tuned for metre-sized objects:
-  Jolt, the default, lets contacts overlap by 2 cm. `project.godot` sets the overlap to
-  0.2 mm (`[physics]`), so a 25 mm offcut rests on the bench instead of sinking into it.
-- **Measured** (`game/tests/offcut_physics`, 1 s after the saw goes through; Jolt's figures
-  match its 0.2 mm slop). `tools/compare_physics.sh` repeats it under Box3D, Erin Catto's
+  Jolt's defaults let contacts overlap by 2 cm. `project.godot` sets the overlap to 0.2 mm
+  (`[physics]`), so a 25 mm offcut rests on the bench instead of sinking into it.
+- **Falling and landing.**
+  - Pieces and debris have continuous collision detection. Let go at a height or knocked
+    off the bench, a piece moves further in a physics step than the bench top is thick;
+    swept, it lands on it rather than ending up inside.
+  - The floor's collider is a plane, which only ever pushes things up.
+  - A tool pushing a loose piece moves it only as far as it is free to go (its shapes swept
+    along the push, from just above what it rests on), never into the work, the bench or
+    another piece.
+- **Measured** (`game/tests/offcut_physics`, 1 s after the saw goes through).
+  `tools/compare_physics.sh` repeats it under GodotPhysics3D, and under Box3D, Erin Catto's
   new engine, through the experimental
   [godot-box3d](https://github.com/bearlikelion/godot-box3d) extension (built from source,
-  never committed):
+  never committed; its figures are from before the room):
 
-  | | Jolt (default, tuned), box | Jolt, hull | Box3D, box | Box3D, hull |
-  | --- | --- | --- | --- | --- |
-  | sinks into the bench at rest | 0.20 mm | 0.20 mm | 0.09 mm | 0.16 mm (4.2 at worst) |
-  | tilts | 0° | 0.5° | 0° | 0.7° |
-  | slides off the kerf | 5.7 mm | 5.4 mm | 0.9 mm | 2.2 mm |
-  | per physics step | 0.25 ms | 0.30 ms | 0.24 ms | 0.27 ms |
+  | | Jolt, box | Jolt, hull | GodotPhysics3D, box | GodotPhysics3D, hull | Box3D, box | Box3D, hull |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | sinks into the bench at rest | 0.00 mm | 0.63 mm (0.81 at worst) | 0.20 mm | 0.20 mm (3.9 at worst) | 0.09 mm | 0.16 mm (4.2 at worst) |
+  | tilts | 0° | 2.3° | 0° | 0.4° | 0° | 0.7° |
+  | slides off the kerf | 4.3 mm | 2.4 mm | 5.6 mm | 7.8 mm | 0.9 mm | 2.2 mm |
 
-  Both handle it. Box3D's friction combines differently, hence the shorter slide. It is
-  still alpha, as is its Godot extension, so the default stays Jolt.
+  A sawn strip gets the box (it fills its bounds). Jolt rests a hull less well than a box;
+  irregular offcuts, which get hulls, are the ones to watch. Box3D's friction combines
+  differently, hence its shorter slide. It is still alpha, as is its Godot extension.
+- **Landing and lying still** (`game/tests/physics_calm`, under Jolt). Each of these goes at
+  most 0.2 mm into what it rests on (2.6 mm at worst, landing), and is still within 0.7 s:
+  - a chisel's shaving and a spokeshave's, on the board;
+  - a shaving and a chip, off the bench onto the floor;
+  - a sawn strip, on the bench;
+  - a loose block, pushed off the board's end by the chisel and by the sanding block;
+  - the strip, let go from carry height over the floor and over the bench.
+
+  Before W5-5, the chisel's shaving lay inside the board (see *Shavings and chips*), and a
+  chip and the pushed block went 43 and 62 mm into the floor and the bench and never came
+  to rest.
 
 ### Islands: cuts meeting, no plane
 
@@ -697,13 +722,21 @@ stroke's back. Debris never goes back into a body: it only shows what came off.
 - **Physics.** Released, a shaving is a rigid body whose collider is the box round the
   curl in its own frame: a hull round the curl rocked from facet to facet and never came
   to rest. It weighs at least a few grams to the solver (lighter bodies this small are
-  shaken about), and is damped (light and springy, it soon lies still). The board has a
-  collider while debris lies about.
+  shaken about), and is damped (light and springy, it soon lies still).
+- **Born clear, resting on the work.** A shaving is made where it curls, lifted clear of the
+  cut, and a chip is lifted out of the face it broke from.
+  - Only a *loose* piece it is born inside (one the blade was pushing ahead of the edge) is
+    one it goes through.
+  - The piece in the vise it rests on. From W5-2 to W5-5 the vise's frozen rigid body
+    counted as loose, so shavings fell through the board onto the bench, inside it.
+  - Where it would still start inside something (the work's collider is its bounds, over
+    a cut's floor), it is set down on it from above, just touching.
 - **Fading.** A piece is at rest once it has moved slower than 5 mm/s for 0.2 s (or 3 s
   after it came away, still rolling or not). 2 s later it is frozen, its collider is
   switched off so nothing lands on it, and its own copy of its material fades from opaque
-  to clear over 0.5 s. Then it is freed. The newest 24 pieces move; older ones are frozen;
-  past 60, the oldest go.
+  to clear over 0.5 s. Then it is freed. The newest 24 pieces move; older ones fade (frozen
+  solid, they hung in the air once what they lay on was carried off); past 60, the oldest
+  go. A piece put in the vise fades away the debris lying where it goes.
 | | |
 | --- | --- |
 | ![A paring cut in ash, close up: the shaving rising off the chisel's edge and curling over as the stroke goes](docs/images/debris_shaving_working.png) | ![The shaving come away, lying curled on the board where it fell](docs/images/debris_shaving.png) |

@@ -93,6 +93,7 @@ const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its d
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
 const SETTLE_INTO := 0.00018 # m it starts into that (the solver's slop is 0.2 mm)
 const SHAPE_MARGIN := 0.0001 # m: islands' and the hollowed board's shapes, sharp to a tenth of a mm
+const PUSH_CLEAR := 0.0003 # m above a pushed piece's shapes its way is checked from (over the 0.2 mm it rests in)
 ## mm/s a tool goes over the work at most, as a hand works it (times the pace): a push tool
 ## paring freely (at the force the hand can give, a fifth of it); the others' strokes.
 const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 150.0, "saw": 300.0, "rasp": 250.0,
@@ -415,7 +416,7 @@ func let_go() -> void:
 	if held == null:
 		return
 	var piece := held
-	var into_vise := clamped == null and at_vise()
+	var into_vise := clamped == null and at_vise() and not vise_blocked(piece)
 	held = null
 	piece.gravity_scale = 1.0
 	piece.can_sleep = true
@@ -440,6 +441,19 @@ func at_vise() -> bool:
 ## longer of its other two along the bench (to the nearer end), and set down on the bench
 ## top between the jaws, its middle at the vise's.
 func _put_in_vise(piece: RigidBody3D) -> void:
+	var pose := _vise_pose(piece)
+	# Shavings and chips lying where it goes fade away (rather than being found inside it).
+	for shape in _shapes_of(piece):
+		debris.fade_within(shape.shape, pose * shape.transform)
+	piece.freeze = true
+	piece.linear_velocity = Vector3.ZERO
+	piece.angular_velocity = Vector3.ZERO
+	piece.global_transform = pose
+	_clamp(piece)
+
+
+## Where a piece goes in the vise (its rigid body's transform), squared (see _put_in_vise).
+func _vise_pose(piece: RigidBody3D) -> Transform3D:
 	var sdf = piece.get_meta("sdf")
 	var inner: Basis = sdf.transform.basis.orthonormalized() # the body's turn in its rigid body
 	var axes: Basis = piece.global_basis.orthonormalized() * inner # its x, y, z in the world
@@ -457,13 +471,26 @@ func _put_in_vise(piece: RigidBody3D) -> void:
 	var third := 3 - up - along
 	square[third] = square[(third + 1) % 3].cross(square[(third + 2) % 3])
 	var turn := Basis(square[0], square[1], square[2]) * inner.inverse()
-	piece.freeze = true
-	piece.linear_velocity = Vector3.ZERO
-	piece.angular_velocity = Vector3.ZERO
 	var extent := _extent(sdf, Transform3D(turn, Vector3.ZERO) * sdf.transform)
 	var middle := extent.get_center()
-	piece.global_transform = Transform3D(turn, Vector3(-middle.x, -extent.position.y, -middle.z))
-	_clamp(piece)
+	return Transform3D(turn, Vector3(-middle.x, -extent.position.y, -middle.z))
+
+
+## Whether another loose piece lies where a piece would go in the vise (it would be found
+## inside it): then the vise does not take it.
+func vise_blocked(piece: RigidBody3D) -> bool:
+	var pose := _vise_pose(piece)
+	var space := get_world_3d().direct_space_state
+	for shape in _shapes_of(piece):
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = shape.shape
+		query.transform = pose * shape.transform
+		query.collision_mask = 1
+		query.exclude = [piece.get_rid()]
+		for hit in space.intersect_shape(query, 8):
+			if hit.collider is RigidBody3D and not hit.collider.freeze:
+				return true
+	return false
 
 
 ## Where a piece's surface reaches (its hull, or failing that its bounds) with its body at
@@ -504,9 +531,11 @@ func prompt() -> String:
 	if held != null:
 		var turning := "   R: turn it   wheel: nearer, farther"
 		if at_vise():
-			if clamped == null:
-				return "E: put the %s in the vise" % _name_of(held) + turning
-			return "E: let go (the vise holds the %s)" % _name_of(clamped) + turning
+			if clamped != null:
+				return "E: let go (the vise holds the %s)" % _name_of(clamped) + turning
+			if vise_blocked(held):
+				return "E: let go (something lies in the vise)" + turning
+			return "E: put the %s in the vise" % _name_of(held) + turning
 		return "E: let go" + turning
 	var hit := look_at_thing()
 	if hit.is_empty():
@@ -1093,9 +1122,6 @@ func _take_debris(edge: Transform3D) -> void:
 func _refresh_collider(piece: RigidBody3D) -> void:
 	if piece == null:
 		return
-	for shape in _shapes_of(piece):
-		piece.remove_child(shape)
-		shape.queue_free()
 	var sdf = piece.get_meta("sdf")
 	var holes := []
 	for offcut in offcuts:
@@ -1106,8 +1132,15 @@ func _refresh_collider(piece: RigidBody3D) -> void:
 	if holes.is_empty():
 		var collider := _collider_for(sdf)
 		collider.shape.margin = SHAPE_MARGIN
+		if _same_collider(piece, collider):
+			# (Left as it is: what rests on it keeps its contacts, rather than being jolted by a
+			# new shape after every stroke.)
+			collider.free()
+			return
+		_clear_shapes(piece)
 		piece.add_child(collider)
 		return
+	_clear_shapes(piece)
 	for points in sdf.get_collision_hulls(holes):
 		var hull := ConvexPolygonShape3D.new()
 		var placed := PackedVector3Array()
@@ -1118,6 +1151,21 @@ func _refresh_collider(piece: RigidBody3D) -> void:
 		var shape := CollisionShape3D.new()
 		shape.shape = hull
 		piece.add_child(shape)
+
+
+## Whether a piece's collider is already `collider` (one box, the same size and place).
+func _same_collider(piece: RigidBody3D, collider: CollisionShape3D) -> bool:
+	var shapes := _shapes_of(piece)
+	if shapes.size() != 1 or not (shapes[0].shape is BoxShape3D) or not (collider.shape is BoxShape3D):
+		return false
+	return shapes[0].shape.size.is_equal_approx(collider.shape.size) and \
+			shapes[0].position.is_equal_approx(collider.position)
+
+
+func _clear_shapes(piece: RigidBody3D) -> void:
+	for shape in _shapes_of(piece):
+		piece.remove_child(shape)
+		shape.queue_free()
 
 
 func _shapes_of(piece: RigidBody3D) -> Array:
@@ -1145,6 +1193,9 @@ func _as_piece(sdf, at: Transform3D, placed: Transform3D, wood_name: String, kin
 	body.set_meta("kind", kind)
 	body.collision_layer = 1
 	body.collision_mask = 1
+	# Let go at a height or knocked off the bench, a piece moves further in a physics step than
+	# the bench top is thick: swept, it lands on it rather than ending up inside.
+	body.continuous_cd = true
 	add_child(body)
 	body.global_transform = at
 	if sdf.get_parent() != null:
@@ -1486,10 +1537,28 @@ func _push_aside(delta: float) -> void:
 	for hit in get_world_3d().direct_space_state.intersect_shape(query, 8):
 		var piece = hit.collider
 		if piece is RigidBody3D and not piece.freeze:
-			# Along the board: the edge's advance this step, less any way it goes up or down.
+			# Along the board: the edge's advance this step, less any way it goes up or down, as
+			# far as it is free to go (never into the work, the bench or another piece).
 			var advance: Vector3 = _edge_velocity * delta
-			piece.global_position += advance - Vector3.UP * advance.dot(Vector3.UP)
+			advance -= Vector3.UP * advance.dot(Vector3.UP)
+			piece.global_position += advance * _free_to_move(piece, advance)
 			piece.sleeping = false
+
+
+## How much of `motion` (0 to 1) a piece can be moved without going into anything: its shapes
+## swept along it from a hair above where they are (clear of what it rests on).
+func _free_to_move(piece: RigidBody3D, motion: Vector3) -> float:
+	var free := 1.0
+	var space := get_world_3d().direct_space_state
+	for shape in _shapes_of(piece):
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = shape.shape
+		query.transform = shape.global_transform.translated(Vector3.UP * PUSH_CLEAR)
+		query.motion = motion
+		query.collision_mask = piece.collision_mask
+		query.exclude = [piece.get_rid()]
+		free = minf(free, space.cast_motion(query)[0])
+	return free
 
 
 ## Where the tool in hand is held while walking: in front of the eyes, a little to the right

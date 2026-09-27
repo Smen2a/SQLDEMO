@@ -103,8 +103,18 @@ func _shell() -> void:
 	var width := RIGHT - LEFT
 	var depth := FRONT - BACK
 	var middle := Vector3(0.5 * (LEFT + RIGHT), 0.0, 0.5 * (BACK + FRONT))
-	var ground := _box(Vector3(width, 0.1, depth), middle + Vector3(0, FLOOR - 0.05, 0), planks, true)
+	# The floor's collider is a plane, as the workshop's was before there was a room: whatever
+	# lands on it hard is only ever pushed back up (from deep in a thin box, the way out can be
+	# down or sideways).
+	_box(Vector3(width, 0.1, depth), middle + Vector3(0, FLOOR - 0.05, 0), planks, false)
+	var ground := StaticBody3D.new()
+	ground.collision_layer = 1 | ROOM_LAYER
 	ground.set_meta("ground", true)
+	var plane := CollisionShape3D.new()
+	plane.shape = WorldBoundaryShape3D.new()
+	plane.position = Vector3(0.0, FLOOR, 0.0)
+	ground.add_child(plane)
+	add_child(ground)
 	var up := FLOOR + 0.5 * HEIGHT
 	_box(Vector3(width + 2.0 * WALL, HEIGHT, WALL), Vector3(middle.x, up, BACK - 0.5 * WALL), plaster, true, false)
 	_box(Vector3(WALL, HEIGHT, depth), Vector3(LEFT - 0.5 * WALL, up, middle.z), plaster, true, false)

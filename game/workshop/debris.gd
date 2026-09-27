@@ -16,8 +16,8 @@ extends Node3D
 ##             there (dust.gd).
 ## Shavings and chips are passing things: once one has lain still for REST it fades out over
 ## FADE and is gone. Each piece belongs to the board's undo step that made it (undo_step()
-## takes it back). The newest LIVE pieces move under physics; older ones stay where they
-## lie, still solid; past MOST the oldest go. World space throughout (metres); the report's
+## takes it back). The newest LIVE pieces move under physics; older ones fade out; past MOST
+## the oldest go. World space throughout (metres); the report's
 ## volumes are mm^3.
 
 const Dust := preload("res://workshop/dust.gd")
@@ -33,6 +33,7 @@ const FALLING := 3.0 # s after it came away a piece counts as at rest, still or 
 const MARGIN := 0.0001 # m: sharp shapes at millimetre scale (Godot's default rounds them away)
 const LAYER := 4 # its pieces' physics layer bit (the world and loose pieces are on 1)
 const LIFT := 0.0005 # m a piece is set clear of where it came from before it falls
+const CLEAR_FROM := 0.03 # m above where it came away that a piece born inside something is set down from
 
 ## Pieces come away as these, oldest first: {"body": RigidBody3D, "view": its MeshInstance3D,
 ## "step": the board's step that made it, "kind": "shaving" or "chip", "volume": mm^3, and
@@ -175,6 +176,20 @@ func _begin_fade(piece: Dictionary) -> void:
 	piece.view.material_override = look
 
 
+## Pieces lying within `shape` placed at `xf` (world) fade away: something is set down there.
+func fade_within(shape: Shape3D, xf: Transform3D) -> void:
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = xf
+	query.collision_mask = LAYER
+	var hits := {}
+	for hit in get_world_3d().direct_space_state.intersect_shape(query, 32):
+		hits[hit.collider] = true
+	for piece in pieces:
+		if piece.fade < 0.0 and hits.has(piece.body):
+			_begin_fade(piece)
+
+
 ## A piece's entry in `pieces`, just come away.
 func _piece(body: RigidBody3D, view: MeshInstance3D, step: int, kind: String, volume: float) -> Dictionary:
 	made[kind] += 1
@@ -287,13 +302,13 @@ func _release_live() -> void:
 	var box := BoxShape3D.new()
 	box.size = (hi - lo).max(Vector3.ONE * 0.2 * MM)
 	var xf := Transform3D(axes, axes * ((lo + hi) * 0.5))
-	var body := _new_body(xf, box, live.volume * live.density * 1e-6)
+	# Off the edge it rides clear of the cut and drops. Light and springy, it is soon still.
+	var lift: Vector3 = Vector3.UP * (2.0 * curl.half_thickness[0] + LIFT)
+	var body := _new_body(xf.translated(lift), box, live.volume * live.density * 1e-6)
 	var view := MeshInstance3D.new()
 	view.mesh = _ribbon(curl, xf.affine_inverse())
 	view.material_override = _shavings
 	body.add_child(view)
-	# Off the edge it rides clear of the cut and drops. Light and springy, it is soon still.
-	body.global_position += Vector3.UP * (2.0 * curl.half_thickness[0] + LIFT)
 	body.linear_damp = 2.0
 	body.angular_damp = 8.0
 	pieces.append(_piece(body, view, live.step, "shaving", live.volume))
@@ -306,7 +321,10 @@ func _add_chip(chip: Dictionary, step: int, density: float) -> void:
 	var box := BoxShape3D.new()
 	box.size = size.max(Vector3.ONE * 0.2 * MM)
 	var xf: Transform3D = chip.transform
-	var body := _new_body(xf, box, float(chip.volume) * density * 1e-6)
+	# Out of the face it broke from, clear of the work, and flicked off it (it lands within
+	# a few centimetres).
+	var out_of: Vector3 = xf.basis.z
+	var body := _new_body(xf.translated(out_of * (size.z + LIFT)), box, float(chip.volume) * density * 1e-6)
 	var view := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
 	mesh.size = box.size
@@ -316,10 +334,6 @@ func _add_chip(chip: Dictionary, step: int, density: float) -> void:
 	look.roughness = 0.8
 	view.material_override = look
 	body.add_child(view)
-	# Out of the face it broke from, clear of the work, and flicked off it (it lands within
-	# a few centimetres).
-	var out_of: Vector3 = xf.basis.z
-	body.global_position += out_of * (size.z + LIFT)
 	body.linear_velocity = out_of * 0.05 + xf.basis.x * 0.03
 	body.angular_velocity = xf.basis.y * 4.0
 	body.angular_damp = 3.0
@@ -334,6 +348,9 @@ func _new_body(xf: Transform3D, shape: Shape3D, mass: float) -> RigidBody3D:
 	# pieces aside, not what it takes off.
 	body.collision_layer = LAYER
 	body.collision_mask = 1 | LAYER
+	# A shaving falls up to a metre, a few centimetres a physics step: swept, it meets the
+	# floor or the bench top rather than ending up inside it.
+	body.continuous_cd = true
 	add_child(body)
 	body.global_transform = xf
 	shape.margin = MARGIN
@@ -345,24 +362,37 @@ func _new_body(xf: Transform3D, shape: Shape3D, mass: float) -> RigidBody3D:
 	var surface := PhysicsMaterial.new()
 	surface.friction = 0.6
 	body.physics_material_override = surface
-	# Born inside a loose piece (one the blade was pushing ahead of the edge, where the shaving
-	# curls): the two would be forced apart violently. It goes through that one instead.
+	var space := get_world_3d().direct_space_state
 	var query := PhysicsShapeQueryParameters3D.new()
 	query.shape = shape
 	query.transform = xf
 	query.collision_mask = 1
-	for hit in get_world_3d().direct_space_state.intersect_shape(query, 8):
-		if hit.collider is RigidBody3D:
+	# Born inside a loose piece (one the blade was pushing ahead of the edge, where the shaving
+	# curls): the two would be forced apart violently. It goes through that one instead. Not
+	# the piece in the vise (frozen), which it must rest on.
+	var passes: Array[RID] = [body.get_rid()]
+	for hit in space.intersect_shape(query, 8):
+		if hit.collider is RigidBody3D and not hit.collider.freeze:
 			body.add_collision_exception_with(hit.collider)
+			passes.append(hit.rid)
+	# Still inside something (the work in the vise, whose collider is its bounds, over a cut's
+	# floor; a shaving lying there): set down on it from above instead, just touching.
+	query.exclude = passes
+	query.collision_mask = 1 | LAYER
+	if not space.intersect_shape(query, 1).is_empty():
+		query.transform = xf.translated(Vector3.UP * CLEAR_FROM)
+		query.motion = Vector3.DOWN * CLEAR_FROM
+		var safe: PackedFloat32Array = space.cast_motion(query)
+		body.global_position = xf.origin + Vector3.UP * CLEAR_FROM * (1.0 - safe[0])
 	return body
 
 
-## The newest LIVE pieces move; older ones stay where they lie (still solid); past MOST the
-## oldest go.
+## The newest LIVE pieces move; older ones fade out (their colliders off: frozen solid they
+## would hang in the air once what they lay on was carried off, and stop what came by); past
+## MOST the oldest go at once.
 func _keep_cheap() -> void:
 	while pieces.size() > MOST:
 		pieces.pop_front().body.queue_free()
 	for i in pieces.size() - LIVE:
-		if not pieces[i].body.freeze:
-			pieces[i].body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
-			pieces[i].body.freeze = true
+		if pieces[i].fade < 0.0:
+			_begin_fade(pieces[i])

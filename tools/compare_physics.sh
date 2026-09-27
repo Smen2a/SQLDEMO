@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Saws a strip off the workshop board under two physics engines and prints how each
+# Saws a strip off the workshop board under three physics engines and prints how each
 # handles the offcut (tests/offcut_physics: how far it sinks into the bench, tilts and
 # slides):
-#   - Godot's default (Jolt since 4.6), with this project's tolerances for millimetre-sized
-#     pieces (project.godot [physics]);
+#   - Jolt, the project's engine (project.godot [physics]), with its tolerances for
+#     millimetre-sized pieces;
+#   - GodotPhysics3D, for reference (what "DEFAULT" gave this project until W5-5);
 #   - Box3D, through the experimental bearlikelion/godot-box3d GDExtension, a drop-in
 #     PhysicsServer3D. Build it from https://github.com/bearlikelion/godot-box3d
 #     (cmake -S . -B build -G Ninja && cmake --build build) and point BOX3D_LIB at the
@@ -26,7 +27,7 @@ run() {
 	done
 }
 
-echo "== Godot's default engine (Jolt), tuned for millimetres"
+echo "== Jolt (the project's engine), tuned for millimetres"
 run
 
 # The project must have been imported once (run.sh does it) for the extension list to exist.
@@ -48,6 +49,10 @@ compatibility_minimum = "4.3"
 
 linux.x86_64 = "res://addons/godot-box3d/bin/libgodot-box3d.so"
 GDEXT
+printf '[physics]\n\n3d/physics_engine="GodotPhysics3D"\n' >"$OVERRIDE"
+echo "== GodotPhysics3D, its solver tuned for millimetres (3d/solver in project.godot)"
+run
+
 echo "res://addons/godot-box3d/godot-box3d.gdextension" >>"$LIST"
 printf '[physics]\n\n3d/physics_engine="Box3D Physics"\n' >"$OVERRIDE"
 

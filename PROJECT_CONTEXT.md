@@ -55,6 +55,7 @@ Decided at the start (docs/archive/plan-v1.md, "Context"):
 | Scale | Details of about 0.1 mm on small parts, up to stone blocks of 2–3 m |
 | Joining | Parts never blend. Interlock, compression and glue joints with computed strength |
 | Undo, export | Unlimited undo; manifold mesh export |
+| Physics | Jolt, named in `project.godot`, tuned for millimetres (0.2 mm overlap) |
 
 The principles everything is built by (docs/PLAN.md):
 1. **The SDF is the truth; everything else is a cache.** ADF bricks, bakes and physics
@@ -171,6 +172,7 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
+| W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
 | W5 | A workshop to work in: a room built in code, a first-person player, tools on a hotbar, every piece of work a rigid body you pick up and carry (R turns it, the wheel reaches it), a vise that squares what is let go on it (flat, along the bench, on its top) and holds the piece the tools work on, a rack whose stacks give new boards. The old bench view is the work view you step into (E) and out of (Esc) |
 | T4-7 | The sanding sponge's flow at a real rate by grit, pressure and wood (ten passes of 120 grit round an ash arris to a 0.5 mm radius), at its working speed |
 | T4-6 | The spokeshave: held flat, its sole riding the highest across its blade; as deep as two hands push the chip's own section (deeper on a narrow edge), its mouth passes (0.8 mm) and its toe rides (a step blocks it) |
@@ -180,7 +182,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 122 native tests (GCC and Clang, including golden images) and 10
+Test counts today: 122 native tests (GCC and Clang, including golden images) and 11
 headless Godot checks.
 
 ## 5. Where things stand
@@ -217,7 +219,9 @@ so correctness can be checked here, but not speed.
 - **Physics:**
   - debris colliders are boxes;
   - a piece's collider is a box while it fills its bounds, unless islands have hollowed
-    it (then convex pieces). Proper meshes come with the Bake.
+    it (then convex pieces). Proper meshes come with the Bake;
+  - under Jolt a hull rests less well than a box (a sawn strip as a hull sinks 0.6 mm and
+    tilts 2°), so irregular offcuts, which get hulls, are the ones to watch.
 - **The workshop:** the tool in hand floats at a fixed offset from the eyes (no hands);
   tools can't be put down; the rack's stacks never run out; the vise holds a piece on the
   bench top only (not raised for sawing down or working an end).
@@ -238,8 +242,9 @@ of the first plan.
 Before trying the tools in play, the user wanted to find out how working with objects
 feels: walk round a workshop, take tools from a hotbar, pick pieces up, carry them to the
 bench and work on them there. Built in four steps (docs/PLAN.md, W5): the room and player
-with the hotbar; pieces as rigid bodies you carry; the vise; the rack. Next: try the
-workshop and the tools together in play.
+with the hotbar; pieces as rigid bodies you carry; the vise; the rack. From play, shavings
+and sawn-off blocks got stuck in the bench and floor and shook there: W5-5 fixed it
+(docs/PLAN.md, W5-5). Next: try the workshop and the tools together in play.
 
 ### T4. The rules of the real tools (done: T4-1 to T4-7; to be tried together)
 
@@ -416,6 +421,19 @@ build directory).
 - **A smooth blend reaches below its floor.** A pass feathered by r lowers any surface
   within r under its box's floor: resting on a bump, a 2 mm feather sanded the flat round
   it. Keep the feather to half what the pass takes off most of its ground.
+- **Name the physics engine, and check which one runs.** Left at DEFAULT, this project ran
+  GodotPhysics3D, not Jolt: the Jolt settings in `project.godot` did nothing, and every
+  physics figure measured "under Jolt" was GodotPhysics3D's. A chip spinning at 300 rad/s
+  gave it away (Jolt caps a body at 47 rad/s). Identical numbers when a setting changes
+  are the other tell.
+- **A rule for loose pieces must say "loose".** Debris goes through a `RigidBody3D` it is
+  born inside (a loose piece the blade pushes). Once the board in the vise became a frozen
+  `RigidBody3D` too, every shaving went through the board, and the debris test's "rests
+  above the bench" still passed. Check it rests where it should (on the board).
+- **Fast and small at 60 Hz.** A piece let go at carry height moves 5 to 9 cm a physics
+  step, more than a bench top is thick: give pieces and debris continuous collision
+  detection, and the floor a plane. Teleporting a piece (a tool's push, the vise) must look
+  where it lands.
 - **A piece's collider follows its split at once.** The offcut is made where it was, inside
   the old piece's collider until the half-space lands; rebuilt only on the next `edited`,
   that box threw it 21 mm off the kerf (it should slide about 6). Rebuild it at the split.

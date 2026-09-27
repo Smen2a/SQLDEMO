@@ -4,7 +4,7 @@ extends "res://tests/harness.gd"
 ## own pointer methods:
 ## - a chisel pared along the board from near its end (a left-drag, no plan): its shaving grows
 ##   at the edge during the drag, and comes away as one body when the stroke ends, as much
-##   wood as the board lost; it comes to rest on the board or the bench, lies there a couple
+##   wood as the board lost; it comes to rest on the board (not in it), lies there a couple
 ##   of seconds, fades and is gone;
 ## - pared along the front edge with half the chisel off the board, the shaving is only as wide
 ##   as the wood under the edge;
@@ -59,7 +59,8 @@ func _ready() -> void:
 			clock += get_process_delta_time()
 		var at := body.global_position
 		print("debris: %.1f s after it came away it rests %.1f mm above the bench" % [clock, at.y * 1000.0])
-		_check(shaving.rest >= 0.0 and clock < 3.5 and at.y > 0.0 and at.y < 0.05, "it comes to rest on the board or the bench")
+		# It came away mid-board: it lies on the board (above its top, 25 mm up), not in it.
+		_check(shaving.rest >= 0.0 and clock < 3.5 and at.y > 0.025 and at.y < 0.05, "it comes to rest on the board")
 		await _shot("debris_shaving", at)
 		# Lies there a while, fades, and goes.
 		var alpha := 1.0
