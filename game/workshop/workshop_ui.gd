@@ -22,8 +22,12 @@ const WARNINGS := {
 	"too wide for the gap": "too wide for the gap: take a narrower one",
 	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
 }
+## What stops a stroke going on (SdfBody.get_stroke_state's "limit"), in words.
+const LIMITS := {}
 ## A workshop's pace against real life (workshop.pace).
 const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+## Sanding blocks' grits, coarse to fine.
+const GRITS := [60, 80, 120, 180, 240, 320]
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
@@ -94,8 +98,13 @@ func _ready() -> void:
 	_slider(saw, "saw", "feed", "Feed", "%.3f mm per mm")
 	var block := VBoxContainer.new()
 	left.add_child(block)
-	_choice(block, "Grit", ["80", "120", "240"], 1,
-			func(i): workshop.set_setting("sanding_block", "grit", [80, 120, 240][i]))
+	var pads: Array = []
+	for v in workshop.variants.get("sanding_block", []):
+		pads.append(v.label)
+	_variants["sanding_block"] = _choice(block, "Kind", pads, 0, func(i):
+		workshop.set_setting("sanding_block", "variant", workshop.variants.sanding_block[i].id))
+	_choice(block, "Grit", GRITS.map(func(g): return str(g)), GRITS.find(workshop.settings.sanding_block.grit),
+			func(i): workshop.set_setting("sanding_block", "grit", GRITS[i]))
 	_slider(block, "sanding_block", "pressure", "Pressure", "%.2f")
 	var sponge := VBoxContainer.new()
 	left.add_child(sponge)
@@ -165,7 +174,7 @@ func _ready() -> void:
 func plan_text() -> String:
 	var plan: Dictionary = workshop.get_plan()
 	if plan.is_empty():
-		return ""
+		return stroke_text()
 	var tool: String = workshop.current
 	var s: Dictionary = workshop.settings[tool]
 	var named: Dictionary = workshop.variant()
@@ -184,12 +193,43 @@ func plan_text() -> String:
 		"rasp", "scraper":
 			parts.append("%.0f mm strokes, %.3f mm off each" % [plan.length, plan.get("depth", 0.0)])
 		"sanding_block":
-			parts.append("%.0f mm rub takes %.3f mm" % [plan.length, plan.get("depth", 0.0)])
+			parts.append("a %.0f mm rub takes %s, on %.0f%% of its face" % [plan.length, _thin(plan.get("depth", 0.0)),
+					100.0 * plan.get("contact", 1.0)])
 		"sanding_sponge":
 			parts.append("rounds over what it rubs")
 		_:
 			parts.append("%.0f mm" % plan.length)
 	return "   ".join(parts)
+
+
+## While a direct stroke of a tool that is not planned is made: what it has come to.
+func stroke_text() -> String:
+	var state: Dictionary = workshop.stroke_state()
+	var tool: String = workshop.current
+	if state.is_empty() or tool in workshop.PUSHED:
+		return ""
+	var named: Dictionary = workshop.variant()
+	var parts: Array[String] = [named.label if not named.is_empty() else TOOL_LABELS[tool].substr(2)]
+	var lines: Array[String] = []
+	match tool:
+		"sanding_block", "rasp", "scraper":
+			parts.append("%s off" % _thin(state.depth))
+			var contact: float = state.get("contact", 1.0)
+			parts.append("on %.0f%% of its face" % (100.0 * contact))
+			if contact < 0.5:
+				lines.append("resting on the high spots" if contact > 0.0 else "off the work")
+		"saw":
+			parts.append("%.1f mm deep" % state.depth)
+	lines.push_front("   ".join(parts))
+	var limit: String = state.get("limit", "")
+	if limit != "":
+		lines.append("! " + LIMITS.get(limit, limit))
+	return "\n".join(lines)
+
+
+## A depth, in thousandths of a millimetre below a hundredth.
+func _thin(depth: float) -> String:
+	return "%.1f µm" % (depth * 1000.0) if depth < 0.01 else "%.3f mm" % depth
 
 
 ## Tool buttons, which settings show, whether undo and redo apply.

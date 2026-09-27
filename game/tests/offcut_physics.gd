@@ -38,14 +38,17 @@ func _ready() -> void:
 		for k in 2:
 			workshop.drag_screen(cam.unproject_position(from.lerp(to, float(k + 1) / 2)))
 			await _frames(1)
+		await catch_up(workshop) # (to the stroke's end, at the saw's working speed)
 		from = to
 	workshop.release()
 	workshop.unlock()
 	workshop.board.flush()
-	for i in 30:
-		if not workshop.offcuts.is_empty():
-			break
+	# The split follows the commit that found the parts apart (checked on the worker): up to
+	# 5 s of game time for it, however quick the frames.
+	var split_wait := 0.0
+	while workshop.offcuts.is_empty() and split_wait < 5.0:
 		await _frames(1)
+		split_wait += get_process_delta_time()
 	if workshop.offcuts.is_empty():
 		push_error("offcut physics: the board did not come apart")
 		get_tree().quit(1)

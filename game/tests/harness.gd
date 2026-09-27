@@ -19,6 +19,17 @@ func capture_and_quit() -> void:
 	get_tree().quit()
 
 
+## Until the workshop's tool in hand has caught up with where it was dragged (every tool
+## follows at its working speed), or `most` seconds: in game time, which the engine slows
+## down where frames take seconds. Returns the time waited.
+func catch_up(workshop, most := 60.0) -> float:
+	var waited := 0.0
+	while workshop.lagging() and waited < most:
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+	return waited
+
+
 func user_arg(name: String, default: String) -> String:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with(name + "="):

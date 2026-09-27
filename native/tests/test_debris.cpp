@@ -292,7 +292,7 @@ TEST(sanding_and_rasp_dust_is_what_they_take) {
 	const Board ash;
 	SandingBlock block;
 	block.grit = 60;
-	auto sanding = sanding_stroke(block, {0, 0, kTop}, kUp, {1, 0, 0});
+	auto sanding = sanding_stroke(block, ash.work(), {0, 0, kTop}, kUp, {1, 0, 0}, 20.0f);
 	std::vector<vec3> circle;
 	for (int i = 1; i <= 240; ++i) {
 		const float a = float(i) * 0.1f;

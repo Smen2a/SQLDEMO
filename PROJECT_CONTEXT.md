@@ -164,9 +164,10 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
+| T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 105 native tests (GCC and Clang, including golden images) and 9
+Test counts today: 111 native tests (GCC and Clang, including golden images) and 9
 headless Godot checks.
 
 ## 5. Where things stand
@@ -216,16 +217,14 @@ so correctness can be checked here, but not speed.
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
 
-### T4. The rules of the real tools (under way: T4-1 done)
+### T4. The rules of the real tools (under way: T4-1 and T4-2 done)
 
 From play, the tools went too fast and hit too hard. One tool at a time, each tried by the
 user before the next, they are held to six rules (docs/PLAN.md, T4): access (only the edge
 or face meets the wood), chips must escape, real rates times a workshop pace, a working
 speed, loose pieces pushed not cut under, and a reason wherever a tool stops. T4-1 (chisels
-and gouges) is done. Next:
-- **T4-2 sanding block:** removal only where it rubbed (a dwell map), resting on high spots,
-  calibrated rates by grit (it is about 1,000 times too fast now), fine pressure and grit,
-  a small pad.
+and gouges) and T4-2 (the sanding block) are done; the user asked for the rest in one go,
+to try them together after. Next:
 - **T4-3 saw** (real feed, cutting on the push, a kerf only where the teeth have been),
   **T4-4 rasp**, **T4-5 scraper**, **T4-6 spokeshave** (the chisel's rules), **T4-7 sponge**.
 
@@ -382,6 +381,16 @@ build directory).
 - **A cut's end is not a step.** It slopes back at the blade's angle, rising under a
   millimetre per millimetre, so a rise tested sample by sample never sees a wall there.
   Look over two millimetres.
+- **Rubbing adds up; rectangles don't.** A sanding pass as one rectangle round the path
+  sands a diagonal sweep's empty corners; independent patches over the same ground take
+  only the deepest one's depth. Patches lie along the way the face moved, and each new one
+  rests on the ground as the ones before it left it (a height map lowered as they close).
+- **A smooth blend reaches below its floor.** A pass feathered by r lowers any surface
+  within r under its box's floor: resting on a bump, a 2 mm feather sanded the flat round
+  it. Keep the feather to half what the pass takes off most of its ground.
+- **Tests wait in game time, and for the tool.** Every tool now follows the pointer at a
+  working speed: drag one leg at a time and wait for `lagging()` to clear (the harness's
+  `catch_up`). Waits counted in frames break when headless frames take a millisecond.
 
 ## 9. Where to read more
 
@@ -390,6 +399,7 @@ build directory).
   - "Edits in milliseconds";
   - "Sanding as smoothing";
   - "Chisels and gouges cut as the wood lets them";
+  - "Sanding block" and "Rates and working speeds";
   - "Shaping and finishing";
   - "Pieces";
   - "Islands";
@@ -405,6 +415,7 @@ build directory).
   - `native/src/core/adf/adf.h`;
   - `native/src/core/edit/session.h`;
   - `native/src/core/tools/cutting.h`;
+  - `native/src/core/tools/rubbing.h`;
   - `native/src/core/tools/debris.h`;
   - `native/src/core/pieces/parts.h`;
   - `native/src/core/body/region.h`;

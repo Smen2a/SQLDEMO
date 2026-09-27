@@ -83,4 +83,29 @@ const RaspVariant *find_rasp(const std::string &id) {
 	return nullptr;
 }
 
+const std::vector<SandingVariant> &sanding_catalog() {
+	static const std::vector<SandingVariant> catalog = [] {
+		auto block = [](float length, float breadth) {
+			SandingBlock b;
+			b.length = length;
+			b.breadth = breadth;
+			return b;
+		};
+		return std::vector<SandingVariant>{
+				{"block", "Cork block 70 \u00d7 40", block(70.0f, 40.0f)},
+				{"pad", "Small pad 35 \u00d7 20", block(35.0f, 20.0f)},
+		};
+	}();
+	return catalog;
+}
+
+const SandingVariant *find_sanding(const std::string &id) {
+	for (const SandingVariant &v : sanding_catalog()) {
+		if (v.id == id) {
+			return &v;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace sdf::tools

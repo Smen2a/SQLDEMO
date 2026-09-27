@@ -327,6 +327,7 @@ func _ready() -> void:
 	for k in 10:
 		workshop.drag_screen(cam.unproject_position(rasp_to if k % 2 == 0 else rasp_from))
 		await _frames(1)
+		await _catch_up()
 	workshop.release()
 	workshop.unlock()
 	workshop.board.flush()
@@ -391,7 +392,9 @@ func _ready() -> void:
 	_check(deepest > 1.0 and workshop.board.get_stats().get("steps", 0) == steps + 2, "one blow, a slit")
 	workshop.set_setting("chisel", "angle", 30.0)
 
-	# The sanding block rubs as soon as it is pressed, wherever it is dragged.
+	# The sanding block rubs as soon as it is pressed, wherever it is dragged (at eight times
+	# the pace, to take a measurable bit off in a few strokes).
+	workshop.pace = 8.0
 	workshop.select_tool("sanding_block")
 	await _frames(4)
 	var rub := Vector3(0.0, 0.025, -0.03)
@@ -403,10 +406,18 @@ func _ready() -> void:
 	for k in 8:
 		workshop.drag_screen(cam.unproject_position(rub + Vector3(0.02 * sin(k), 0, 0.01 * cos(k))))
 		await _frames(1)
+		await _catch_up()
+	var state: Dictionary = workshop.stroke_state()
+	var said: String = workshop._ui.plan_text()
 	workshop.release()
 	workshop.board.flush()
+	workshop.pace = 1.0
+	print("tool planning: the sanding block took %.4f mm, on %.0f%% of its face: \"%s\"" % [state.get("depth", 0.0),
+			100.0 * state.get("contact", 0.0), said.replace("\n", " / ")])
 	_check(workshop.board.get_stats().get("steps", 0) == steps + 3 and workshop.board.get_stats().get("edits", 0) > edits,
 			"it rubbed the board")
+	_check(state.get("depth", 0.0) > 0.001 and state.get("contact", 0.0) > 0.9 and said.contains("of its face"),
+			"the line by the pointer says what it has taken, and on how much of its face")
 
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw

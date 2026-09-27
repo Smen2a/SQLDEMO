@@ -2,6 +2,7 @@
 
 #include "tools/catalog.h"
 #include "tools/edges.h"
+#include "tools/rubbing.h"
 
 #include "demo/gallery.h"
 #include "eval/query.h"
@@ -283,8 +284,9 @@ bool planned_tool(const String &tool) {
 
 // Tools whose stroke reads the body (its wood, its shape): only while no edit is applied.
 bool reads_body(const String &tool) {
-	return planned_tool(tool) || tool == "rasp" || tool == "scraper";
+	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block";
 }
+
 
 // Worked back and forth along their line: planned as one stroke there and back.
 bool reciprocates(const String &tool) {
@@ -297,6 +299,15 @@ tools::Rasp rasp_from(const Dictionary &settings) {
 	r.pressure = float(double(settings.get("pressure", 1.0)));
 	r.tilt_deg = float(double(settings.get("tilt", 0.0)));
 	return r;
+}
+
+// A sanding block or pad (core tools/catalog.h), with its settings' grit and pressure.
+tools::SandingBlock block_from(const Dictionary &settings) {
+	const tools::SandingVariant *v = tools::find_sanding(String(settings.get("variant", "block")).utf8().get_data());
+	tools::SandingBlock b = v != nullptr ? v->block : tools::SandingBlock{};
+	b.grit = int(settings.get("grit", 120));
+	b.pressure = float(double(settings.get("pressure", 1.0)));
+	return b;
 }
 
 // A chisel's or gouge's variant (core tools/catalog.h), held at its settings' angle.
@@ -326,9 +337,7 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	} else if (name == "saw") {
 		model = tools::Saw{}.model();
 	} else if (name == "sanding_block") {
-		tools::SandingBlock block;
-		block.grit = int(settings.get("grit", 120));
-		model = block.model();
+		model = block_from(settings).model();
 	} else if (name == "sanding_sponge") {
 		model = tools::SandingSponge{}.model();
 	} else {
@@ -381,6 +390,15 @@ Array SdfBody::tool_catalog() {
 		d["width"] = double(v.rasp.width);
 		d["coarseness"] = double(v.rasp.coarseness);
 		d["round"] = v.rasp.round;
+		out.push_back(d);
+	}
+	for (const tools::SandingVariant &v : tools::sanding_catalog()) {
+		Dictionary d;
+		d["id"] = String(v.id.c_str());
+		d["family"] = "sanding_block";
+		d["label"] = String::utf8(v.label.c_str());
+		d["length"] = double(v.block.length);
+		d["width"] = double(v.block.breadth);
 		out.push_back(d);
 	}
 	return out;
@@ -480,6 +498,7 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 	// scraper read the body's wood: only while no edit is being applied to it.
 	const tools::Work work{session_.body(), session_.octree(), materials_};
 	const float length = float(double(settings.get("length", 40.0)));
+	const float pace = float(double(settings.get("pace", 1.0))); // the workshop's pace: rates times it
 	if (tool == "rasp") {
 		return tools::rasp_stroke(rasp_from(settings), work.wood(p - n * 0.5f), p, n, a, length);
 	}
@@ -499,10 +518,7 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 		return tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings.get("feed", 0.02))), through + 1.0f);
 	}
 	if (tool == "sanding_block") {
-		tools::SandingBlock block;
-		block.grit = int(settings.get("grit", 120));
-		block.pressure = float(double(settings.get("pressure", 1.0)));
-		return tools::sanding_stroke(block, p, n, a);
+		return tools::sanding_stroke(block_from(settings), work, p, n, a, pace);
 	}
 	if (tool == "sanding_sponge") {
 		tools::SandingSponge sponge;
@@ -558,7 +574,8 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 	for (const std::vector<Edit> &edits : committing_) {
 		pending += edits.size();
 	}
-	// A stroke merges to at most 3 edits; a chisel's or gouge's with its chips, 14.
+	// A stroke merges to at most 3 edits (a rubbed face's usually: a patch for each way it
+	// goes); a chisel's or gouge's with its chips, 14.
 	const std::size_t needs = planned_tool(tool) ? 14 : 4;
 	if (previewing_ && pending + needs > std::size_t(kOverlayMax)) {
 		// No room in the overlay for another stroke until the strokes before it are applied.
@@ -641,10 +658,14 @@ Dictionary SdfBody::compute_plan() {
 	for (const Edit &e : stroke->finish()) {
 		planned_.push_back(e);
 	}
-	// How deep it goes: the deepest point of its tool's pose (where the edge or teeth are).
+	// How deep it goes: what the stroke says it has taken, or the deepest point of its tool's
+	// pose (where the edge or teeth are).
 	const tools::Frame f = stroke->pose();
+	const tools::StrokeState state = stroke->state();
 	report["edits"] = int64_t(planned_.size());
-	report["depth"] = double(std::max(0.0f, -gl::dot(f.origin - p, n)));
+	report["depth"] = double(state.depth > 0.0f ? state.depth : std::max(0.0f, -gl::dot(f.origin - p, n)));
+	report["contact"] = double(state.contact);
+	report["limit"] = String(state.limit.c_str());
 	report["length"] = double(mm);
 	plan_stale_ = false;
 	plan_report_ = report;
@@ -912,6 +933,18 @@ void SdfBody::cancel_stroke() {
 
 Transform3D SdfBody::get_tool_pose() const {
 	return stroke_ ? frame_to_world(stroke_->pose()) : get_global_transform();
+}
+
+Dictionary SdfBody::get_stroke_state() const {
+	Dictionary d;
+	if (!stroke_) {
+		return d;
+	}
+	const tools::StrokeState s = stroke_->state();
+	d["depth"] = double(s.depth);
+	d["contact"] = double(s.contact);
+	d["limit"] = String(s.limit.c_str());
+	return d;
 }
 
 Transform3D SdfBody::pose_at(const Vector3 &contact, const Vector3 &normal, const Vector3 &along, double lift) const {
@@ -1446,9 +1479,12 @@ void SdfBody::update_overlay() {
 		edits.insert(edits.end(), stroke.begin(), stroke.end());
 	}
 	if (stroke_ && previewing_) {
-		for (const Edit &e : stroke_->edits()) {
-			edits.push_back(e);
-		}
+		// Its newest, if they are not all room for: a rubbed face's patches can be more than
+		// the overlay holds (and its oldest are the ones least changed).
+		const std::vector<Edit> stroke = stroke_->edits();
+		const std::size_t room = std::size_t(kOverlayMax) - std::min(edits.size(), std::size_t(kOverlayMax));
+		const std::size_t from = stroke.size() > room ? stroke.size() - room : 0;
+		edits.insert(edits.end(), stroke.begin() + std::ptrdiff_t(from), stroke.end());
 	}
 	const std::size_t planned_from = edits.size(); // the plan's edits come last, flagged
 	edits.insert(edits.end(), planned_.begin(), planned_.end());
@@ -1819,6 +1855,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("cancel_stroke"), &SdfBody::cancel_stroke);
 	ClassDB::bind_method(D_METHOD("is_stroking"), &SdfBody::is_stroking);
 	ClassDB::bind_method(D_METHOD("get_tool_pose"), &SdfBody::get_tool_pose);
+	ClassDB::bind_method(D_METHOD("get_stroke_state"), &SdfBody::get_stroke_state);
 	ClassDB::bind_method(D_METHOD("take_debris"), &SdfBody::take_debris);
 	ClassDB::bind_method(D_METHOD("albedo_at", "point"), &SdfBody::albedo_at);
 	ClassDB::bind_method(D_METHOD("pose_at", "contact", "normal", "along", "lift"), &SdfBody::pose_at);

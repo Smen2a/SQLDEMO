@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 // Hand tools: each one's model (a Body, drawn like any part) and the cuts it makes, from
@@ -21,6 +22,7 @@
 namespace sdf::tools {
 
 struct Debris; // tools/debris.h
+struct Work;   // tools/cutting.h
 
 // An orthonormal frame: z = normal, x = `along` made perpendicular to it, y = z x x.
 struct Frame {
@@ -85,8 +87,8 @@ struct Saw {
 	Edit kerf_slice(vec3 centre, vec3 along, vec3 normal, float from_depth, float to_depth) const;
 };
 
-// A cork sanding block with abrasive paper. A hard block flattens: it takes down what
-// stands above its plane within its footprint first.
+// A cork sanding block with abrasive paper (or a smaller pad). A hard block flattens: it
+// rests on the highest points under it and takes those down first (tools/rubbing.h).
 struct SandingBlock {
 	float length = 70.0f; // along the working direction
 	float breadth = 40.0f;
@@ -95,8 +97,10 @@ struct SandingBlock {
 	float pressure = 1.0f; // how hard it is pressed (1: an ordinary hand's worth)
 
 	Body model() const;
-	// Depth removed per millimetre of travel (coarser grits and more pressure cut faster).
-	float removal_per_mm() const;
+	// Depth taken off per millimetre it travels over a point, bearing with all its face on
+	// wood of this hardness (N, Janka; ash by default): 1e-5 mm at 120 grit in ash, in
+	// proportion to the grit's size (1 / grit) and the pressure, less in harder wood.
+	float removal_per_mm(float hardness = 5870.0f) const;
 	// Takes `depth` off below the plane over the rectangle [lo, hi] (plane x / y
 	// coordinates) that the block's face covered, feathering out beyond it.
 	Edit pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const;
@@ -127,6 +131,13 @@ struct StrokeUpdate {
 	std::vector<Edit> edits;
 	Aabb changed;
 	bool empty() const { return drop == 0 && edits.empty(); }
+};
+
+// What a stroke has come to so far, for the game to say (and why it goes no further).
+struct StrokeState {
+	float depth = 0.0f;   // mm it has taken off, at its deepest where it is now
+	float contact = 1.0f; // the share of its face bearing on the work (a rubbed face's)
+	std::string limit;    // what stops it going on (e.g. "back": the saw's back meets the work), or empty
 };
 
 // A tool in use, from engaging it to lifting it off: it turns the tool's motion into edits,
@@ -174,6 +185,8 @@ public:
 		(void)ended;
 	}
 
+	virtual StrokeState state() const { return {}; }
+
 	virtual bool deferred() const { return false; }
 	// The motion recorded since the last call, as an update for the edit session holding
 	// `body` (with this stroke's earlier updates applied; the first call sees the body as it
@@ -193,8 +206,10 @@ std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 n
 std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, vec3 along, float feed,
 		float max_depth = 1e9f);
 // A sanding block pressed flat at `contact` (its length along `along`), rubbed about the
-// plane there: it takes removal_per_mm() off per millimetre travelled, over what it covered.
-std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, vec3 contact, vec3 normal, vec3 along);
+// plane there (tools/rubbing.h): it takes removal_per_mm() (of the wood there, times the
+// pace) off per millimetre it travels over a point, where it went.
+std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,
+		vec3 along, float pace = 1.0f);
 // A sanding sponge pressed at `contact` and rubbed about the plane there (deferred): the
 // work smooths whatever lies within its reach of the path, in proportion to the travel.
 std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,

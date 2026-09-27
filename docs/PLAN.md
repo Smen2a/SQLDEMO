@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 done; T4-2 next)
+### T4 — the rules of the real tools, one tool at a time (T4-1 and T4-2 done; T4-3 next)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -224,11 +224,30 @@ one tool at a time, each tried before the next.
   follows at the working speed and pushes a loose block aside; the channel's stop and its
   line; Ctrl+wheel).
 
-**Next, each planned in detail once the one before has been tried:**
-- **T4-2 Sanding block.** Removal only where it rubbed (a dwell map under its footprint),
-  resting on high spots and flattening them first; rates by grit, calibrated (120 grit
-  takes hundredths of a millimetre over many strokes); pressure and grit in fine steps; a
-  smaller pad for precise work.
+**T4-2, the sanding block: done** (asked to go on through every tool, then try them together).
+- A rubbed face (`tools/rubbing`, shared with the rasp and scraper): a height map of the
+  work read at the stroke's start (rays every 2.5 mm, under a millisecond); *patches* of
+  the ground the face covered, each lying along the way it moved, cut below the highest
+  point under it. A patch grows while the face works along one line (drifting up to half
+  its width); turning, or reaching higher ground once it has cut, starts another, resting
+  on the ground as the earlier patches left it. At most 12 a stroke (the two most compact
+  merge); the preview shows the newest.
+- Depth = rate × pace × travel × min(1, face length along the way / range) / contact; the
+  contact is the share of the face bearing on the work (at least 0.1): a bump goes about
+  ten times as fast, a 6 mm edge five times.
+- Rate 1.2e-3 × pressure / grit × 5740 / Janka: 1e-5 mm per mm at 120 grit in ash (0.01 mm
+  a metre, 0.2 mm a minute); 80 grit 1.5 times, 240 half. Grits 60–320, a small pad
+  (35 × 20) besides the block (70 × 40).
+- The cut's feather is at most half what it takes off most of its ground, so ground below
+  the floor (round a bump) is left alone.
+- The workshop: every direct tool now follows the pointer at a working speed (saw 300,
+  rasp 250, scraper 200, block and sponge 300, spokeshave 150 mm/s, times the pace); every
+  tool but the saw pushes loose pieces aside; the line by the pointer says what the block
+  has taken and on how much of its face.
+- Tests: `test_rubbing` (the rate, only where it rubbed, a diagonal band, a bump first, a
+  narrow edge faster, dust); `tool_planning` (the block rubs, its line).
+
+**Next:**
 - **T4-3 Saw.** Real feed by wood and teeth (a tenon saw cross-cuts 25 mm oak in about
   50–80 strokes); cuts on the push stroke; the kerf only where the teeth have been; the back
   stops its depth.

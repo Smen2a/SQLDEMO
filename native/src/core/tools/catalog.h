@@ -19,7 +19,7 @@
 // Sweep radii follow the Sheffield list at 12 mm: #3 about 1.8 widths, #7 about 0.6, #11
 // half the width (a U).
 // And rasps, coarse to fine: a wood rasp, a cabinet rasp (flat or half-round face) and a
-// patternmaker's rasp.
+// patternmaker's rasp; a sanding block and a small sanding pad.
 namespace sdf::tools {
 
 struct ChiselVariant {
@@ -41,5 +41,15 @@ struct RaspVariant {
 
 const std::vector<RaspVariant> &rasp_catalog();
 const RaspVariant *find_rasp(const std::string &id);
+
+// Sanding blocks: a cork block, and a small pad for precise work.
+struct SandingVariant {
+	std::string id;    // e.g. "block"
+	std::string label; // e.g. "Cork block 70 x 40"
+	SandingBlock block;
+};
+
+const std::vector<SandingVariant> &sanding_catalog();
+const SandingVariant *find_sanding(const std::string &id);
 
 } // namespace sdf::tools

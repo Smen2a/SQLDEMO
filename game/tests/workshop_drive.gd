@@ -47,7 +47,9 @@ func _ready() -> void:
 	for i in 16:
 		var a := float(i) * 0.9
 		rub.append(_on_top(-0.03 + 0.02 * cos(a), -0.025 + 0.012 * sin(a)))
+	workshop.pace = 8.0 # (a real rate takes minutes to show)
 	await _stroke("sanding_block", _on_top(-0.03, -0.025), rub, 2, false)
+	workshop.pace = 1.0
 	var sand_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits
 	await _shot(out, "sand")
 
@@ -74,8 +76,9 @@ func _ready() -> void:
 	print("workshop drive: chisel %d edits, saw %d, sanding block %d, sponge %d; after undo %d edits in %d strokes; last update %.0f ms, upload %.0f ms" % [
 			chisel_edits, saw_edits, sand_edits, sponge_edits, after_undo, stats.steps, stats.update_ms, stats.upload_ms])
 	# Strokes are previewed and committed merged: the chisel's ramp, run and lift-out, the
-	# saw's kerf, the block's pass. The sponge's work is one smoothing layer.
-	if chisel_edits < 2 or saw_edits != 1 or sand_edits != 1 or sponge_edits != 1 or \
+	# saw's kerf, the block's patches (one for each way it went). The sponge's work is one
+	# smoothing layer.
+	if chisel_edits < 2 or saw_edits != 1 or sand_edits < 1 or sponge_edits != 1 or \
 			after_undo != chisel_edits + saw_edits + sand_edits:
 		push_error("workshop drive: a tool made no cut or not its merged one, or undo did not take the sponge's work back")
 
@@ -87,10 +90,12 @@ func _ready() -> void:
 	for i in 12:
 		through.append(_on_top(-0.03 if i % 2 == 0 else 0.03, 0.03))
 	await _stroke("saw", _on_top(0.0, 0.03), through, 2)
-	for i in 30: # the split follows the commit that found the parts apart
-		if not workshop.offcuts.is_empty():
-			break
+	# The split follows the commit that found the parts apart (checked on the worker): up to
+	# 5 s of game time for it, however quick the frames.
+	var split_wait := 0.0
+	while workshop.offcuts.is_empty() and split_wait < 5.0:
 		await _frames(1)
+		split_wait += get_process_delta_time()
 	if workshop.offcuts.is_empty():
 		push_error("workshop drive: the saw went through but the board did not come apart")
 	else:
@@ -151,6 +156,8 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, pla
 		for k in steps:
 			workshop.drag_screen(cam.unproject_position(from.lerp(path[i], float(k + 1) / steps)))
 			await _frames(1)
+		if not workshop.current in workshop.PUSHED:
+			await catch_up(workshop) # (to each end of its stroke, at its working speed)
 		from = path[i]
 		if i == path.size() / 2:
 			# Mid-stroke, with the tool at work.

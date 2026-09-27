@@ -66,7 +66,9 @@ func _ready() -> void:
 	for i in 16:
 		var a := float(i) * 0.9
 		rub.append(_on_top(-0.03 + 0.02 * cos(a), -0.02 + 0.012 * sin(a)))
+	workshop.pace = 8.0 # (a real rate takes a minute's rubbing to make a cubic millimetre)
 	await _stroke("sanding_block", _on_top(-0.03, -0.02), rub, 2, false)
+	workshop.pace = 1.0
 	await _shot("dust_sanding", _on_top(-0.03, -0.02)) # (the last of its puffs)
 	await _settle()
 	var sanded: float = dust.thrown - before
@@ -138,6 +140,7 @@ func _stroke(tool: String, start: Vector3, path: Array[Vector3], steps: int, pla
 			if workshop.debris.dust.flying() > 0:
 				_feed_total += workshop.debris.feed_usec
 				_feed_frames += 1
+		await catch_up(workshop) # (it follows at its working speed)
 		from = leg
 	if not workshop.is_engaged():
 		_check(false, "%s did not engage at %s" % [tool, start])

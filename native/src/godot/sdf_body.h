@@ -132,6 +132,11 @@ public:
 	bool is_stroking() const { return stroke_ != nullptr; }
 	// Where the engaged tool's model goes (its world transform), as the stroke moves it.
 	godot::Transform3D get_tool_pose() const;
+	// What the stroke being made has come to (core tools/tools.h StrokeState): "depth" (mm
+	// taken off where it is now, at its deepest), "contact" (the share of a rubbed face bearing
+	// on the work), "limit" (what stops it going on, e.g. "back"; or empty). Empty when no
+	// stroke is being made.
+	godot::Dictionary get_stroke_state() const;
 	// A tool model's world transform standing `lift` mm off the surface at `contact`.
 	godot::Transform3D pose_at(const godot::Vector3 &contact, const godot::Vector3 &normal, const godot::Vector3 &along,
 			double lift) const;

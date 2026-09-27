@@ -31,13 +31,16 @@ extends Node3D
 ##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
 ##                   flat face, over a curve, bridging hollows shorter than its sole
 ##   card scraper    back and forth: a whisper a stroke, for cleaning up tear-out
-##   sanding block   takes the surface down wherever it rubs, flat
+##   sanding block   rests on the highest points under it and takes them down first, only
+##                   where it rubs (a hundredth of a millimetre a metre at 120 grit in ash);
+##                   faster on a narrow edge. Variants: a cork block, a small pad
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
 ## The tool in hand stays out of sight until it works, so it never hides where it goes.
-## A chisel, gouge or spokeshave goes no faster than a hand works it (WORKING_SPEED, slower
-## as the wood resists, times the workshop's pace): dragged ahead, it follows; let go, the
-## stroke ends where the tool got to. While it works, its blade pushes aside loose pieces in
-## its way (it never cuts under them). Where a rule stops a plan short (a step ahead, the
+## Every tool goes no faster than a hand works it (WORKING_SPEED; a chisel, gouge or
+## spokeshave slower as the wood resists; times the workshop's pace), and takes wood off at
+## the real tool's rate (times the pace): dragged ahead, it follows; let go, the stroke ends
+## where the tool got to. While it works, it pushes aside loose pieces in its way (it never
+## cuts under them). Where a rule stops a plan short (a step ahead, the
 ## blade meeting the work, a gap too narrow, a chip too thick) a red mark shows where, and the
 ## line by the pointer says why. Ctrl+wheel sets depths in hundredths of a millimetre.
 ## Locked or pressed near an edge (a step, or a fold sharper than edge_fold) and aimed within
@@ -74,8 +77,13 @@ const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its d
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
 const SETTLE_INTO := 0.00018 # m it starts into that (the solver's slop is 0.2 mm)
 const SHAPE_MARGIN := 0.0001 # m: islands' and the hollowed board's shapes, sharp to a tenth of a mm
-## mm/s a push tool goes at most, paring freely; at the force the hand can give, a fifth of it.
-const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 40.0}
+## mm/s a tool goes over the work at most, as a hand works it (times the pace): a push tool
+## paring freely (at the force the hand can give, a fifth of it); the others' strokes.
+const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 150.0, "saw": 300.0, "rasp": 250.0,
+		"scraper": 200.0, "sanding_block": 300.0, "sanding_sponge": 300.0}
+## The tools pushed along a planned path (the others follow the pointer over their line or
+## plane).
+const PUSHED := ["chisel", "gouge", "spokeshave"]
 const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
 const EDGE_REACH := 6.0 # mm round where a chisel or gouge is locked that it looks for an edge
 const FLUSH := 0.05 # mm a tool locked to an edge keeps its side off it
@@ -137,7 +145,7 @@ var settings := {
 	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
 	"spokeshave": {"depth": 0.1},
 	"scraper": {"pressure": 1.0},
-	"sanding_block": {"grit": 120, "pressure": 1.0},
+	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
 }
 var wood := "board" ## board, board_oak or board_walnut
@@ -174,11 +182,13 @@ var _plan := {}           # what SdfBody.plan_stroke made of it
 var variants := {}
 var _progress := 0.0      # mm a push tool has gone along its path
 var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
+var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
+var _goal := Vector3.ZERO # where the pointer asks it to be (it follows at its working speed)
 var _last_blow := -1.0    # s: when the mallet last struck
 var _blade := BoxShape3D.new() # round the tool in hand's blade, while it works (_place_blade)
 var _blade_at := Transform3D()
 var _blade_on := false
-var _edge_velocity := Vector3.ZERO # m/s: the edge's, while it works
+var _edge_velocity := Vector3.ZERO # m/s: the tool's, while it works
 var _opacity := 0.0       # of the tool in hand, in the main view
 var _plane := Plane()
 var _engage_pose := Transform3D()
@@ -485,6 +495,8 @@ func act() -> void:
 	_plane = _lock.plane
 	_progress = 0.0
 	_target = 0.0
+	_at = _lock.point
+	_goal = _lock.point
 	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, _stroke_settings())
 	if not _engaged:
 		if _state == ARMED:
@@ -507,8 +519,9 @@ func act() -> void:
 
 
 ## Pointer motion while acting: a push tool (the chisel) goes on along its path as far as
-## the pointer, never back and never past the plan's end; the saw slides along its line; the
-## sanding tools follow the pointer over the plane they were set on.
+## the pointer, never back and never past the plan's end; the saw, rasp and scraper slide
+## along their line; the sanding tools follow the pointer over the plane they were set on.
+## Each follows at its working speed (_process).
 func drag_screen(position: Vector2) -> void:
 	_pointer = position
 	if _state == ARMED:
@@ -538,9 +551,9 @@ func drag_screen(position: Vector2) -> void:
 			# Where the pointer asks it to be: _process takes it there at its working speed.
 			_target = clampf((point - start).dot(path) / MM, _target, _lock.length)
 		"saw", "rasp", "scraper":
-			board.move_stroke(start + path * (point - start).dot(path))
+			_goal = start + path * (point - start).dot(path)
 		_:
-			board.move_stroke(point)
+			_goal = point
 
 
 ## Left button up: the cut is finished and becomes one undo step. With the right button
@@ -818,9 +831,10 @@ func reset_board() -> void:
 
 func set_setting(tool: String, key: String, value) -> void:
 	settings[tool][key] = value
-	# A chisel's or gouge's model is its variant, held at its angle; the others' look does
-	# not change.
-	if (tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle"):
+	# A chisel's or gouge's model is its variant, held at its angle; a sanding block's, its
+	# block or pad; the others' look does not change.
+	if ((tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle")) or \
+			(tool == "sanding_block" and key == "variant"):
 		tools[tool].load_tool(tool, settings[tool])
 		if tool == current:
 			_show_tool(tool, _opacity)
@@ -834,15 +848,21 @@ func is_engaged() -> bool:
 
 ## Whether the tool in hand is still catching up with where it was dragged.
 func lagging() -> bool:
-	return _engaged and _progress < _target - 1e-3
+	return _engaged and (_progress < _target - 1e-3 or _at.distance_to(_goal) > 1e-7)
 
 
-## mm/s the push tool in hand goes at most: freely, its WORKING_SPEED; slower as the force the
-## cut takes nears what the hand can give (a fifth of it there); times the pace.
+## mm/s the tool in hand goes at most: freely, its WORKING_SPEED; a push tool slower as the
+## force the cut takes nears what the hand can give (a fifth of it there); times the pace.
 func working_speed() -> float:
 	var free: float = WORKING_SPEED.get(current, 40.0)
 	var effort := clampf(_plan.get("force", 0.0) / maxf(_plan.get("available", 1.0), 1.0), 0.0, 1.0)
 	return free * lerpf(1.0, 0.2, effort) * pace
+
+
+## What the stroke being made has come to (SdfBody.get_stroke_state): {"depth", "contact",
+## "limit"}, or {} with none.
+func stroke_state() -> Dictionary:
+	return board.get_stroke_state() if _engaged else {}
 
 
 # --- per frame ---------------------------------------------------------------------------
@@ -924,13 +944,21 @@ func _process(delta: float) -> void:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
-	# A push tool follows where it was dragged at its working speed.
-	var went := 0.0
-	if _engaged and WORKING_SPEED.has(current) and _progress < _target:
-		went = minf(_target, _progress + working_speed() * delta) - _progress
-		_progress += went
-		board.move_stroke(_lock.point + _lock.path * (_progress * MM))
-	_place_blade(_lock.get("path", Vector3.ZERO) * (went * MM / maxf(delta, 1e-6)))
+	# The tool follows where it was dragged at its working speed.
+	var went := Vector3.ZERO
+	if _engaged and current in PUSHED:
+		if _progress < _target:
+			var step := minf(_target, _progress + working_speed() * delta) - _progress
+			_progress += step
+			went = _lock.path * (step * MM)
+			board.move_stroke(_lock.point + _lock.path * (_progress * MM))
+	elif _engaged and _at != _goal and not is_chopping():
+		var reach := working_speed() * delta * MM
+		var to_go := _goal - _at
+		went = to_go if to_go.length() <= reach else to_go.normalized() * reach
+		_at = _goal if to_go.length() <= reach else _at + went
+		board.move_stroke(_at)
+	_place_blade(went / maxf(delta, 1e-6))
 	# (After a stroke too: the sponge's last work lands after it ends.)
 	_take_debris(board.get_tool_pose())
 	# A plan asked for while an edit was landing is planned again once it has.
@@ -966,16 +994,31 @@ func _process(delta: float) -> void:
 	_ui.update_status()
 
 
-## Where the tool in hand's blade is while a chisel or gouge works (a box round it for the
-## 30 mm behind its edge, rising at its angle to the work), and how fast its edge goes (m/s).
+## Where the part of the tool in hand that meets the work is while it works, and how fast it
+## goes (m/s): a chisel's or gouge's blade (a box round its 30 mm behind the edge, rising at
+## its angle to the work); a rasp's face, a scraper's card, a block's or sponge's body, a
+## spokeshave's sole. (Not the saw's: its plate slides along its own kerf.)
+const _BODY_BOXES := {"rasp": Vector3(200, 25, 6), "scraper": Vector3(1, 60, 100), "spokeshave": Vector3(40, 62, 12),
+		"sanding_sponge": Vector3(100, 68, 25)}
+
+
 func _place_blade(velocity: Vector3) -> void:
-	_blade_on = _engaged and (current == "chisel" or current == "gouge") and not is_chopping()
+	_blade_on = _engaged and current != "saw" and not is_chopping()
 	_edge_velocity = velocity if _blade_on else Vector3.ZERO
 	if not _blade_on:
 		return
 	var pose: Transform3D = board.get_tool_pose()
 	var x := pose.basis.x.normalized()
 	var z := pose.basis.z.normalized()
+	if current != "chisel" and current != "gouge":
+		var box: Vector3 = _BODY_BOXES.get(current, Vector3.ZERO)
+		if current == "sanding_block":
+			box = Vector3(variant().get("length", 70.0), variant().get("width", 40.0), 26.0)
+		if _blade.size != box * MM:
+			_blade.size = box * MM
+		# Standing on the work: from its face up.
+		_blade_at = Transform3D(Basis(x, z.cross(x), z), pose.origin + z * (box.z * 0.5 * MM))
+		return
 	var a := deg_to_rad(settings[current].angle)
 	var back := -x * cos(a) + z * sin(a)
 	var over := x * sin(a) + z * cos(a)
@@ -1092,8 +1135,8 @@ func _draw_outline() -> void:
 			segments.append_array([p - s * half, p + s * half, p - s * half, p - s * half + a * 0.006,
 					p + s * half, p + s * half + a * 0.006])
 		"sanding_block":
-			var hl := 0.035
-			var hb := 0.020
+			var hl: float = variant().get("length", 70.0) * 0.5 * MM
+			var hb: float = variant().get("width", 40.0) * 0.5 * MM
 			var c := [p - a * hl - s * hb, p + a * hl - s * hb, p + a * hl + s * hb, p - a * hl + s * hb]
 			for i in 4:
 				segments.append(c[i])

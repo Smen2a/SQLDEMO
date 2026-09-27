@@ -34,16 +34,20 @@ abrasive.
    - **Rasp, card scraper:** back and forth along their line, taking the surface down
      steadily; see *Shaping and finishing* below.
    - **Spokeshave:** pushed along the drag at its working speed, taking its shaving.
-   - **Sanding block:** follows the pointer anywhere and takes the surface down wherever it
-     rubs, faster at coarser grits and more pressure. Being a flat block, it flattens: high
-     spots and edges go first, and the edges of the patch feather out.
+   - **Sanding block** (a cork block or a small pad): follows the pointer anywhere at its
+     working speed. It rests on the highest points under it and takes them down first,
+     only where it has rubbed, at a real rate: about a hundredth of a millimetre per metre
+     of rubbing at 120 grit in ash, faster at coarser grits, more pressure and on a narrow
+     edge (see *Sanding block* below). The line by the pointer says how much it has taken
+     and on how much of its face it bears.
    - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It rounds over
      the arrises and ridges within its reach (10 mm) and leaves faces and hollows alone.
      Rub along an edge to ease it; the longer you rub, the rounder it gets.
 
    A line beside the pointer says what a chisel's, gouge's or spokeshave's stroke comes
    to: how deep the wood lets it go, the force it takes of what a hand can give, how it
-   meets the grain, and what goes wrong. Let go of the left button to finish: one undo
+   meets the grain, and what goes wrong. For the sanding block, how much it has taken and
+   on how much of its face it bears. Let go of the left button to finish: one undo
    step.
 4. **Or plan it first: hold the right button.** The stroke is locked in where you pressed,
    and runs from there towards the pointer. Nothing is cut yet:
@@ -388,6 +392,60 @@ in Jolt:
 A push as fast as the edge (13 mm/s) is less than friction takes off a few grams in one
 physics step, so pieces are moved with the edge, not given its velocity.
 
+### Sanding block: a hard face, rubbed
+
+`native/src/core/tools/rubbing.h` (shared with the rasps and the scraper, T4-4 and T4-5):
+- **It rests on the high spots.** When the stroke starts, a height map of the surface under
+  the plane is read from the work: rays every 2.5 mm over the board (about 2,500 on the
+  workshop board, under a millisecond). Each piece of ground the block covers is cut
+  below the highest point under it. So a bump goes first, and the ground round it is left
+  alone until the bump is down to it. A hollow narrower than the block is never reached.
+- **Only where it rubbed.** Where the block goes is kept as *patches*:
+  - A patch is a rectangle lying along the way the block moves over it (turned to the
+    motion after its first 5 mm).
+  - It grows while the block works back and forth along one line, drifting across it by
+    up to half the block. A diagonal sweep sands a diagonal band, not the rectangle round
+    it.
+  - Turning off the line, or reaching onto higher ground once it has cut, starts a new
+    patch. The new patch rests on the ground as the patches before it left it, so strokes
+    over the same ground add up.
+  - Each patch is one cut. A stroke keeps at most 12 of them; beyond that, the two that
+    make the most compact rectangle merge. The preview shows the newest if they are more
+    than it holds.
+- **How much:** each point loses the block's rate for every millimetre it travels while the
+  point is under it:
+  - depth = rate × pace × travel × min(1, the block's length along the way it goes / the
+    range it covers) / contact;
+  - contact is the share of the block's face bearing on the work: work within 0.02 mm of
+    its floor, at least a tenth. The same hand's pressure on less wood cuts faster: a 6 mm
+    edge sands about five times as fast as the board's face, and a bump about ten times.
+- **The rate:** 1.2e-3 × pressure / grit × 5740 / Janka hardness (N) mm per mm of travel.
+  That is 1e-5 mm at 120 grit in ash, about 0.2 mm in a minute of steady sanding; 80 grit
+  takes 1.5 times that, 240 grit half. The panel offers grits 60 to 320, pressure in steps
+  of 0.05, and a small pad (35 × 20 mm) besides the block (70 × 40).
+- **The cut:** a box over the patch down to its floor, blended in with a feather of up to
+  half the depth it takes off most of the ground under it. So the rim rises smoothly, and
+  ground further below the floor (round a bump) is left alone, as a hard block leaves it.
+- `native/tests/test_rubbing.cpp` checks each of these. `game/tests/tool_planning` rubs
+  the board in the workshop and reads the line by the pointer.
+
+### Rates and working speeds
+
+Every tool takes wood off at the real tool's rate and goes no faster than a hand works it,
+both times the workshop's *pace* (1× by default). The tools are brought under these rules
+one at a time (docs/PLAN.md, T4).
+
+| Tool | Rate (ash, pressure 1) | Working speed | What stops it, and says so |
+|---|---|---|---|
+| chisel, gouge | as deep as a hand can push it (200 N) | 40, 30 mm/s; a fifth at the hand's limit | a step ahead, the blade meeting the work, a gap too narrow, a chip too thick |
+| sanding block | 1e-5 mm per mm rubbed at 120 grit (0.01 mm a metre) | 300 mm/s | resting on high spots (the line shows its contact) |
+| saw, rasp, scraper, spokeshave, sponge | (as before; T4-3 to T4-7) | saw 300, rasp 250, scraper 200, spokeshave 150, sponge 300 mm/s | |
+
+In the workshop the tool follows the pointer at its working speed: dragged ahead, it
+follows; let go, the stroke ends where it got to. Whatever part of it meets the work (a
+blade, a face, a card, a sole; not the saw's plate, which slides in its own kerf) pushes
+loose pieces in its way aside.
+
 ### Shaping and finishing: rasps, a card scraper, a spokeshave
 
 `native/src/core/tools/shaping.h`:
@@ -593,8 +651,8 @@ included; *Sweep* clears the piles.
     millimetre of depth). It leaves at that chord's two ends.
   - **The rasps and the scraper:** each bit deeper is the pass's width at that depth (a
     round face's grows as it goes in) times its length, as far as it is over material.
-  - **The sanding block:** its pass's depth over the rectangle it has covered, as far as
-    that is over material.
+  - **The sanding block:** each patch's depth over its ground, as far as that is over
+    material.
   - **The sponge:** its own flow measures what it moves out of the material. That runs on
     the worker, so the last of it arrives just after the stroke ends.
 - **The grains** (`game/workshop/dust.gd`, one MultiMesh):
@@ -622,8 +680,7 @@ included; *Sweep* clears the piles.
     beyond each end of the kerf, 5.1 mm high; the sanding block's dust lands on the face
     and goes (none piles);
   - throwing costs about 0.2 ms a frame while dust comes (0.3 ms at most); the grains up to
-    2 ms a frame while the sanding block throws thousands (its rate is some 1,000 times too
-    high: T4-2).
+    2 ms a frame while a sanding block at many times the real pace throws thousands.
 
 ## Layout
 

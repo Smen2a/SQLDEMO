@@ -66,12 +66,13 @@ func _ready() -> void:
 		strokes.append(Vector3(30.0, 15.0 if i % 2 == 0 else -15.0, TOP))
 	await _check(out, "saw", Vector3(30, 0, TOP), Vector3(0, 1, 0), {"feed": 0.03}, strokes, 1)
 
-	# Sanding block, coarse grit, rubbed round a patch.
+	# Sanding block, coarse grit, rubbed round a patch (at a hundred times the pace: a real
+	# rate takes a minute to show).
 	var rub: Array[Vector3] = []
 	for i in 30:
 		var a := float(i) * 0.5
 		rub.append(Vector3(-30.0 + 15.0 * cos(a), 20.0 + 6.0 * sin(a), TOP))
-	await _check(out, "sanding_block", Vector3(-30, 20, TOP), Vector3(1, 0, 0), {"grit": 80}, rub, 1)
+	await _check(out, "sanding_block", Vector3(-30, 20, TOP), Vector3(1, 0, 0), {"grit": 80, "pace": 100.0}, rub, 1)
 
 	if not _failed:
 		print("stroke preview: every tool's %s" % ("preview matches its commit" if _render else

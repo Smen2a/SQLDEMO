@@ -5,6 +5,7 @@
 #include "demo/gallery.h"
 #include "eval/query.h"
 #include "tools/catalog.h"
+#include "tools/cutting.h"
 #include "tools/tools.h"
 
 #include <algorithm>
@@ -23,6 +24,16 @@ struct Heights {
 		const auto hit = raycast(body, octree, {x, y, 60.0f}, {0, 0, -1}, 200.0f, 1e-4f);
 		return hit ? hit->point.z : std::nanf("");
 	}
+};
+
+// The workshop board as a stroke reads it.
+struct Board {
+	Body body = demo::board(mat::Ash);
+	Octree octree;
+	MaterialTable materials = MaterialTable::standard();
+
+	Board() { octree.build(body); }
+	tools::Work work() const { return {body, octree, materials}; }
 };
 
 Body board_with(const std::vector<Edit> &edits) {
@@ -263,12 +274,14 @@ TEST(tool_strokes_cut_what_their_tools_cut) {
 	}
 	CHECK_NEAR(-through->pose().origin.z + top, 26.0, 1e-3);
 
-	// Sanding: the pass replaces itself as the block moves; the last one stands.
-	auto rub = tools::sanding_stroke(tools::SandingBlock{}, {0, 0, top}, up, {1, 0, 0});
+	// Sanding (at a hundred times the pace): the pass replaces itself as the block moves; the
+	// last one stands.
+	const Board board;
+	auto rub = tools::sanding_stroke(tools::SandingBlock{}, board.work(), {0, 0, top}, up, {1, 0, 0}, 100.0f);
 	const std::vector<Edit> sanded = run(*rub, {{10, 0, top}, {-10, 0, top}, {10, 0, top}, {-10, 0, top}});
 	CHECK(sanded.size() == 1);
 	const Heights h(board_with(sanded));
-	CHECK_NEAR(h.at(0.0f, 0.0f), top - tools::SandingBlock{}.removal_per_mm() * 70.0f, 2e-3);
+	CHECK_NEAR(h.at(0.0f, 0.0f), top - tools::SandingBlock{}.removal_per_mm() * 100.0f * 70.0f, 2e-3);
 }
 
 // A stroke's merged form (what a preview draws and a commit applies) cuts what its pieces
@@ -336,7 +349,8 @@ TEST(tool_strokes_merge_into_the_same_cut) {
 	}
 
 	// Sanding: one pass either way.
-	auto rub = tools::sanding_stroke(tools::SandingBlock{}, {0, 0, top}, up, {1, 0, 0});
+	const Board board;
+	auto rub = tools::sanding_stroke(tools::SandingBlock{}, board.work(), {0, 0, top}, up, {1, 0, 0}, 100.0f);
 	const Result sanded = run(*rub, {{10, 0, top}, {-10, 0, top}, {10, 3, top}, {-10, 0, top}});
 	CHECK(sanded.merged.size() == 1 && sanded.pieces.size() == 1);
 	const Heights a(board_with(sanded.pieces)), b(board_with(sanded.merged));

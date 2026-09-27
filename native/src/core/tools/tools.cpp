@@ -3,6 +3,7 @@
 #include "tools/debris.h"
 
 #include "body/materials.h"
+#include "tools/rubbing.h"
 #include "tools/smoothing.h"
 
 #include <algorithm>
@@ -287,8 +288,8 @@ Body SandingBlock::model() const {
 	return b;
 }
 
-float SandingBlock::removal_per_mm() const {
-	return 0.6f * pressure / float(std::max(grit, 24));
+float SandingBlock::removal_per_mm(float hardness) const {
+	return 1.2e-3f * pressure / float(std::max(grit, 24)) * 5740.0f / std::max(hardness, 1.0f);
 }
 
 Edit SandingBlock::pass(const Frame &plane, vec2 lo, vec2 hi, float depth) const {
@@ -412,8 +413,9 @@ public:
 		const float reach = saw_.blade_length * 0.5f - 20.0f;
 		position_ = std::clamp(s, -reach, reach);
 		StrokeUpdate u;
-		// The kerf's newest slice is re-cut as it deepens, and left behind at 1 mm.
-		if (depth_ >= cut_ + 0.05f) {
+		// The kerf's newest slice is re-cut as it deepens (and once it is through), and left
+		// behind at 1 mm.
+		if (depth_ >= cut_ + 0.05f || (depth_ >= max_depth_ && cut_ < depth_)) {
 			u.drop = open_ ? 1 : 0;
 			u.edits.push_back(saw_.kerf_slice(frame_.origin, frame_.x, frame_.z, frozen_, depth_));
 			cut_ = depth_;
@@ -511,89 +513,6 @@ private:
 	float dusted_ = 0.0f, pending_ = 0.0f;
 	float ends_[2] = {0.0f, 0.0f};
 	std::map<int, Chord> chords_;
-};
-
-class SandingStroke : public Stroke {
-public:
-	SandingStroke(const SandingBlock &b, vec3 contact, vec3 normal, vec3 along)
-		: block_(b), plane_(Frame::at(contact, normal, along)) {
-		cover({0.0f, 0.0f});
-	}
-
-	StrokeUpdate move_to(vec3 point) override {
-		const vec3 d = point - plane_.origin;
-		const vec2 at(gl::dot(d, plane_.x), gl::dot(d, plane_.y));
-		travel_ += gl::length(at - at_);
-		at_ = at;
-		cover(at);
-		const float depth = block_.removal_per_mm() * travel_;
-		StrokeUpdate u;
-		// Re-cut only once the pass has deepened (0.02 mm) or spread (2 mm) noticeably.
-		if (depth >= cut_depth_ + 0.02f || lo_.x < cut_lo_.x - 2.0f || lo_.y < cut_lo_.y - 2.0f ||
-				hi_.x > cut_hi_.x + 2.0f || hi_.y > cut_hi_.y + 2.0f) {
-			u.drop = cut_ ? 1 : 0;
-			u.edits.push_back(block_.pass(plane_, lo_, hi_, depth));
-			cut_ = true;
-			cut_depth_ = depth;
-			cut_lo_ = lo_;
-			cut_hi_ = hi_;
-		}
-		return u;
-	}
-
-	std::vector<Edit> edits() const override {
-		if (!cut_) {
-			return {};
-		}
-		return {block_.pass(plane_, cut_lo_, cut_hi_, cut_depth_)};
-	}
-
-	Frame pose() const override {
-		Frame f = plane_;
-		f.origin = plane_.point({at_.x, at_.y, -cut_depth_});
-		return f;
-	}
-
-	// Fine dust: the pass takes its depth off the rectangle it has covered, as far as that
-	// is over material (probed half way down); what that comes to beyond what was reported
-	// leaves from under the block, over its face.
-	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
-		out.ended = out.ended || ended;
-		if (cut_) {
-			const vec2 size = cut_hi_ - cut_lo_;
-			const float fraction = material_fraction(body, octree, plane_, cut_lo_, cut_hi_,
-					std::max(0.5f * cut_depth_, 0.005f), 7, 7);
-			const float taken = cut_depth_ * size.x * size.y * fraction;
-			pending_ += std::max(taken - dusted_, 0.0f);
-			dusted_ = std::max(dusted_, taken);
-		}
-		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
-			return;
-		}
-		Dust d;
-		d.point = plane_.point({at_.x, at_.y, 0.0f});
-		d.direction = plane_.z;
-		d.volume = pending_;
-		d.grain = 0.25f;
-		d.spread = 0.5f * std::min(block_.length, block_.breadth);
-		out.dust.push_back(d);
-		pending_ = 0.0f;
-	}
-
-private:
-	void cover(vec2 at) {
-		const vec2 half(block_.length * 0.5f, block_.breadth * 0.5f);
-		lo_ = vec2(std::min(lo_.x, at.x - half.x), std::min(lo_.y, at.y - half.y));
-		hi_ = vec2(std::max(hi_.x, at.x + half.x), std::max(hi_.y, at.y + half.y));
-	}
-
-	SandingBlock block_;
-	Frame plane_;
-	vec2 at_{0.0f, 0.0f}, lo_{1e9f, 1e9f}, hi_{-1e9f, -1e9f};
-	vec2 cut_lo_{0.0f, 0.0f}, cut_hi_{0.0f, 0.0f};
-	float travel_ = 0.0f, cut_depth_ = 0.0f;
-	bool cut_ = false;
-	float dusted_ = 0.0f, pending_ = 0.0f; // dust: reported so far (mm^3), held back
 };
 
 class HandSandingStroke : public Stroke {
@@ -712,8 +631,26 @@ std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, ve
 	return std::make_unique<SawStroke>(saw, contact, normal, along, feed, max_depth);
 }
 
-std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, vec3 contact, vec3 normal, vec3 along) {
-	return std::make_unique<SandingStroke>(block, contact, normal, along);
+std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,
+		vec3 along, float pace) {
+	const Frame plane = Frame::at(contact, normal, along);
+	RubFace face;
+	face.length = block.length;
+	face.width = block.breadth;
+	face.rate = block.removal_per_mm(work.wood(contact - plane.z * 0.5f).hardness);
+	face.grain = 0.25f;
+	// Its feather at most half what it takes off most of the ground under it (all of the
+	// ground's, where that is below it: resting on a bump), so that a pass leaves ground
+	// further below its floor alone, as a hard block does.
+	face.pass = [block](const Frame &frame, vec2 lo, vec2 hi, float floor, float depth, float typical) {
+		const float d = typical > 0.0f ? typical : depth;
+		Frame rest = frame;
+		rest.origin = frame.point({0.0f, 0.0f, floor + d});
+		SandingBlock b = block;
+		b.feather = std::min(block.feather, 0.5f * d);
+		return b.pass(rest, lo, hi, d);
+	};
+	return rub_stroke(face, work, plane, pace);
 }
 
 } // namespace sdf::tools

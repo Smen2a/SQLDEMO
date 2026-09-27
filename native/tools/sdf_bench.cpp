@@ -17,6 +17,7 @@
 #include "compile/octree.h"
 #include "demo/gallery.h"
 #include "edit/session.h"
+#include "tools/cutting.h"
 #include "tools/tools.h"
 
 #include <algorithm>
@@ -334,6 +335,8 @@ int tools_bench() {
 	std::printf("board: %zu bricks, built in %.0f ms\n", s.adf().stats().bricks, s.last().octree_ms + s.last().adf_ms);
 	const float top = 12.5f;
 	const vec3 up(0, 0, 1);
+	const MaterialTable materials = MaterialTable::standard();
+	const tools::Work work{s.body(), s.octree(), materials};
 	struct Use {
 		const char *name;
 		std::unique_ptr<tools::Stroke> stroke;
@@ -344,7 +347,7 @@ int tools_bench() {
 					[&](int k) { return vec3(-50.0f + 2.0f * float(k + 1), -20, top); }},
 			{"saw, 12 mm deep in 30 strokes", tools::saw_stroke(tools::Saw{}, {30, 0, top}, up, {0, 1, 0}, 0.02f),
 					[&](int k) { return vec3(30, k % 2 ? -10.0f : 10.0f, top); }},
-			{"sanding block rubbed over the board", tools::sanding_stroke(tools::SandingBlock{}, {20, 10, top}, up, {1, 0, 0}),
+			{"sanding block rubbed over the board", tools::sanding_stroke(tools::SandingBlock{}, work, {20, 10, top}, up, {1, 0, 0}, 100.0f),
 					[&](int k) { return vec3(20.0f + 25.0f * std::sin(0.7f * float(k)), 10.0f + 8.0f * std::cos(0.3f * float(k)), top); }},
 	};
 	for (Use &use : uses) {
