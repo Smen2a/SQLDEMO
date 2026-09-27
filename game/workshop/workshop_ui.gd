@@ -34,11 +34,12 @@ const LIMITS := {
 const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 ## Sanding blocks' grits, coarse to fine.
 const GRITS := [60, 80, 120, 180, 240, 320]
-const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
+const SLOT := Vector2(92, 40) # a hotbar slot's size (pixels)
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
 		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
-const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   E: pick up, let go (over the vise: into it), work at the bench   F: out of the vise   R: turn what you carry   1-8, wheel: tools   0: empty hands   Esc: free the mouse"
+const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-8, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
+		"E: pick up, let go (over the vise: into it), take a board from the rack, work at the bench   F: out of the vise   R: turn what you carry"
 
 var workshop
 
@@ -49,7 +50,6 @@ var _variants := {} # family -> its variant OptionButton
 var _blows := {}    # family -> its blow OptionButton (a chop's strength)
 var _undo: Button
 var _redo: Button
-var _wood: OptionButton
 var _status: Label
 var _hints: Label
 var _plan: Label  # beside the pointer: what the stroke being planned or made comes to
@@ -119,20 +119,13 @@ func _ready() -> void:
 	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "rasp": rasp, "spokeshave": shave,
 			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge}
 
-	# The board, top right.
+	# The work in the vise, top right (new boards come from the rack).
 	var right := _panel(root, Vector2.ZERO)
 	_right = right.get_parent()
 	var row := HBoxContainer.new()
 	right.add_child(row)
-	_wood = OptionButton.new()
-	_wood.focus_mode = Control.FOCUS_NONE
-	for key in WOODS:
-		_wood.add_item(WOODS[key])
-	_wood.item_selected.connect(func(i): workshop.set_wood(WOODS.keys()[i]))
-	row.add_child(_wood)
 	_undo = _button(row, "Undo", func(): workshop.undo())
 	_redo = _button(row, "Redo", func(): workshop.redo())
-	_button(row, "New board", func(): workshop.reset_board())
 	_button(row, "Sweep", func(): workshop.sweep())
 	# How fast the work goes: 1x as a real hand would.
 	_choice(right, "Pace", ["¼×", "½×", "1×", "2×", "4×", "8×"], PACES.find(workshop.pace),
@@ -156,7 +149,7 @@ func _ready() -> void:
 	right.add_child(preview)
 	_pin(right, Control.PRESET_TOP_RIGHT)
 
-	# Status and hints, bottom left.
+	# Status and hints, bottom left, over the hotbar.
 	var bottom := _panel(root, Vector2.ZERO)
 	_status = Label.new()
 	bottom.add_child(_status)
@@ -165,6 +158,7 @@ func _ready() -> void:
 	_hints.modulate = Color(1, 1, 1, 0.7)
 	bottom.add_child(_hints)
 	_pin(bottom, Control.PRESET_BOTTOM_LEFT)
+	(bottom.get_parent() as Control).offset_bottom = -(12 + SLOT.y + 8) # (over the hotbar)
 
 	# The hotbar, bottom middle: 1 to 8 the tools, 0 empty hands.
 	var bar := HBoxContainer.new()
@@ -175,7 +169,7 @@ func _ready() -> void:
 	for tool in order:
 		var slot := PanelContainer.new()
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
-		slot.custom_minimum_size = Vector2(92, 40)
+		slot.custom_minimum_size = SLOT
 		var label := Label.new()
 		label.text = TOOL_LABELS[tool] if tool != "" else "0 Hands"
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -310,7 +304,6 @@ func refresh() -> void:
 	var stats: Dictionary = workshop.board.get_stats() if workshop.board != null else {}
 	_undo.disabled = not stats.get("can_undo", false)
 	_redo.disabled = not stats.get("can_redo", false)
-	_wood.select(WOODS.keys().find(workshop.wood))
 
 
 func update_status() -> void:

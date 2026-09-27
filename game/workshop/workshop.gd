@@ -3,8 +3,12 @@ extends Node3D
 ## The workshop: a room with a workbench, and eight hand tools, every one an SDF body. You
 ## walk about it in first person (WASD, the mouse to look, Shift to hurry; room.gd,
 ## player.gd); the hotbar at the bottom holds the tools (1 to 8, the wheel; 0 empty-handed),
-## the one in hand held in view. At the bench, E steps up to it: the view comes down over
-## the work in the vise (the mouse freed; Esc steps back). There, with a tool (Tab for its
+## the one in hand held in view. E picks up a piece of work lying about (carried in front
+## of the eyes; R turns it, the wheel reaches it), takes a new board from a stack on the
+## lumber rack, or lets go of what is carried: let go on the vise, an empty vise takes it,
+## squared (flat, along the bench, on its top); F takes the piece in the vise out. At the
+## bench, E steps up to it: the view comes down over the work in the vise (the mouse freed;
+## Esc steps back), the piece the tools work on. There, with a tool (Tab for its
 ## variants), point at the work: its footprint shows where it would go. Then:
 ##   use   left-drag on the board: the tool sets to work where it was pressed, going the
 ##         way the drag goes (the sanding tools follow it anywhere; a chisel held up to
@@ -59,11 +63,12 @@ extends Node3D
 ## Esc drops the plan or the stroke in progress, Ctrl+Z / Ctrl+Shift+Z undo and redo.
 ## Middle-drag orbits the camera, Shift+middle-drag pans, the wheel zooms.
 ##
-## A saw cut that goes right through leaves the board in two pieces: the smaller one comes
-## away as a rigid body and slides off the kerf, the larger stays on the bench as the
-## board. So does a piece that cuts meeting leave free (a rebate sawn off the end: one cut
-## down, one in from the end): it shows as its own body once it has been cut out, then
-## falls or rests as it will on the board, whose collider follows its surface from then on.
+## Every piece of work is a rigid body holding its SdfBody (the one in the vise frozen). A saw
+## cut that goes right through leaves the piece in two: the smaller one comes away as a
+## piece of its own and slides off the kerf, the larger stays in the vise. So does a piece
+## that cuts meeting leave free (a rebate sawn off the end: one cut down, one in from the
+## end): it shows as its own body once it has been cut out, then falls or rests as it will
+## on the piece it came from, whose collider follows its surface from then on.
 ## Undo straight after puts them back together.
 ##
 ## What the tools take off comes away too (debris.gd): a chisel's, gouge's or spokeshave's
@@ -172,7 +177,7 @@ var settings := {
 	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
 }
-var wood := "board" ## board, board_oak or board_walnut
+var wood := "board" ## the board in the vise at the start (and set_wood's): board, board_oak or board_walnut
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
 ## rate.
 var pace := 1.0
@@ -359,6 +364,22 @@ func interact() -> void:
 		enter_work()
 	elif thing.has_meta("workpiece"):
 		pick_up(thing)
+	elif thing.has_meta("stock"):
+		take_stock(thing)
+
+
+## A new board from a stack on the rack (room.gd), into the hands: off the top of the stack,
+## lying as the stack's boards do, and carried from there. The stack stays as it was.
+func take_stock(stack: Object) -> RigidBody3D:
+	if held != null:
+		return null
+	var piece := _new_piece(stack.get_meta("stock"))
+	# Its length (body x) along the stack's (the rack's, z), just clear of the top board.
+	var top: Vector3 = stack.get_meta("top")
+	piece.global_transform = Transform3D(Basis(Vector3.UP, PI / 2), top + Vector3(0.0, 0.0125 + 0.002, 0.0))
+	pick_up(piece)
+	_hold_turn = Basis() # (brought round flat and across the view, as a board is carried)
+	return piece
 
 
 ## F: the piece in the vise, if the eyes are on it, taken out into the hands.
@@ -497,6 +518,9 @@ func prompt() -> String:
 		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
 	if thing.has_meta("workpiece"):
 		return "E: pick up the %s" % _name_of(thing)
+	if thing.has_meta("stock"):
+		var wood_name: String = thing.get_meta("wood_name")
+		return "E: take %s %s board" % ["an" if "aeiou".contains(wood_name[0]) else "a", wood_name]
 	return ""
 
 
@@ -1104,11 +1128,10 @@ func _shapes_of(piece: RigidBody3D) -> Array:
 func _new_piece(choice: String) -> RigidBody3D:
 	var sdf = ClassDB.instantiate("SdfBody")
 	sdf.load_demo(choice)
-	var names := {"board": "ash", "board_oak": "oak", "board_walnut": "walnut"}
 	# Body millimetres, z up -> world metres, y up; the board's middle at the body's origin.
 	var local := Transform3D(Basis(Vector3.RIGHT, -PI / 2) * Basis.from_scale(Vector3.ONE * MM), Vector3.ZERO)
 	return _as_piece(sdf, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)),
-			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)) * local, names.get(choice, "wood"), "board")
+			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)) * local, Room.STOCK.get(choice, ["wood"])[0], "board")
 
 
 ## An SdfBody made a piece of work: a rigid body at `at` (world) holding it where `placed`
@@ -1171,10 +1194,6 @@ func _unclamp() -> void:
 ## range of their own.
 func _step_key(step: int) -> int:
 	return board.get_meta("piece_id", 0) * STEPS_PER_PIECE + step
-
-
-func reset_board() -> void:
-	set_wood(wood)
 
 
 func set_setting(tool: String, key: String, value) -> void:

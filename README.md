@@ -10,15 +10,46 @@ read [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
 ## The workshop
 
-Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). A board lies on a
-bench with hand tools beside it: a chisel and a carving gouge (each in several kinds), a
-back saw, a rasp, a spokeshave, a card scraper, a sanding block and a sanding sponge.
-Every one is an SDF body, built by the engine in steel, brass, ash, walnut, cork and
-abrasive.
+Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). You stand in a small
+workshop, seen through your own eyes: a workbench with a vise in the middle of its top, an
+ash board clamped in it, a side table to its right, and a lumber rack against the left wall
+with stacks of ash, oak and walnut boards. The room is built in code (`game/workshop/room.gd`);
+the world is in metres, the bench top at y = 0 with the vise at its middle.
 
-1. **Pick up a tool.** Click it on the bench, or press 1 to 8; Tab (or the panel) picks
-   its kind. It stays out of sight while you aim, so it never hides the spot you are
-   working on.
+**Walking** (`game/workshop/player.gd`, a first-person `CharacterBody3D`):
+- **WASD** or the arrows walk (1.5 m/s), **Shift** hurries (3 m/s), the mouse looks about.
+  Esc frees the mouse; a click takes it back.
+- **The hotbar** along the bottom holds the tools: a chisel and a carving gouge (each in
+  several kinds), a back saw, a rasp, a spokeshave, a card scraper, a sanding block and a
+  sanding sponge. Keys **1 to 8** (or a click, or the wheel) put one in hand, held in view;
+  **0** empties the hands. Every tool is an SDF body, built by the engine in steel, brass,
+  ash, walnut, cork and abrasive.
+- **E** does what the line under the crosshair says, within 2 m:
+  - on a piece of work lying about (a board, an offcut): **pick it up**;
+  - on a stack on the rack: **take a new board** of that wood into your hands;
+  - on the bench, or the piece in the vise: **step up to the bench** (below);
+  - carrying something: **let go** of it.
+- **Carrying.** A piece in your hands is held in front of your eyes, turned as you turn. It
+  is a rigid body pulled to that spot each physics step, so it still meets the bench and
+  the walls, never passing through them. **R** turns it a quarter turn, the **wheel**
+  brings it nearer or farther (0.35 to 1.2 m). The tool in hand is put away while your
+  hands are full. Let go, it falls where it is.
+- **The vise.** Let go with the crosshair on the vise (the bench top between its jaws) and
+  the piece goes in, squared: the way through it nearest the vertical turned exactly up
+  (a board flat, on edge or on end, as you held it), the longer of the other two along the
+  bench, set on the bench top in the middle of the vise. The jaws close on it. The vise
+  holds one piece: with one in it, letting go there just drops what you carry. **F** on
+  the piece in the vise takes it out into your hands, its cuts and its undo history with it.
+
+**Working** (the view you step into at the bench). E at the bench, with a piece in the vise,
+brings the view down over the vise and frees the mouse. The tools work on the piece clamped
+there, as below. **Esc** drops a plan or a stroke in progress, and with nothing to drop
+steps back to your own eyes. With the vise empty there is nothing to step up to; the line
+under the crosshair says to put a piece in it.
+
+1. **Take a tool.** Press 1 to 8 (or click it on the hotbar); Tab (or the panel) picks its
+   kind. It stays out of sight while you aim, so it never hides the spot you are working
+   on.
 2. **Point at the board.** An outline marks what the tool would touch: the chisel's edge,
    the saw's line, the block's face, the sponge's reach.
 3. **Use it: press the left button on the board and drag.** The tool fades in where you
@@ -95,12 +126,12 @@ abrasive.
    follows the plan as far as you take it, never past its end. Keep holding the right
    button and the next pass is planned from the same spot.
 
-Other controls:
-- Esc drops the plan or the stroke in progress.
-- Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit.
+Other controls at the bench:
+- Esc drops the plan or the stroke in progress, or steps back from the bench.
+- Ctrl+Z / Ctrl+Shift+Z undo and redo, without limit: each piece its own history.
 - Middle-drag orbits, Shift+middle-drag pans, the wheel zooms.
-- The panel switches the wood (ash, oak, walnut), starts a new board, sweeps the bench of
-  shavings, chips and dust, and lets the board cast shadows. Its sliders are the same settings
+- The panel undoes and redoes, sweeps the bench of shavings, chips and dust, and lets the
+  board cast shadows (new boards come from the rack). Its sliders are the same settings
   the wheel changes. **Pace** (¼× to 8×, 1× by default) speeds up or slows down the work
   against real life: every tool's working speed, and in time the rates of the tools that
   wear the wood away. **Edge lock** sets how closely a stroke must be aimed along an edge
@@ -555,9 +586,12 @@ Fracture and failing joints will split bodies the same way later
     reduced to the extremes along 256 directions, then to the outermost of any within
     1 mm. Left as tight clusters round corners and edges, they made sliver faces the
     offcut rocked and sank on.
-  - The offcut gets a 0.25 m/s nudge off the kerf. The kept board gets a static collider by
-    the same rule, which for a board is a box: pieces sank 3 mm into its hull, whose points
-    still bunch within a little over a millimetre at its eased corners.
+  - The offcut gets a 0.25 m/s nudge off the kerf. It is a piece of work like any other
+    (a rigid body holding its `SdfBody`: it can be picked up, carried and put in the vise).
+    The piece in the vise is frozen, with its own collider by the same rule, which for a
+    board is a box: pieces sank 3 mm into its hull, whose points still bunch within a
+    little over a millimetre at its eased corners. Its collider is rebuilt at the split,
+    before the half-space lands, so the offcut never starts inside it.
 - **Millimetre tolerances.** Godot's physics engines are tuned for metre-sized objects:
   Jolt, the default, lets contacts overlap by 2 cm. `project.godot` sets the overlap to
   0.2 mm (`[physics]`), so a 25 mm offcut rests on the bench instead of sinking into it.
@@ -612,7 +646,7 @@ chiselled free. That piece comes away too, and it rests where it lies.
   never become exact leaves, and the island's body stays hidden until its region lands;
   the board shows the island until then.
 - **Physics.** Where an island came out the board is hollowed, and one hull would fill the
-  hollow, so the board's collider becomes convex pieces: its bounds cut into boxes by the
+  hollow, so the collider of the piece it came from becomes convex pieces: its bounds cut into boxes by the
   faces of each island's box (0.3 mm outside it), each box's piece the hull of the
   surface points and material in it. No piece reaches into an island's box. Two things
   the engine needed at millimetre scale:
@@ -705,7 +739,7 @@ included; *Sweep* clears the piles.
     (dust takes 2.5 times the room the wood did) up to 2.5 mm across, 15% paler than the
     wood. Thrown a way (out of a kerf's end), a grain leaves 1.5 mm out, clear of the edge.
   - Where a grain lands is found once, when it is thrown: its arc is cast in three pieces
-    against the physics space (bench, floor, the board's collider, pieces lying about).
+    against the physics space (bench, floor, the piece in the vise, pieces lying about).
     Meeting a steep face (the board's side) it drops straight down it.
   - Landed, it shrinks away over 0.3 s. At most 3,000 are drawn at once (more fly unseen);
     at most 20 are thrown a frame.
@@ -743,7 +777,7 @@ included; *Sweep* clears the piles.
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live, and the GPU brick sampler. |
 | `native/tests/` | Property tests for the core and golden-image tests. No Godot needed. |
-| `game/` | The Godot 4.7 project. `game/workshop/` is the workshop (the main scene); `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
+| `game/` | The Godot 4.7 project. `game/workshop/` is the workshop (the main scene: `room.gd` the room, `player.gd` the first-person player, `workshop.gd` the pieces, the vise and the tools at the bench, `workshop_ui.gd` the hotbar and panels); `game/shaders/sdf/` holds byte-identical copies of the shared files plus `sdf_live.gdshader`; `game/bench/` the decision-gate benchmark. |
 | `extern/godot-cpp/` | godot-cpp 10.0.0 (submodule), built against the Godot 4.7 API. |
 | `tools/` | `sync_shaders.sh`, `run.sh` (headless / Xvfb scene runner, OpenGL or Vulkan), `test_godot.sh`, `parity.sh`, `compare_physics.sh` (Jolt vs Box3D on a sawn offcut). |
 | `docs/PLAN.md` | The plan: principles, what is done, and the roadmap from here. The first plan is archived in `docs/archive/plan-v1.md`. |
@@ -995,7 +1029,10 @@ The Godot tests come in two tiers:
   - planned and direct strokes;
   - offcuts and islands come away and settle;
   - shavings and chips come away as much wood as the board lost, and settle;
-  - sawdust is the kerf taken and heaps up; sanding dust lies on the face.
+  - sawdust is the kerf taken and heaps up; sanding dust lies on the face;
+  - the workshop walked and worked in (`walk_and_carry`): the hotbar, walking, carrying,
+    the vise squaring what goes in it, a board from the rack worked at the bench and
+    carried away with its cut.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

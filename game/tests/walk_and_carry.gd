@@ -12,7 +12,11 @@ extends "res://tests/harness.gd"
 ##   it is held in front of the eyes, comes round as the player turns, R turns it; E lets it
 ##   go and it lies flat on the floor; E picks it up again;
 ## - the vise: the board carried back and let go with the eyes on the vise (held askew) goes
-##   in squared: flat, along the bench, on the bench top between the jaws, which close on it.
+##   in squared: flat, along the bench, on the bench top between the jaws, which close on it;
+## - the rack: E on its oak stack puts a new oak board in the hands. Let go over the vise
+##   while the ash board is in it, it just drops; the ash board goes out onto the side table,
+##   the oak board into the vise; at the bench a chisel pares it; out again it keeps its cut
+##   (and its undo), and let go over the floor it lands and rests there.
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -160,8 +164,152 @@ func _ready() -> void:
 	_check(workshop.enter_work(false), "with it in the vise, stepping up to the bench")
 	workshop.leave_work()
 
+	# The rack: an oak board from its stack, into the hands.
+	await _walk_to(Vector3(-1.9, 0.0, 1.0))
+	var stack: StaticBody3D = workshop.room.stacks["board_oak"]
+	player.face(stack.get_meta("top") + Vector3(0.02, 0.0, 0.0))
+	await _frames(2)
+	_check(workshop.prompt().contains("take an oak board"), "at the rack, the line offers its stock: " + workshop.prompt())
+	_key(KEY_E)
+	await _frames(1)
+	var oak: RigidBody3D = workshop.held
+	_check(oak != null and oak.get_meta("wood_name") == "oak" and oak.get_meta("kind") == "board" and oak != ash,
+			"E takes a new oak board into the hands")
+	await _seconds(0.8)
+	off = oak.global_position.distance_to(player.eye() + player.forward() * workshop._hold)
+	_check(off < 0.05, "carried off the rack in front of the eyes (%.3f m off)" % off)
+
+	# Back to the bench with it: with the ash board in the vise, let go there it just drops (on
+	# the bench beside it).
+	await _walk_to(Vector3(0.0, 0.0, 0.6))
+	var beside := Vector3(0.12, 0.0, 0.12)
+	player.face(beside)
+	workshop._hold = player.eye().distance_to(beside) - 0.1
+	await _seconds(0.6)
+	_check(workshop.at_vise() and workshop.prompt().contains("the vise holds the ash board"),
+			"the line says the vise is taken: " + workshop.prompt())
+	_key(KEY_E)
+	await _seconds(1.2)
+	_check(workshop.held == null and workshop.clamped == ash and not oak.freeze, "so letting go just drops it")
+	_check(absf(oak.global_position.y - 0.0125) < 0.002, "it lies on the bench (%.1f mm up)" % (oak.global_position.y * 1000.0))
+
+	# The ash board out of the vise, onto the side table.
+	player.face(ash.global_position)
+	await _frames(2)
+	_key(KEY_F)
+	await _frames(1)
+	_check(workshop.held == ash and workshop.clamped == null, "F takes the ash board out again")
+	await _walk_to(Vector3(0.8, 0.0, 0.8))
+	var table: Vector3 = workshop.room.TABLE_AT + Vector3(-0.05, 0.5 * workshop.room.TABLE_TOP.y, 0.05)
+	player.face(table)
+	workshop._hold = player.eye().distance_to(table) - 0.1
+	await _seconds(0.8)
+	_check(not workshop.at_vise() and workshop.prompt().begins_with("E: let go"), "over the table: " + workshop.prompt())
+	_key(KEY_E)
+	await _seconds(1.2)
+	var on_table: float = ash.global_position.y - (workshop.room.TABLE_AT.y + 0.5 * workshop.room.TABLE_TOP.y)
+	_check(workshop.held == null and absf(on_table - 0.0125) < 0.002, "it lies on the side table (%.1f mm up)" % (on_table * 1000.0))
+
+	# The oak board into the vise.
+	player.face(oak.global_position)
+	await _frames(2)
+	_check(workshop.prompt().contains("pick up the oak board"), "the oak board, from across the bench: " + workshop.prompt())
+	_key(KEY_E)
+	await _frames(1)
+	await _walk_to(Vector3(0.0, 0.0, 0.6))
+	player.face(Vector3.ZERO)
+	await _seconds(0.6)
+	_check(workshop.prompt().contains("put the oak board in the vise"), "the vise is free: " + workshop.prompt())
+	_key(KEY_E)
+	await _frames(2)
+	var oak_sdf = oak.get_meta("sdf")
+	extent = workshop._extent(oak_sdf, oak_sdf.global_transform)
+	face_up = rad_to_deg(oak_sdf.global_basis.z.normalized().angle_to(Vector3.UP))
+	_check(workshop.clamped == oak and oak.freeze and workshop.board == oak_sdf and face_up < 1.0 and
+			absf(extent.position.y) < 0.0001, "in the vise, squared, on the bench top (%.2f degrees)" % face_up)
+
+	# At the bench: a chisel stroke along it.
+	_check(workshop.enter_work(false), "E at the bench: the view over the oak board")
+	await _frames(3)
+	# Where the chisel will go: a point on the top (body space, to find it again wherever the
+	# board is), and how far down from just over it the surface is.
+	var probe: Vector3 = oak_sdf.global_transform.affine_inverse() * Vector3(-0.05, 0.025, 0.0)
+	var top := _depth_at(oak_sdf, probe)
+	await _pare(Vector3(-0.0785, 0.025, 0.0), Vector3(-0.03, 0.025, 0.0)) # (from its end: no diving in)
+	oak_sdf.flush()
+	var cut := _depth_at(oak_sdf, probe) - top
+	_check(cut > 0.2 and cut < 0.8, "a chisel stroke pares it (%.2f mm deep)" % cut)
+	workshop.leave_work()
+	await _frames(2)
+	# Out of the vise again, its cut with it; and down on the floor.
+	player.face(oak.global_position)
+	await _frames(2)
+	_key(KEY_F)
+	await _frames(1)
+	_check(workshop.held == oak and not oak.freeze and oak_sdf.get_stats().get("can_undo", false),
+			"picked up again, it keeps its undo")
+	await _walk_to(Vector3(0.0, 0.0, 1.6))
+	player.face(player.global_position + Vector3(0.0, 0.2, -0.8))
+	await _seconds(0.6)
+	_key(KEY_E)
+	await _seconds(2.0)
+	var bottom: float = workshop._extent(oak_sdf, oak_sdf.global_transform).position.y - workshop.room.FLOOR
+	var kept := _depth_at(oak_sdf, probe) - top
+	print("walk and carry: the oak board pared %.2f mm deep, let go over the floor: its underside %.2f mm above it, the cut %.2f mm deep there" % [
+			cut, bottom * 1000.0, kept])
+	_check(absf(bottom) < 0.001 and oak.linear_velocity.length() < 0.01, "it lands on the floor and rests there")
+	_check(absf(kept - cut) < 0.05, "with its cut")
+
 	print("walk and carry: %s" % ("the workshop is walked and worked in" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)
+
+
+## Walks the player to `point` (its x, z: the floor under it), turning to face that way
+## (the head's tilt kept), at a walk, or until a few seconds have passed (something in the way).
+func _walk_to(point: Vector3) -> void:
+	var player = workshop.player
+	var waited := 0.0
+	while waited < 5.0:
+		var d: Vector3 = point - player.global_position
+		d.y = 0.0
+		if d.length() < 0.03:
+			break
+		player.yaw = atan2(-d.x, -d.z)
+		player._apply()
+		player.move_input = Vector2(0, clampf(d.length() / 0.2, 0.2, 1.0))
+		await get_tree().physics_frame
+		waited += get_physics_process_delta_time()
+	player.move_input = Vector2.ZERO
+	await get_tree().physics_frame
+
+
+## How far (mm) a ray comes down to a piece's surface from 5 mm over `point` (body space, on
+## its top: its +z), wherever the piece is.
+func _depth_at(sdf, point: Vector3) -> float:
+	var xf: Transform3D = sdf.global_transform
+	var up: Vector3 = xf.basis.z.normalized()
+	var hit: Dictionary = sdf.raycast(xf * point + up * 0.005, -up, 0.02)
+	return hit.get("distance", INF) * 1000.0
+
+
+## A chisel pared along the top of the piece in the vise, from `start` to `end` (world): a
+## left-drag in the view over the bench, followed at the chisel's working speed.
+func _pare(start: Vector3, end: Vector3) -> void:
+	workshop.set_setting("chisel", "depth", 0.5)
+	workshop.set_setting("chisel", "angle", 30.0)
+	workshop.select_tool("chisel")
+	await _frames(8)
+	var cam: Camera3D = workshop.camera
+	workshop.hover_screen(cam.unproject_position(start))
+	await _frames(2)
+	workshop.press(cam.unproject_position(start))
+	for k in 16:
+		workshop.drag_screen(cam.unproject_position(start.lerp(end, float(k + 1) / 16)))
+		await _frames(1)
+	await catch_up(workshop)
+	_check(workshop.is_engaged(), "the chisel engaged")
+	workshop.release()
+	workshop.select_tool("")
 
 
 ## A key pressed and let go, as the workshop receives it.

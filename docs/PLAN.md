@@ -73,6 +73,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 | T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths. After play: an edge lock (along any edge, flush, level with an earlier cut's floor) and shavings the size of the chip |
+| W5 | A workshop to work in: a room built in code (bench and vise, side table, lumber rack), a first-person player, tools on a hotbar (none on the table), every piece of work a rigid body you pick up and carry, the vise squaring what is let go on it, the rack's stacks giving new boards; the old bench view is the work view you step into at the vise |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -86,6 +87,7 @@ path needs compute passes.
 | # | Capability | Replaces | Builds on |
 | --- | --- | --- | --- |
 | T | **Tools**: plan, lock, act; cutting by the wood; the real tools' rules (T4, under way) | the fixed-depth tools of W1 | the overlay (W2a) |
+| W5 | **A workshop to work in**: walk, carry, clamp, take stock (done) | the fixed bench view, tools on the table | Pieces (rigid bodies) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
 | 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
@@ -307,6 +309,56 @@ one tool at a time, each tried before the next.
 - Tests: `test_smoothing` (ten passes at the real rate, 60 against 120 grit).
 
 **Next (after trying them together):** each tool as the user finds it in play.
+
+## W5. A workshop to work in: done
+
+**Why.** The workshop was one view of a board fixed on a bench, the tools lying round it,
+and every script assumed a single board. Before trying the tools in play, the user wanted
+a place to find out how working with objects feels: a character walking round a real
+workshop, tools from a hotbar, objects picked up, carried to the bench and worked on there.
+Decided with the user: first person; a bench view you step into to work (today's controls),
+Esc to step back; a vise on the bench holding the work; a lumber rack of ash, oak and
+walnut.
+
+**Built.**
+- **W5-1, the room, the player, the hotbar.** `game/workshop/room.gd` builds the room in
+  code: floor, walls (a door gap), ceiling, a window's light and two lamps (the walls are
+  out of the daylight, on visual layer 2, which the sun culls), the bench with its vise
+  (two jaws, meshes only, and a screw), a side table and the rack. The bench stays at the
+  origin, so every earlier test keeps its world coordinates and only steps into work mode
+  first (`enter_work(false)`). `game/workshop/player.gd` is a `CharacterBody3D` (a 1.75 m
+  capsule, eyes at 1.6 m, 1.5 m/s, 3 m/s hurrying), on physics layer 2 meeting only the
+  room's statics (layer 8): pieces never block or get shoved by it. The tools are hidden
+  unless in hand: while walking, the one in hand is placed each frame at a hand offset from
+  the eyes. Keys 1 to 8 and 0 in both modes, the wheel along the hotbar while walking.
+  Modes: WALK (the player's eyes, the mouse captured) and WORK (the orbit view over the
+  vise, a 0.3 s glide down, the mouse free).
+- **W5-2, pieces.** Every piece of work is a `RigidBody3D` (meta `workpiece`) holding its
+  `SdfBody`: the board in the vise, offcuts and islands alike (`_as_piece`). Each keeps its
+  own collider, rebuilt on its edits and at a split; the vanishing board collider went.
+  `board` is the clamped piece's body, or null (no work mode then). Carrying sets the
+  held piece's velocities towards a point in front of the eyes (and its turn, relative to
+  the player's facing) every physics step, gravity off, so it meets what it hits. R turns
+  it a quarter, the wheel reaches it 0.35 to 1.2 m; let go, its speed is capped at 1 m/s.
+  Debris and dust are keyed piece × 100000 + step, so undoing one piece takes back only
+  its own.
+- **W5-3, the vise.** Let go with the eyes on the vise (the bench between its jaws, or the
+  piece in it) and an empty vise takes the piece: the body axis nearest vertical turned
+  exactly up, the longer of the other two along the bench (to the nearer end), set on the
+  bench top at the vise's middle by its hull, frozen; the jaws close to its width. With
+  the vise taken it just drops. F takes the clamped piece out.
+- **W5-4, the rack.** A stack of each wood on the middle shelf (plain boxes in the wood's
+  colour, labelled on the shelf). E on one makes a new board of that wood
+  (`SdfBody.load_demo`) off the top of the stack into the hands, brought round flat and
+  across the view. The panel's wood choice and New board went; `set_wood` stays for tests.
+- **Tests.** `walk_and_carry` (headless): the hotbar, walking into the bench, stepping up
+  and back, F, carrying, turning, letting go on the floor, the vise squaring a board held
+  askew, a board from the rack, the taken vise, the side table, a chisel stroke at the
+  bench, and the board carried off and dropped with its cut and undo.
+
+**Left for later:** a view model per tool that looks held (it floats at a fixed offset);
+putting tools down; the rack's stacks running out; a vise that holds a piece off the bench
+(for sawing down, or working an end).
 
 ## 1. Pieces — bodies that come apart (current: P1 and P2 done)
 

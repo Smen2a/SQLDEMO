@@ -1,7 +1,7 @@
 extends Node3D
 
 ## The workshop's room, built in code: the light, a floor and walls, the workbench with its
-## vise, a side table and the lumber rack. The world is in metres with y up. The bench top is
+## vise, a side table and the lumber rack with its stock. The world is in metres with y up. The bench top is
 ## at y = 0 with its middle at the origin, where the vise holds the work; the floor is at
 ## y = -0.85. Statics are on physics layer 1 (what pieces and debris meet) and 4 (what the
 ## player walks into: never the pieces lying about); the floor, the bench and the table are
@@ -27,9 +27,16 @@ const TABLE_TOP := Vector3(0.6, 0.04, 0.6)
 const RACK_AT := Vector3(-2.75, FLOOR, 1.0) # the middle of its foot, by the wall
 const RACK_SHELVES := [0.45, 0.9, 1.35] # heights above the floor
 const RACK_SIZE := Vector3(0.4, 1.6, 0.9) # deep (x), high, long (z)
+## Its stock: a stack of each wood's boards (SdfBody.load_demo's names) on the middle shelf,
+## in the woods' colours (core materials: between their early- and latewood).
+const STOCK := {"board": ["ash", Color(0.78, 0.67, 0.5)], "board_oak": ["oak", Color(0.68, 0.53, 0.35)],
+		"board_walnut": ["walnut", Color(0.36, 0.25, 0.17)]}
+const STOCK_BOARD := Vector3(0.1, 0.025, 0.16) # a board of it as it lies there (across, thick, long)
+const STACK := 5 # boards in a stack
 
 var bench: StaticBody3D
 var table: StaticBody3D
+var stacks := {} # demo name -> its stack's static body (meta "stock": the name; "top": where the next board lies)
 var jaws: Array[MeshInstance3D] = []
 
 var _oak := _material(Color(0.3, 0.2, 0.13), 0.8)
@@ -70,8 +77,10 @@ func _light() -> void:
 	world.environment = env
 	add_child(world)
 	# Daylight through the window, as it fell on the bench before there was a room: the walls
-	# and ceiling cast no shadow, so it still reaches the bench.
+	# and ceiling cast no shadow, so it still reaches the bench, and it does not fall on them
+	# (they are on visual layer 2: the lamps and the ambient light them).
 	var sun := DirectionalLight3D.new()
+	sun.light_cull_mask = 1
 	sun.light_color = Color(1.0, 0.96, 0.9)
 	sun.light_energy = 0.9
 	sun.shadow_enabled = true
@@ -82,7 +91,7 @@ func _light() -> void:
 		var lamp := OmniLight3D.new()
 		lamp.position = at
 		lamp.light_color = Color(1.0, 0.92, 0.8)
-		lamp.light_energy = 0.6
+		lamp.light_energy = 0.3
 		lamp.omni_range = 5.0
 		add_child(lamp)
 
@@ -160,7 +169,8 @@ func _table() -> void:
 					TABLE_AT.z + sz * 0.26), _oak, false)
 
 
-## The lumber rack against the left wall: two uprights and a shelf at each height.
+## The lumber rack against the left wall: two uprights, a shelf at each height, and on the
+## middle one a stack of boards of each wood, labelled (E on a stack takes one: workshop.gd).
 func _rack() -> void:
 	for sz in [-1.0, 1.0]:
 		_box(Vector3(RACK_SIZE.x, RACK_SIZE.y, 0.05), RACK_AT + Vector3(0.0, 0.5 * RACK_SIZE.y, sz * 0.5 * RACK_SIZE.z),
@@ -168,10 +178,36 @@ func _rack() -> void:
 	for h in RACK_SHELVES:
 		var shelf := _box(Vector3(RACK_SIZE.x, 0.025, RACK_SIZE.z), RACK_AT + Vector3(0.0, h - 0.0125, 0.0), _pine, true)
 		shelf.set_meta("ground", true)
+	var names := STOCK.keys()
+	for i in names.size():
+		var wood: String = names[i]
+		var colour: Color = STOCK[wood][1]
+		var foot := RACK_AT + Vector3(0.0, RACK_SHELVES[1], (i - 1) * 0.28)
+		# Each board a shade apart, a little off square, as a stack is.
+		for k in STACK:
+			var shade := _material(colour.darkened(0.06 * ((k * 7) % 3)), 0.8)
+			var off := Vector3(0.006 * ((k * 5) % 3 - 1), (k + 0.5) * STOCK_BOARD.y, 0.008 * ((k * 3) % 3 - 1))
+			_box(STOCK_BOARD - Vector3(0.0, 0.0005, 0.0), foot + off, shade, false)
+		var stack := _solid(Vector3(STOCK_BOARD.x, STACK * STOCK_BOARD.y, STOCK_BOARD.z),
+				foot + Vector3(0.0, 0.5 * STACK * STOCK_BOARD.y, 0.0))
+		stack.set_meta("stock", wood)
+		stack.set_meta("wood_name", STOCK[wood][0])
+		stack.set_meta("top", foot + Vector3(0.0, STACK * STOCK_BOARD.y, 0.0))
+		stacks[wood] = stack
+		var label := Label3D.new()
+		label.text = STOCK[wood][0]
+		label.pixel_size = 0.0008
+		label.font_size = 40
+		label.modulate = Color(0.95, 0.93, 0.88)
+		label.outline_size = 10
+		# Lying on the shelf in front of the stack, read from the room (its top towards the wall).
+		label.position = foot + Vector3(0.5 * STOCK_BOARD.x + 0.055, 0.001, 0.0)
+		label.rotation = Vector3(-PI / 2, PI / 2, 0.0)
+		add_child(label)
 
 
-## A box: its mesh, and (`solid`) a static body round it. `shadows`: whether it casts them
-## (walls and ceiling do not: the daylight reaches the bench as before).
+## A box: its mesh, and (`solid`) a static body round it. `shadows`: false for the walls and
+## ceiling, which cast none and are out of the daylight (see _light).
 func _box(size: Vector3, at: Vector3, material: Material, solid: bool, shadows := true) -> StaticBody3D:
 	var mesh := MeshInstance3D.new()
 	var box := BoxMesh.new()
@@ -181,9 +217,13 @@ func _box(size: Vector3, at: Vector3, material: Material, solid: bool, shadows :
 	mesh.position = at
 	if not shadows:
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mesh.layers = 2
 	add_child(mesh)
-	if not solid:
-		return null
+	return _solid(size, at) if solid else null
+
+
+## A static box, unseen, that pieces and debris (layer 1) and the player (ROOM_LAYER) meet.
+func _solid(size: Vector3, at: Vector3) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.collision_layer = 1 | ROOM_LAYER
 	var shape := CollisionShape3D.new()

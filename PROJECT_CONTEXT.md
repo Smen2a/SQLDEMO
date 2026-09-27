@@ -34,8 +34,10 @@ each combined with a chosen blend mode. The engine gives:
 It is built as:
 - a C++ core with no dependencies (`native/src/core`), engine-agnostic by rule;
 - a Godot 4.7 GDExtension on top of it (`native/src/godot`, the `SdfBody` node);
-- the Godot project (`game/`), whose main scene is a **woodworking workshop**: a board on a
-  bench and eight kinds of hand tool, every one an SDF body.
+- the Godot project (`game/`), whose main scene is a **woodworking workshop** you walk
+  about in first person: a bench with a vise, a side table, a lumber rack of ash, oak and
+  walnut, and eight kinds of hand tool on a hotbar. Every tool and every piece of work is
+  an SDF body; pieces are picked up, carried and clamped.
 
 The repository's name (SQLDEMO) is historical: it began as a throwaway Godot SQL demo that
 the engine replaced.
@@ -104,9 +106,13 @@ The principles everything is built by (docs/PLAN.md):
   millimetres and writes true depth, normal and position, so Godot lights and composites
   it like any mesh.
 - **`game/workshop/`**:
-  - `workshop.gd`: the scene, tool driving, offcuts and physics;
-  - `workshop_ui.gd`: the panel and status line;
-  - `orbit_camera.gd`;
+  - `room.gd`: the room, built in code (light, walls, the bench and its vise, the side
+    table, the rack and its stacks);
+  - `player.gd`: the first-person player (a `CharacterBody3D`);
+  - `workshop.gd`: the two modes (walking, working at the bench), pieces of work as rigid
+    bodies, carrying, the vise, the rack, tool driving at the bench, offcuts and physics;
+  - `workshop_ui.gd`: the hotbar, the crosshair and its prompt, the panels and status line;
+  - `orbit_camera.gd`: the view over the bench;
   - `debris.gd`: shavings and chips (they fade 2 s after landing); `dust.gd`: dust (a puff,
     and piles on the ground).
 - **`game/tests/`**: scenes driven headless (logic) or rendered (images). **`game/bench/`**:
@@ -117,7 +123,8 @@ body node is scaled by 0.001 and turned −90° about x.
 
 ### The life of a stroke
 
-1. **Pick a tool and point.** An outline shows what it would touch. The tool in hand stays
+1. **At the bench** (E with a piece in the vise), **take a tool from the hotbar and
+   point.** An outline shows what it would touch. The tool in hand stays
    hidden until it acts.
 2. **Plan it (optional):** hold the right button.
    - `SdfBody.plan_stroke` runs the stroke along its path without making it. For
@@ -164,6 +171,7 @@ shared cores and from the tests; the README has the tables.
 | Tests | Split into tiers: a headless tier (logic, plus a one-frame shader compile check; about a minute) and a GPU tier (renders, image comparisons, parity, Vulkan) |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
+| W5 | A workshop to work in: a room built in code, a first-person player, tools on a hotbar, every piece of work a rigid body you pick up and carry (R turns it, the wheel reaches it), a vise that squares what is let go on it (flat, along the bench, on its top) and holds the piece the tools work on, a rack whose stacks give new boards. The old bench view is the work view you step into (E) and out of (Esc) |
 | T4-7 | The sanding sponge's flow at a real rate by grit, pressure and wood (ten passes of 120 grit round an ash arris to a 0.5 mm radius), at its working speed |
 | T4-6 | The spokeshave: held flat, its sole riding the highest across its blade; as deep as two hands push the chip's own section (deeper on a narrow edge), its mouth passes (0.8 mm) and its toe rides (a step blocks it) |
 | T4-5 | The card scraper: a burr line pushed over the work, 0.01 mm from each point it passes, only where it went, on the push |
@@ -172,7 +180,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 122 native tests (GCC and Clang, including golden images) and 9
+Test counts today: 122 native tests (GCC and Clang, including golden images) and 10
 headless Godot checks.
 
 ## 5. Where things stand
@@ -208,8 +216,11 @@ so correctness can be checked here, but not speed.
   - crumbs under 1 mm³ stay in the body (D3).
 - **Physics:**
   - debris colliders are boxes;
-  - the board's collider is a box while it fills its bounds, unless islands have hollowed
+  - a piece's collider is a box while it fills its bounds, unless islands have hollowed
     it (then convex pieces). Proper meshes come with the Bake.
+- **The workshop:** the tool in hand floats at a fixed offset from the eyes (no hands);
+  tools can't be put down; the rack's stacks never run out; the vise holds a piece on the
+  bench top only (not raised for sawing down or working an end).
 - **Shadows:** under the Compatibility renderer, Live bodies receive no shadow-map
   shadows (coordinates are per vertex on the proxy box). Forward+ and Mobile look them
   up per fragment, which is still to be confirmed on hardware.
@@ -221,6 +232,14 @@ so correctness can be checked here, but not speed.
 
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
+
+### W5. A workshop to work in (done)
+
+Before trying the tools in play, the user wanted to find out how working with objects
+feels: walk round a workshop, take tools from a hotbar, pick pieces up, carry them to the
+bench and work on them there. Built in four steps (docs/PLAN.md, W5): the room and player
+with the hotbar; pieces as rigid bodies you carry; the vise; the rack. Next: try the
+workshop and the tools together in play.
 
 ### T4. The rules of the real tools (done: T4-1 to T4-7; to be tried together)
 
@@ -397,6 +416,14 @@ build directory).
 - **A smooth blend reaches below its floor.** A pass feathered by r lowers any surface
   within r under its box's floor: resting on a bump, a 2 mm feather sanded the flat round
   it. Keep the feather to half what the pass takes off most of its ground.
+- **A piece's collider follows its split at once.** The offcut is made where it was, inside
+  the old piece's collider until the half-space lands; rebuilt only on the next `edited`,
+  that box threw it 21 mm off the kerf (it should slide about 6). Rebuild it at the split.
+- **The eyes see through what they carry.** A ray from the crosshair hits the held piece
+  first unless it is excluded, and letting go over the vise would never find the vise.
+- **Daylight through a window lights the walls from inside.** The sun still reaches every
+  wall that faces it and blows them out; keep the walls on their own visual layer, culled
+  from the sun, and let the lamps and ambient light them.
 - **Tests wait in game time, and for the tool.** Every tool now follows the pointer at a
   working speed: drag one leg at a time and wait for `lagging()` to clear (the harness's
   `catch_up`). Waits counted in frames break when headless frames take a millisecond.
