@@ -1,7 +1,9 @@
 extends CanvasLayer
 
-## The workshop's controls: tools, their settings, the wood, undo / redo / reset, and a
-## status line (edits, how long the last edit took to apply and upload, GPU frame time).
+## The workshop's controls: the hotbar (the tools, 1 to 8; 0 empty hands), a crosshair and
+## what E would do while walking; at the bench, the tool in hand's settings, the wood, undo /
+## redo / reset, and a status line (edits, how long the last edit took to apply and upload,
+## GPU frame time).
 
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
 		"spokeshave": "5 Spokeshave", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge"}
@@ -35,11 +37,12 @@ const GRITS := [60, 80, 120, 180, 240, 320]
 const WOODS := {"board": "Ash", "board_oak": "Oak", "board_walnut": "Walnut"}
 const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
 		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
-		"Alt: no edge lock   Esc: drop it   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   E: reach (work at the bench)   1-8, wheel: tools   0: empty hands   Esc: free the mouse"
 
 var workshop
 
-var _tool_buttons := {}
+var _slots := {}    # tool (or "" for empty hands) -> its hotbar slot (PanelContainer)
 var _settings_boxes := {}
 var _sliders := {}  # "tool/key" -> [slider, its value label, format]: what the wheel also sets
 var _variants := {} # family -> its variant OptionButton
@@ -48,7 +51,12 @@ var _undo: Button
 var _redo: Button
 var _wood: OptionButton
 var _status: Label
+var _hints: Label
 var _plan: Label  # beside the pointer: what the stroke being planned or made comes to
+var _left: Control   # the tool's settings (at the bench)
+var _right: Control  # the wood, undo, pace... (at the bench)
+var _crosshair: Label
+var _prompt: Label   # under the crosshair: what E would do
 
 
 func _ready() -> void:
@@ -57,16 +65,9 @@ func _ready() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	# Tools and their settings, top left.
+	# The tool in hand's settings, top left.
 	var left := _panel(root, Vector2(12, 12))
-	var tool_row := HBoxContainer.new()
-	left.add_child(tool_row)
-	var group := ButtonGroup.new()
-	for tool in TOOL_LABELS:
-		var b := _button(tool_row, TOOL_LABELS[tool], func(): workshop.select_tool(tool))
-		b.toggle_mode = true
-		b.button_group = group
-		_tool_buttons[tool] = b
+	_left = left.get_parent()
 	var edge_boxes := {}
 	for family in ["chisel", "gouge"]:
 		var box := VBoxContainer.new()
@@ -120,6 +121,7 @@ func _ready() -> void:
 
 	# The board, top right.
 	var right := _panel(root, Vector2.ZERO)
+	_right = right.get_parent()
 	var row := HBoxContainer.new()
 	right.add_child(row)
 	_wood = OptionButton.new()
@@ -158,11 +160,50 @@ func _ready() -> void:
 	var bottom := _panel(root, Vector2.ZERO)
 	_status = Label.new()
 	bottom.add_child(_status)
-	var hints := Label.new()
-	hints.text = HINTS
-	hints.modulate = Color(1, 1, 1, 0.7)
-	bottom.add_child(hints)
+	_hints = Label.new()
+	_hints.text = HINTS
+	_hints.modulate = Color(1, 1, 1, 0.7)
+	bottom.add_child(_hints)
 	_pin(bottom, Control.PRESET_BOTTOM_LEFT)
+
+	# The hotbar, bottom middle: 1 to 8 the tools, 0 empty hands.
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 4)
+	root.add_child(bar)
+	var order: Array = TOOL_LABELS.keys()
+	order.append("")
+	for tool in order:
+		var slot := PanelContainer.new()
+		slot.mouse_filter = Control.MOUSE_FILTER_STOP
+		slot.custom_minimum_size = Vector2(92, 40)
+		var label := Label.new()
+		label.text = TOOL_LABELS[tool] if tool != "" else "0 Hands"
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		if tool != "":
+			label.add_theme_color_override("font_color", workshop.TOOL_COLOURS[tool].lightened(0.3))
+		slot.add_child(label)
+		slot.gui_input.connect(func(e):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				workshop.select_tool(tool))
+		bar.add_child(slot)
+		_slots[tool] = slot
+	bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, 12)
+	bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+
+	# Walking: a crosshair, and what E would do under it.
+	_crosshair = Label.new()
+	_crosshair.text = "+"
+	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crosshair.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	root.add_child(_crosshair)
+	_prompt = Label.new()
+	_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prompt.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	_prompt.add_theme_constant_override("shadow_offset_x", 1)
+	_prompt.add_theme_constant_override("shadow_offset_y", 1)
+	root.add_child(_prompt)
 
 	_plan = Label.new()
 	_plan.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -239,13 +280,20 @@ func _thin(depth: float) -> String:
 	return "%.1f µm" % (depth * 1000.0) if depth < 0.01 else "%.3f mm" % depth
 
 
-## Tool buttons, which settings show, whether undo and redo apply.
+## The hotbar, which settings show (at the bench), whether undo and redo apply.
 func refresh() -> void:
 	if workshop == null or _undo == null:
 		return
-	for tool in _tool_buttons:
-		_tool_buttons[tool].set_pressed_no_signal(tool == workshop.current)
+	var working: bool = workshop.mode == workshop.Mode.WORK
+	for tool in _slots:
+		_slots[tool].self_modulate = Color(1.6, 1.4, 0.8) if tool == workshop.current else Color(1, 1, 1, 0.75)
+	for tool in _settings_boxes:
 		_settings_boxes[tool].visible = tool == workshop.current
+	_left.visible = working and workshop.current != ""
+	_right.visible = working
+	_hints.text = HINTS if working else WALK_HINTS
+	_crosshair.visible = not working
+	_prompt.visible = not working
 	for family in _variants:
 		var list: Array = workshop.variants.get(family, [])
 		for i in list.size():
@@ -259,13 +307,21 @@ func refresh() -> void:
 		var value: float = workshop.settings[parts[0]][parts[1]]
 		_sliders[id][0].set_value_no_signal(value)
 		_sliders[id][1].text = _sliders[id][2] % value
-	var stats: Dictionary = workshop.board.get_stats()
+	var stats: Dictionary = workshop.board.get_stats() if workshop.board != null else {}
 	_undo.disabled = not stats.get("can_undo", false)
 	_redo.disabled = not stats.get("can_redo", false)
 	_wood.select(WOODS.keys().find(workshop.wood))
 
 
 func update_status() -> void:
+	var view: Vector2 = workshop.get_viewport().get_visible_rect().size
+	if workshop.mode != workshop.Mode.WORK:
+		_plan.text = ""
+		_crosshair.position = 0.5 * view - 0.5 * _crosshair.get_combined_minimum_size()
+		_prompt.text = workshop.prompt()
+		_prompt.position = 0.5 * view + Vector2(-0.5 * _prompt.get_combined_minimum_size().x, 18)
+		_update_line()
+		return
 	# Beside the pointer: the plan, or how to make one.
 	var line := plan_text()
 	if workshop.is_planning():
@@ -279,17 +335,21 @@ func update_status() -> void:
 	var pointer: Vector2 = workshop.get_viewport().get_mouse_position()
 	var at: Vector2 = pointer + Vector2(18, 14)
 	var size := _plan.get_combined_minimum_size()
-	var view: Vector2 = workshop.get_viewport().get_visible_rect().size
 	if at.x + size.x > view.x - 8.0:
 		at.x = maxf(8.0, pointer.x - 18.0 - size.x)
 	at.y = clampf(at.y, 8.0, maxf(8.0, view.y - 8.0 - size.y))
 	_plan.position = at
-	var stats: Dictionary = workshop.board.get_stats()
+	_update_line()
+
+
+## The status line: the board's edits and how long they took, the frame's GPU time.
+func _update_line() -> void:
+	var stats: Dictionary = workshop.board.get_stats() if workshop.board != null else {}
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid())
 	var state := ""
 	if stats.get("overlay_edits", 0) > 0:
 		state = "   (previewing %d edits)" % stats.overlay_edits
-	elif workshop.board.is_busy():
+	elif workshop.board != null and workshop.board.is_busy():
 		state = "   (refining...)" if stats.get("refine_pending", false) else "   (applying...)"
 	_status.text = "%d edits in %d strokes   last edit applied in %.0f ms (bricks on the %s), uploaded in %.0f ms%s   GPU %.1f ms   %d fps" % [
 			stats.get("edits", 0), stats.get("steps", 0), stats.get("update_ms", 0.0),

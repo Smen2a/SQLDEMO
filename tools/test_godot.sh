@@ -22,6 +22,7 @@
 #     takes them back
 #   - sawdust is the kerf taken and heaps up beyond the kerf's ends; sanding dust lies on
 #     the face; the sponge's arrives; undo takes each stroke's back
+#   - the workshop as a place: walking, the hotbar, stepping up to the bench and back
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
 #   - the Live path renders a shaded scene with shadows and mesh intersections
@@ -85,6 +86,7 @@ if [[ "$GPU" == 0 ]]; then
 	check island_split "island split: the rebate came away" res://tests/island_split.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
+	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
 	exit $status
 fi
 

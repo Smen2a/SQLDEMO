@@ -1,8 +1,11 @@
 extends Node3D
 
-## The workshop: a board on a bench and eight hand tools, every one an SDF body. Pick a
-## tool (click it on the bench, or 1 to 8; Tab for its variants) and point at the board:
-## its footprint shows where it would go. Then:
+## The workshop: a room with a workbench, and eight hand tools, every one an SDF body. You
+## walk about it in first person (WASD, the mouse to look, Shift to hurry; room.gd,
+## player.gd); the hotbar at the bottom holds the tools (1 to 8, the wheel; 0 empty-handed),
+## the one in hand held in view. At the bench, E steps up to it: the view comes down over
+## the work in the vise (the mouse freed; Esc steps back). There, with a tool (Tab for its
+## variants), point at the work: its footprint shows where it would go. Then:
 ##   use   left-drag on the board: the tool sets to work where it was pressed, going the
 ##         way the drag goes (the sanding tools follow it anywhere; a chisel held up to
 ##         chop strikes a blow at the click). Let go to finish: one undo step. A line by
@@ -76,6 +79,8 @@ extends Node3D
 const MM := 0.001
 const HOVER_LIFT := 15.0 # mm the tool floats above where it will engage
 const OrbitCamera := preload("res://workshop/orbit_camera.gd")
+const Room := preload("res://workshop/room.gd")
+const Player := preload("res://workshop/player.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 const Debris := preload("res://workshop/debris.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
@@ -102,6 +107,13 @@ const BLOW_NAMES := ["tap", "firm", "heavy"]
 ## stroke (the left button, no plan) waiting for its drag to show which way it goes.
 ## ACTING: a stroke being made.
 enum { IDLE, PLANNING, ARMED, ACTING }
+## WALK: about the room, in first person. WORK: at the bench, over the work in the vise.
+enum Mode { WALK, WORK }
+const REACH := 2.0 # m: how far away a hand reaches (E)
+## The tool in hand while walking: where it is held in front of the eyes (camera space, m),
+## its working direction forward and its face up, turned a little inwards.
+const HAND := Vector3(0.2, -0.2, -0.42)
+const HAND_TURN := 0.35 # radians
 
 ## Per tool, what the wheel sets while planning: [setting, step, lowest, highest, format].
 const INTENSITY := {
@@ -168,9 +180,14 @@ var board                 # SdfBody
 var tools := {}           # name -> SdfBody
 var current := ""         # the tool in hand, or ""
 var yaw := 0.0            # the tool's turn about the surface normal, radians
-var camera: Camera3D
+var camera: Camera3D      # the one in use: the player's eyes (walking) or the view over the bench
+var mode := Mode.WALK
+var room                  # room.gd
+var player                # player.gd
 
-var _rest := {}           # name -> Transform3D where each tool lies on the bench
+var _orbit                # the view over the bench (orbit_camera.gd)
+var _glide := 1.0         # 0 to 1: how far the view has come down to the bench
+var _glide_from := Transform3D()
 var _outline: MeshInstance3D
 var _ui
 var _pointer := Vector2.ZERO
@@ -212,7 +229,8 @@ var _debris_step := 0
 
 
 func _ready() -> void:
-	_build_world()
+	room = Room.new()
+	add_child(room)
 	debris = Debris.new()
 	add_child(debris)
 	board = _new_body()
@@ -227,9 +245,7 @@ func _ready() -> void:
 		var body = _new_body()
 		body.load_tool(tool, settings[tool])
 		tools[tool] = body
-	_place_rests()
-	for tool in TOOL_NAMES:
-		tools[tool].global_transform = _rest[tool]
+		_show_tool(tool, 0.0) # (out of sight until it is taken from the hotbar)
 
 	var orbit = OrbitCamera.new()
 	orbit.fov = 40.0
@@ -239,7 +255,13 @@ func _ready() -> void:
 	orbit.distance = 0.42
 	orbit.pitch = -0.8
 	add_child(orbit)
-	camera = orbit
+	_orbit = orbit
+	# The person: standing in front of the bench, looking at the vise.
+	player = Player.new()
+	add_child(player)
+	player.position = Vector3(0.0, Room.FLOOR, 0.75)
+	player.face(Vector3(0.0, 0.0, 0.0))
+	_walk()
 
 	_outline = MeshInstance3D.new()
 	_outline.mesh = ImmediateMesh.new()
@@ -256,7 +278,101 @@ func _ready() -> void:
 	_ui.workshop = self
 	add_child(_ui)
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
-	select_tool("chisel")
+	select_tool("")
+
+
+# --- walking and working ---------------------------------------------------------------
+
+## Steps up to the bench: the view comes down over the work in the vise (in `glide` 0.3 s,
+## or at once), the mouse is freed, and the tools work on it. False with nothing to work on.
+func enter_work(glide := true) -> bool:
+	if mode == Mode.WORK:
+		return true
+	if board == null:
+		return false
+	mode = Mode.WORK
+	player.active = false
+	player.move_input = Vector2.ZERO
+	_glide_from = player.camera.global_transform
+	_glide = 0.0 if glide else 1.0
+	_orbit._apply()
+	_orbit.set_process_unhandled_input(true)
+	_orbit.make_current()
+	camera = _orbit
+	_orbit_to_glide()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_show_tool_in_hand()
+	_ui.refresh()
+	return true
+
+
+## Steps back from the bench: anything planned or being made is dropped, and the view is the
+## player's eyes again.
+func leave_work() -> void:
+	if mode == Mode.WALK:
+		return
+	cancel()
+	_walk()
+	_ui.refresh()
+
+
+func _walk() -> void:
+	mode = Mode.WALK
+	_glide = 1.0
+	_orbit.set_process_unhandled_input(false)
+	player.active = true
+	player.camera.make_current()
+	camera = player.camera
+	if DisplayServer.get_name() != "headless":
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_show_tool_in_hand()
+
+
+## E: what is in reach in front of the eyes. At the bench, step up to it.
+func interact() -> void:
+	if mode != Mode.WALK:
+		return
+	var hit := look_at_thing()
+	if hit.is_empty():
+		return
+	if hit.collider.has_meta("bench"):
+		enter_work()
+
+
+## What the eyes rest on within reach (a physics ray from the middle of the view): the
+## ray's result ({"collider", "position", ...}), or {}.
+func look_at_thing() -> Dictionary:
+	var query := PhysicsRayQueryParameters3D.create(player.eye(), player.eye() + player.forward() * REACH, 1)
+	query.exclude = [player.get_rid()]
+	return get_world_3d().direct_space_state.intersect_ray(query)
+
+
+## What E would do now, for the line under the crosshair ("" for nothing).
+func prompt() -> String:
+	if mode != Mode.WALK:
+		return ""
+	var hit := look_at_thing()
+	if hit.is_empty():
+		return ""
+	if hit.collider.has_meta("bench"):
+		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
+	return ""
+
+
+## While the view comes down to the bench: part way from the eyes to the view over the work.
+func _orbit_to_glide() -> void:
+	if _glide >= 1.0:
+		_orbit._apply()
+		return
+	_orbit._apply()
+	var t := smoothstep(0.0, 1.0, _glide)
+	_orbit.global_transform = _glide_from.interpolate_with(_orbit.global_transform, t)
+
+
+## The tool in hand: held in view while walking; out of sight at the bench until it works.
+func _show_tool_in_hand() -> void:
+	for tool in TOOL_NAMES:
+		_show_tool(tool, (1.0 if mode == Mode.WALK else _opacity) if tool == current else 0.0)
 
 
 # --- driving the tools (input handlers call these; tests do too) ----------------------
@@ -265,14 +381,17 @@ func select_tool(tool: String) -> void:
 	if _engaged:
 		release()
 	_drop_plan()
-	if current != "" and tools.has(current):
-		# Back on the bench: seen by everyone again.
-		_show_tool(current, 1.0)
 	current = tool
 	_opacity = 0.0
-	if current != "":
-		_show_tool(current, 0.0)
+	_show_tool_in_hand()
 	_ui.refresh()
+
+
+## The next or the one before on the hotbar (the wheel, walking): the tools, then empty hands.
+func next_slot(steps: int) -> void:
+	var slots: Array = TOOL_NAMES.duplicate()
+	slots.append("")
+	select_tool(slots[posmod(slots.find(current) + steps, slots.size())])
 
 
 ## Moves the pointer to a screen position and looks at what is under it.
@@ -328,7 +447,7 @@ func lock(position: Vector2, free := false) -> void:
 			"path": facing, "length": DEFAULT_LENGTH[current], "seed": randi() % 100000}
 	_note_edge(free, _hit.get("own_normal", normal))
 	_state = PLANNING
-	camera.wheel_zoom = false
+	_orbit.wheel_zoom = false
 	aim(position)
 	_replan()
 
@@ -458,10 +577,9 @@ func adjust(steps: int, tilt: bool, fine := false) -> void:
 	_replan()
 
 
-## Left button down: with a stroke planned, the tool sets to work along it. Otherwise a
-## tool lying on the bench under the pointer is picked up, or the tool in hand sets to work
-## where the pointer is on the board, without a plan: the sanding tools (and a chop) at
-## once, the others once the drag shows which way they go.
+## Left button down: with a stroke planned, the tool sets to work along it. Otherwise the
+## tool in hand sets to work where the pointer is on the board, without a plan: the sanding
+## tools (and a chop) at once, the others once the drag shows which way they go.
 func press(position: Vector2, free := false) -> void:
 	if _state == PLANNING:
 		act()
@@ -469,11 +587,6 @@ func press(position: Vector2, free := false) -> void:
 	if _state != IDLE:
 		return
 	hover_screen(position)
-	var board_distance: float = _hit.distance if not _hit.is_empty() else INF
-	var picked := _tool_under(position, board_distance)
-	if picked != "":
-		select_tool(picked)
-		return
 	if current == "" or _hit.is_empty() or _hit.get("stale", false):
 		return
 	var normal: Vector3 = _hit.normal
@@ -653,7 +766,7 @@ func _drop_plan() -> void:
 	_lock = {}
 	_plan = {}
 	board.clear_plan()
-	camera.wheel_zoom = true
+	_orbit.wheel_zoom = true
 
 
 ## A tool's visibility: `opacity` 0 hides it (the tool in hand, until it works).
@@ -873,6 +986,18 @@ func stroke_state() -> Dictionary:
 # --- per frame ---------------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
+	# The hotbar, walking or working: 1 to 8 the tools, 0 empty hands.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var code := (event as InputEventKey).keycode
+		if code >= KEY_1 and code <= KEY_8:
+			select_tool(TOOL_NAMES[code - KEY_1])
+			return
+		if code == KEY_0:
+			select_tool("")
+			return
+	if mode == Mode.WALK:
+		_walk_input(event)
+		return
 	if event is InputEventMouseMotion:
 		match _state:
 			ACTING, ARMED:
@@ -901,8 +1026,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
-			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8:
-				select_tool(TOOL_NAMES[key.keycode - KEY_1])
 			KEY_TAB:
 				next_variant()
 			KEY_C:
@@ -920,7 +1043,11 @@ func _unhandled_input(event: InputEvent) -> void:
 							_lock.along = _lock.path.rotated(_lock.normal, yaw)
 						_replan()
 			KEY_ESCAPE:
-				cancel()
+				# What is planned or being made first; with nothing, a step back from the bench.
+				if _state == IDLE and not _engaged:
+					leave_work()
+				else:
+					cancel()
 			KEY_Z:
 				if key.ctrl_pressed and key.shift_pressed:
 					redo()
@@ -931,24 +1058,47 @@ func _unhandled_input(event: InputEvent) -> void:
 					redo()
 
 
+## Walking: E reaches for what is in front, the wheel steps along the hotbar, Esc frees the
+## mouse (a click takes it back). The player takes the walking keys and the mouse's look.
+func _walk_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		match (event as InputEventKey).keycode:
+			KEY_E:
+				interact()
+			KEY_ESCAPE:
+				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	elif event is InputEventMouseButton and event.pressed:
+		match (event as InputEventMouseButton).button_index:
+			MOUSE_BUTTON_WHEEL_UP:
+				next_slot(-1)
+			MOUSE_BUTTON_WHEEL_DOWN:
+				next_slot(1)
+			MOUSE_BUTTON_LEFT:
+				if DisplayServer.get_name() != "headless":
+					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
 func _process(delta: float) -> void:
-	if _state == IDLE:
+	if _glide < 1.0:
+		_glide = minf(_glide + delta / 0.3, 1.0)
+		_orbit_to_glide()
+	if mode == Mode.WORK and _state == IDLE:
 		# Keep looking under the pointer: the board may have changed under it.
 		hover_screen(_pointer)
 	var follow := 1.0 - exp(-delta * 18.0)
-	for tool in TOOL_NAMES:
-		var body = tools[tool]
-		if tool == current and _engaged:
+	if current != "":
+		var body = tools[current]
+		if mode == Mode.WALK:
+			body.global_transform = _hand_pose()
+		elif _engaged:
 			# Drop onto the work quickly, then ride exactly where the stroke puts it.
 			var t: float = clamp((Time.get_ticks_msec() / 1000.0 - _engage_time) / 0.08, 0.0, 1.0)
 			body.global_transform = _engage_pose.interpolate_with(board.get_tool_pose(), t)
-		elif tool == current and _state == PLANNING:
+		elif _state == PLANNING:
 			# Set on the work where the stroke starts, out of sight until it acts.
 			body.global_transform = board.pose_at(_lock.point, _lock.normal, _lock.along, 0.0)
-		elif tool == current:
-			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 		else:
-			body.global_transform = body.global_transform.interpolate_with(_rest[tool], follow)
+			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 	# The tool follows where it was dragged at its working speed.
 	var went := Vector3.ZERO
 	if _engaged and current in PUSHED:
@@ -971,8 +1121,8 @@ func _process(delta: float) -> void:
 		var fresh: Dictionary = board.get_plan()
 		if not fresh.is_empty() and not fresh.get("stale", false):
 			_plan = fresh
-	# The tool in hand is seen in the main view only while it works, fading in and out.
-	if current != "":
+	# At the bench, the tool in hand is seen only while it works, fading in and out.
+	if current != "" and mode == Mode.WORK:
 		var target := 1.0 if _state == ACTING else 0.0
 		if _opacity != target:
 			_opacity = move_toward(_opacity, target, delta / FADE_TIME)
@@ -1063,6 +1213,14 @@ func _push_aside(delta: float) -> void:
 			piece.sleeping = false
 
 
+## Where the tool in hand is held while walking: in front of the eyes, a little to the right
+## and below, its working direction forward and its face up.
+func _hand_pose() -> Transform3D:
+	var eyes: Transform3D = player.camera.global_transform
+	var basis := Basis(Vector3.UP, HAND_TURN) * Basis(Vector3(0, 0, -1), Vector3(-1, 0, 0), Vector3(0, 1, 0))
+	return Transform3D(eyes.basis * basis * Basis.from_scale(Vector3.ONE * MM), eyes * HAND)
+
+
 ## Where the tool in hand floats: over the board under the pointer, or over its middle.
 func _hover_pose() -> Transform3D:
 	if _hit.is_empty():
@@ -1083,27 +1241,12 @@ func _along(normal: Vector3) -> Vector3:
 	return along.normalized().rotated(normal, yaw)
 
 
-## The tool (other than the one in hand) nearer than `nearest` under a screen position.
-func _tool_under(position: Vector2, nearest: float) -> String:
-	var from := camera.project_ray_origin(position)
-	var dir := camera.project_ray_normal(position)
-	var best := ""
-	for tool in TOOL_NAMES:
-		if tool == current:
-			continue
-		var hit: Dictionary = tools[tool].raycast(from, dir, 10.0)
-		if not hit.is_empty() and hit.distance < nearest and not hit.has("stale"):
-			nearest = hit.distance
-			best = tool
-	return best
-
-
 ## The footprint of the tool in hand where it would engage: the chisel's edge and push
 ## direction, the saw's line, the sanding block's face, the sponge's reach.
 func _draw_outline() -> void:
 	var mesh: ImmediateMesh = _outline.mesh
 	mesh.clear_surfaces()
-	if current == "" or _engaged:
+	if current == "" or _engaged or mode != Mode.WORK:
 		return
 	var n: Vector3
 	var p: Vector3
@@ -1181,98 +1324,3 @@ func _new_body():
 	body.transform = Transform3D(Basis(Vector3.RIGHT, -PI / 2) * Basis.from_scale(Vector3.ONE * MM),
 			Vector3(0.0, 0.0125, 0.0))
 	return body
-
-
-## A tool model's frame (see core tools.h: z away from the work, x its working direction)
-## laid out in the world, `lift` metres up.
-func _frame(origin: Vector3, z_axis: Vector3, x_axis: Vector3) -> Transform3D:
-	var basis := Basis(x_axis, z_axis.cross(x_axis), z_axis)
-	return Transform3D(basis * Basis.from_scale(Vector3.ONE * MM), origin)
-
-
-func _place_rests() -> void:
-	# Round the board, lying as they would: the chisel with its blade flat, the saw on its
-	# side, the block on its paper, the sponge on a face.
-	var chisel := _frame(Vector3(-0.07, 0.0115, 0.1), Vector3.UP, Vector3.LEFT)
-	chisel.basis = chisel.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
-	_rest["chisel"] = chisel
-	var gouge := _frame(Vector3(-0.02, 0.0115, 0.145), Vector3.UP, Vector3.LEFT)
-	gouge.basis = gouge.basis * Basis(Vector3(0, 1, 0), -deg_to_rad(20.0))
-	_rest["gouge"] = gouge
-	_rest["rasp"] = _frame(Vector3(0.02, 0.0, -0.2), Vector3.UP, Vector3.LEFT)
-	_rest["spokeshave"] = _frame(Vector3(-0.15, 0.0, -0.06), Vector3.UP, Vector3.FORWARD)
-	# The scraper stands on its edge against nothing: it lies flat, on its face.
-	_rest["scraper"] = _frame(Vector3(0.16, 0.0004, 0.1), Vector3.RIGHT, Vector3.FORWARD)
-	var saw := Transform3D(Basis(Vector3.RIGHT, Vector3.UP, Vector3.BACK) * Basis.from_scale(Vector3.ONE * MM),
-			Vector3(0.0, 0.011, -0.12))
-	_rest["saw"] = saw
-	_rest["sanding_block"] = _frame(Vector3(0.1, 0.0, 0.1), Vector3.UP, Vector3.RIGHT)
-	_rest["sanding_sponge"] = _frame(Vector3(0.165, 0.0, -0.005), Vector3.UP, Vector3.FORWARD)
-
-
-func _build_world() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.16, 0.17, 0.19)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.5, 0.53, 0.6)
-	env.ambient_light_energy = 0.35
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	var world := WorldEnvironment.new()
-	world.environment = env
-	add_child(world)
-
-	var sun := DirectionalLight3D.new()
-	sun.light_color = Color(1.0, 0.96, 0.9)
-	sun.light_energy = 0.9
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 3.0
-	add_child(sun)
-	sun.look_at_from_position(Vector3.ZERO, Vector3(0.45, -0.75, -0.5), Vector3.UP)
-
-	# A bench: a thick top on four legs, the top's surface at y = 0.
-	var oak := StandardMaterial3D.new()
-	oak.albedo_color = Color(0.3, 0.2, 0.13)
-	oak.roughness = 0.8
-	var top := MeshInstance3D.new()
-	var slab := BoxMesh.new()
-	slab.size = Vector3(0.9, 0.05, 0.55)
-	top.mesh = slab
-	top.material_override = oak
-	top.position = Vector3(0.0, -0.025, 0.0)
-	add_child(top)
-	# Offcuts land on the bench and the floor.
-	var bench := StaticBody3D.new()
-	bench.set_meta("ground", true) # (dust piles up on it: dust.gd)
-	var bench_shape := CollisionShape3D.new()
-	var bench_box := BoxShape3D.new()
-	bench_box.size = slab.size
-	bench_shape.shape = bench_box
-	bench_shape.position = top.position
-	bench.add_child(bench_shape)
-	add_child(bench)
-	for sx in [-1.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			var leg := MeshInstance3D.new()
-			var post := BoxMesh.new()
-			post.size = Vector3(0.06, 0.8, 0.06)
-			leg.mesh = post
-			leg.material_override = oak
-			leg.position = Vector3(sx * 0.38, -0.45, sz * 0.22)
-			add_child(leg)
-	var ground := MeshInstance3D.new()
-	var sheet := PlaneMesh.new()
-	sheet.size = Vector2(6.0, 6.0)
-	ground.mesh = sheet
-	var grey := StandardMaterial3D.new()
-	grey.albedo_color = Color(0.32, 0.32, 0.33)
-	ground.material_override = grey
-	ground.position = Vector3(0.0, -0.85, 0.0)
-	add_child(ground)
-	var floor_body := StaticBody3D.new()
-	floor_body.set_meta("ground", true)
-	var floor_shape := CollisionShape3D.new()
-	floor_shape.shape = WorldBoundaryShape3D.new()
-	floor_shape.position = ground.position
-	floor_body.add_child(floor_shape)
-	add_child(floor_body)

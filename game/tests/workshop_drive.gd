@@ -21,6 +21,7 @@ func _ready() -> void:
 		get_tree().quit(1))
 	workshop = Workshop.instantiate()
 	add_child(workshop)
+	workshop.enter_work(false) # (at the bench, over the board in the vise)
 	var out := user_arg("--out", "")
 	_out = out
 	await _frames(3)
@@ -61,7 +62,7 @@ func _ready() -> void:
 	var sponge_edits: int = workshop.board.get_stats().edits - chisel_edits - saw_edits - sand_edits
 	await _shot(out, "sponge")
 
-	# The board with all three cuts, every tool back on the bench.
+	# The board with all three cuts, the hands empty.
 	workshop.select_tool("")
 	workshop.camera.distance = 0.26
 	workshop.camera.pitch = -0.95

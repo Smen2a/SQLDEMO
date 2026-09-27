@@ -21,6 +21,7 @@ func _ready() -> void:
 	workshop = Workshop.instantiate()
 	workshop.offcut_collider = user_arg("--collider", "auto")
 	add_child(workshop)
+	workshop.enter_work(false) # (at the bench, over the board in the vise)
 	await _frames(3)
 	workshop.select_tool("saw")
 	workshop.set_setting("saw", "feed", 0.1)

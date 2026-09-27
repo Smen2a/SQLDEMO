@@ -38,6 +38,7 @@ func _ready() -> void:
 		get_tree().quit(1))
 	workshop = Workshop.instantiate()
 	add_child(workshop)
+	workshop.enter_work(false) # (at the bench, over the board in the vise)
 	await _frames(3)
 	var cam: Camera3D = workshop.camera
 	var chisel = workshop.tools["chisel"]
