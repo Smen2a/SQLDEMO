@@ -336,7 +336,7 @@ TEST(sponge_dust_is_what_its_flow_takes) {
 	EditSession s;
 	s.reset(sharp);
 	const vec3 bisector = gl::normalize(vec3(0, -1, 1));
-	auto stroke = hand_sanding_stroke(SandingSponge{}, {-30, -50, 12.5f}, bisector, {1, 0, 0});
+	auto stroke = hand_sanding_stroke(SandingSponge{}, {-30, -50, 12.5f}, bisector, {1, 0, 0}, 0.25f, 16.0f);
 	Debris d;
 	for (int pass = 0; pass < 3; ++pass) {
 		for (int k = 1; k <= 30; ++k) {

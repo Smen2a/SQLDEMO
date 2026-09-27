@@ -284,7 +284,8 @@ bool planned_tool(const String &tool) {
 
 // Tools whose stroke reads the body (its wood, its shape): only while no edit is applied.
 bool reads_body(const String &tool) {
-	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block" || tool == "saw";
+	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block" || tool == "saw" ||
+			tool == "sanding_sponge";
 }
 
 
@@ -528,7 +529,8 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 		tools::SandingSponge sponge;
 		sponge.grit = int(settings.get("grit", 120));
 		sponge.pressure = float(double(settings.get("pressure", 1.0)));
-		return tools::hand_sanding_stroke(sponge, p, n, a);
+		sponge.hardness = work.wood(p - n * 0.5f).hardness;
+		return tools::hand_sanding_stroke(sponge, p, n, a, 0.25f, pace);
 	}
 	UtilityFunctions::push_error("SdfBody: unknown tool ", tool);
 	return nullptr;

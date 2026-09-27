@@ -399,7 +399,7 @@ int tools_bench() {
 		// The sanding sponge's work is a smoothing layer, applied as it goes (no preview): each
 		// update runs the curvature flow and re-samples where it changed.
 		const vec3 bisector = gl::normalize(vec3(0, -1, 1));
-		auto sponge = tools::hand_sanding_stroke(tools::SandingSponge{}, {-30, -50, top}, bisector, {1, 0, 0});
+		auto sponge = tools::hand_sanding_stroke(tools::SandingSponge{}, {-30, -50, top}, bisector, {1, 0, 0}, 0.25f, 16.0f);
 		double work = 0, apply = 0, worst = 0, bricks = 0;
 		int updates = 0;
 		for (int k = 0; k < 90; ++k) {

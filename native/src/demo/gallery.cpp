@@ -259,7 +259,8 @@ Body sanded_block() {
 	auto rub = [&](vec3 from, vec3 normal, float half, int passes) {
 		Octree octree;
 		octree.build(b);
-		auto stroke = tools::hand_sanding_stroke(tools::SandingSponge{}, from, normal, {1, 0, 0});
+		// (At 16 times the real pace: a demo's worth of sanding in a few passes.)
+		auto stroke = tools::hand_sanding_stroke(tools::SandingSponge{}, from, normal, {1, 0, 0}, 0.25f, 16.0f);
 		for (int pass = 0; pass < passes; ++pass) {
 			for (int k = 1; k <= 20; ++k) {
 				const float t = float(k) / 20.0f;

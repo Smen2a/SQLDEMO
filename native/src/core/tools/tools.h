@@ -130,9 +130,12 @@ struct SandingSponge {
 	int grit = 120;
 	float reach = 10.0f; // how far round the point it is pressed at it bears on the work
 	float pressure = 1.0f; // how hard it is pressed (1: an ordinary hand's worth)
+	float hardness = 5740.0f; // the wood's (N, Janka)
 
 	Body model() const;
-	// Curvature flow (mm^2) per millimetre of travel: coarser grits and more pressure cut faster.
+	// Curvature flow (mm^2) per millimetre of travel: 0.05 / grit (in proportion to the
+	// grit's size) times the pressure, less in harder wood. Ten passes at 120 grit round an
+	// arris of ash to about half a millimetre's radius (0.2 mm off along its bisector).
 	float rate() const;
 };
 
@@ -233,6 +236,6 @@ std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &wo
 // A sanding sponge pressed at `contact` and rubbed about the plane there (deferred): the
 // work smooths whatever lies within its reach of the path, in proportion to the travel.
 std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,
-		float spacing = 0.25f);
+		float spacing = 0.25f, float pace = 1.0f);
 
 } // namespace sdf::tools

@@ -33,11 +33,13 @@ float removed_at_arris(const EditSession &s, float x) {
 }
 
 // Rubs a sponge back and forth along the front top arris, x from -30 to 30, `passes`
-// times, working it every 6 mm as SdfBody's worker would; then commits.
-void sand_arris(EditSession &s, int passes, int grit = 120) {
+// times, working it every 6 mm as SdfBody's worker would; then commits. At `pace` times the
+// real rate, in wood as hard as `hardness`.
+void sand_arris(EditSession &s, int passes, int grit = 120, float pace = 16.0f, float hardness = 5740.0f) {
 	tools::SandingSponge sponge;
 	sponge.grit = grit;
-	auto stroke = tools::hand_sanding_stroke(sponge, {-30, -50, 12.5f}, kBisector, {1, 0, 0});
+	sponge.hardness = hardness;
+	auto stroke = tools::hand_sanding_stroke(sponge, {-30, -50, 12.5f}, kBisector, {1, 0, 0}, 0.25f, pace);
 	CHECK(stroke->deferred());
 	for (int pass = 0; pass < passes; ++pass) {
 		for (int k = 1; k <= 30; ++k) {
@@ -98,6 +100,23 @@ TEST(smoothing_layer_reproduces_planes_and_blends) {
 	CHECK(worst_same < 1e-5f);
 	CHECK(worst_centre < 0.2f * 0.1f);
 	CHECK(worst_outside == 0.0f);
+}
+
+// At the real rate, ten passes of 120 grit round an ash arris to about half a millimetre's
+// radius (0.2 mm off along its bisector); 60 grit, twice the rate, about 1.4 times that.
+TEST(a_sponge_rounds_an_arris_at_the_real_rate) {
+	const Body board = sharp_board();
+	const float ash = 5871.0f;
+	EditSession fine, coarse;
+	fine.reset(board);
+	coarse.reset(board);
+	sand_arris(fine, 10, 120, 1.0f, ash);
+	sand_arris(coarse, 10, 60, 1.0f, ash);
+	const float at_120 = removed_at_arris(fine, 0.0f), at_60 = removed_at_arris(coarse, 0.0f);
+	std::printf("    ten passes: 120 grit %.3f mm off along the bisector (a %.2f mm radius), 60 grit %.3f mm\n",
+			double(at_120), double(at_120 / (std::sqrt(2.0f) - 1.0f)), double(at_60));
+	CHECK(at_120 > 0.15f && at_120 < 0.27f);
+	CHECK(at_60 / at_120 > 1.25f && at_60 / at_120 < 1.6f);
 }
 
 // Hand sanding rounds an arris over, more with more sanding (curvature flow: the radius
@@ -265,7 +284,7 @@ TEST(hand_sanding_an_end_arris_past_the_octree_root) {
 	EditSession s;
 	s.reset(sharp_board());
 	const vec3 bisector = gl::normalize(vec3(1, 0, 1)); // out of the right end's top arris
-	auto stroke = tools::hand_sanding_stroke(tools::SandingSponge{}, {80, -30, 12.5f}, bisector, {0, 1, 0});
+	auto stroke = tools::hand_sanding_stroke(tools::SandingSponge{}, {80, -30, 12.5f}, bisector, {0, 1, 0}, 0.25f, 16.0f);
 	for (int pass = 0; pass < 4; ++pass) {
 		for (int k = 1; k <= 30; ++k) {
 			stroke->move_to({80, pass % 2 == 0 ? -30.0f + 2.0f * float(k) : 30.0f - 2.0f * float(k), 12.5f});

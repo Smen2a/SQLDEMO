@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-6 done; T4-7 next)
+### T4 — the rules of the real tools, one tool at a time (done: to be tried together)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -297,8 +297,16 @@ one tool at a time, each tried before the next.
 - Working speed 150 mm/s (was 40), slower at the hands' limit; the depth slider to 1 mm.
 - Tests: `test_shaping` (a step ahead, a narrow edge, the mouth, set askew).
 
-**Next:**
-- **T4-7 Sanding sponge.** Rate by grit and pressure, calibrated, and a working speed.
+**T4-7, the sanding sponge: done.**
+- Its flow: 0.05 / grit × pressure × 5740 / Janka mm² per mm, from the wood under it (the
+  sponge now reads the body at its start, so it waits for an edit landing). Ten passes of
+  120 grit round an ash arris to about 0.5 mm radius (0.21 mm along the bisector); 60 grit
+  about 1.4 times as far. It follows the pointer at its working speed (T4-2).
+- The demo and the flow's own tests rub at 16 times the pace with the reference hardness:
+  exactly the old rate, so their images and numbers are unchanged.
+- Tests: `test_smoothing` (ten passes at the real rate, 60 against 120 grit).
+
+**Next (after trying them together):** each tool as the user finds it in play.
 
 ## 1. Pieces — bodies that come apart (current: P1 and P2 done)
 

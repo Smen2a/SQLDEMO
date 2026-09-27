@@ -326,7 +326,7 @@ Body SandingSponge::model() const {
 }
 
 float SandingSponge::rate() const {
-	return 0.8f * pressure / float(std::max(grit, 24));
+	return 0.05f * pressure / float(std::max(grit, 24)) * (5740.0f / std::max(hardness, 1.0f));
 }
 
 // --- strokes ---------------------------------------------------------------------------
@@ -628,8 +628,9 @@ private:
 
 class HandSandingStroke : public Stroke {
 public:
-	HandSandingStroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along, float spacing)
-		: sponge_(sponge), plane_(Frame::at(contact, normal, along)), at_(contact), from_(contact), spacing_(spacing) {}
+	HandSandingStroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along, float spacing, float pace)
+		: sponge_(sponge), plane_(Frame::at(contact, normal, along)), at_(contact), from_(contact), spacing_(spacing),
+		  pace_(pace) {}
 
 	StrokeUpdate move_to(vec3 point) override {
 		at_ = point - plane_.z * gl::dot(point - plane_.origin, plane_.z);
@@ -688,7 +689,7 @@ public:
 			const int steps = std::max(1, int(std::ceil(length / (0.25f * sponge_.reach))));
 			for (int k = 0; k < steps && length > 0.0f; ++k) {
 				grid_->press(from_ + d * ((float(k) + 0.5f) / float(steps)), sponge_.reach,
-						sponge_.rate() * length / float(steps));
+						sponge_.rate() * pace_ * length / float(steps));
 			}
 			from_ = to;
 		}
@@ -719,6 +720,7 @@ private:
 	vec3 at_;      // where the sponge is (the thread moving it)
 	vec3 from_;    // where its recorded path has been worked up to (the thread working)
 	float spacing_;
+	float pace_; // the rate times this
 	std::mutex mutex_;
 	std::vector<vec3> path_; // recorded, not yet worked
 	std::unique_ptr<SmoothingGrid> grid_;
@@ -730,8 +732,8 @@ private:
 } // namespace
 
 std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,
-		float spacing) {
-	return std::make_unique<HandSandingStroke>(sponge, contact, normal, along, spacing);
+		float spacing, float pace) {
+	return std::make_unique<HandSandingStroke>(sponge, contact, normal, along, spacing, pace);
 }
 
 std::unique_ptr<Stroke> chisel_stroke(const Chisel &chisel, vec3 contact, vec3 normal, vec3 facing, float depth) {

@@ -46,9 +46,10 @@ abrasive.
      of rubbing at 120 grit in ash, faster at coarser grits, more pressure and on a narrow
      edge (see *Sanding block* below). The line by the pointer says how much it has taken
      and on how much of its face it bears.
-   - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It rounds over
-     the arrises and ridges within its reach (10 mm) and leaves faces and hollows alone.
-     Rub along an edge to ease it; the longer you rub, the rounder it gets.
+   - **Sanding sponge:** soft, so it wraps over whatever it is rubbed on. It follows the
+     pointer at its working speed and rounds over the arrises and ridges within its reach
+     (10 mm), leaving faces and hollows alone: ten passes at 120 grit ease an ash arris to
+     about a half-millimetre radius. The longer you rub, the rounder it gets.
 
    A line beside the pointer says what a chisel's, gouge's or spokeshave's stroke comes
    to: how deep the wood lets it go, the force it takes of what a hand can give, how it
@@ -253,6 +254,11 @@ grid (0.25 mm) and evolved by curvature flow.
   - Inside, each level moves by its own curvature, so levels only spread apart.
   - The bound is measured only down to 0.9 mm below the surface: rays approach from
     outside, and deeper only the field's sign matters.
+- **Its rate** (T4-7): a flow of 0.05 / grit × pressure × 5740 / Janka mm² per millimetre of
+  travel. Ten passes at 120 grit round an ash arris to about half a millimetre's radius
+  (0.21 mm off along its bisector); 60 grit takes about 1.4 times as much off, 220 grit
+  about three quarters (the radius grows as the square root of the rate). The demo and
+  the flow's own tests rub at 16 times the real pace.
 - **The sponge is applied as it goes.** The shader cannot draw a layer, so there is no
   preview. The worker runs the flow and re-samples only the region whose samples changed
   (`EditSession::revise_stroke` with a changed box). Moving the sponge only records its
@@ -443,8 +449,9 @@ physics step, so pieces are moved with the edge, not given its velocity.
 ### Rates and working speeds
 
 Every tool takes wood off at the real tool's rate and goes no faster than a hand works it,
-both times the workshop's *pace* (1× by default). The tools are brought under these rules
-one at a time (docs/PLAN.md, T4).
+both times the workshop's *pace* (1× by default; ¼× to 8× on the panel). At 1× a real hand's
+work takes real time: a minute's sanding takes a fifth of a millimetre, a saw cut through
+the board seventy strokes. (docs/PLAN.md, T4.)
 
 | Tool | Rate (ash, pressure 1) | Working speed | What stops it, and says so |
 |---|---|---|---|
@@ -454,7 +461,7 @@ one at a time (docs/PLAN.md, T4).
 | rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
 | card scraper | 0.01 mm of oak from each point its burr is pushed over; nothing on the pull | 200 mm/s | resting on high spots |
 | spokeshave | as deep as two hands (250 N) push the chip's section, up to its mouth (0.8 mm) | 150 mm/s; a fifth at the hands' limit | a step ahead of its toe (*blocked*), a chip too much to push (*stalls*), its mouth |
-| sponge | (as before; T4-7) | 300 mm/s | |
+| sanding sponge | a curvature flow of 0.05 / grit mm² per mm (ten passes at 120 grit round an ash arris to 0.5 mm radius) | 300 mm/s | (it only rounds: faces and hollows stay) |
 
 The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
 less (a corner, a thin stick) goes 2.5 times as fast as 25 mm, a 100 mm chord a quarter as
