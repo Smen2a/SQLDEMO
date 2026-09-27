@@ -157,7 +157,7 @@ Decided with the user:
   flat face, it follows convex curves, and it tears out against the grain at half a
   chisel's rate.
 
-### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-4 done; T4-5 next)
+### T4 — the rules of the real tools, one tool at a time (T4-1 to T4-5 done; T4-6 next)
 **Why.** From play: the tools went too fast and hit too hard; chisels cut too deep, left
 square pits and cut under raised parts of the board and under loose pieces; sanding was
 far too fast (about 1,000 times a real rate) and took down the whole rectangle it had
@@ -276,8 +276,16 @@ one tool at a time, each tried before the next.
   0.03 mm band let a long face tilt a hair to take in two levels, and rest on its far end).
 - Tests: `test_shaping` (push only, the rate, a raised strip first, an arris chamfered).
 
+**T4-5, the card scraper: done.**
+- A rubbed face 1 mm along (its burr) and 60 across, pushed: each point it passes over
+  loses 0.01 mm of oak (× pressure, less in harder wood), however long the stroke. Nothing
+  on the pull; only where it went; feathered 4 mm at its sides (flexed).
+- A patch no longer ends when the face "jumps" more than two face lengths in one move: a
+  burr 1 mm long started a new patch every frame. Strokes are continuous.
+- Tests: `test_shaping` (a push, ten, the pull, half the way); `tool_planning` (four pushes
+  in the workshop).
+
 **Next:**
-- **T4-5 Card scraper.** About 0.01 mm a pass, only where the burr touches.
 - **T4-6 Spokeshave.** The chisel's access and chip rules, its sole's rest, a real depth and
   speed.
 - **T4-7 Sanding sponge.** Rate by grit and pressure, calibrated, and a working speed.

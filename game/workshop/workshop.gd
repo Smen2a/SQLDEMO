@@ -33,7 +33,8 @@ extends Node3D
 ##                   tears the grain; tilted, chamfers an arris; its round face hollows
 ##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
 ##                   flat face, over a curve, bridging hollows shorter than its sole
-##   card scraper    back and forth: a whisper a stroke, for cleaning up tear-out
+##   card scraper    back and forth, cutting on the push: a hundredth of a millimetre from
+##                   each point its burr passes over, for cleaning up tear-out
 ##   sanding block   rests on the highest points under it and takes them down first, only
 ##                   where it rubs (a hundredth of a millimetre a metre at 120 grit in ash);
 ##                   faster on a narrow edge. Variants: a cork block, a small pad

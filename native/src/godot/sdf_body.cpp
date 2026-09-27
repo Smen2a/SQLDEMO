@@ -505,7 +505,7 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 	if (tool == "scraper") {
 		tools::CardScraper scraper;
 		scraper.pressure = float(double(settings.get("pressure", 1.0)));
-		return tools::scraper_stroke(scraper, work.wood(p - n * 0.5f), p, n, a, length);
+		return tools::scraper_stroke(scraper, work, p, n, a, length, pace);
 	}
 	if (tool == "saw") {
 		// Deep enough to go right through the body, no deeper.

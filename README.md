@@ -398,7 +398,7 @@ physics step, so pieces are moved with the edge, not given its velocity.
 
 ### Sanding block: a hard face, rubbed
 
-`native/src/core/tools/rubbing.h` (shared with the rasps and, T4-5, the scraper):
+`native/src/core/tools/rubbing.h` (shared with the rasps and the card scraper):
 - **It is held flat to the work.** The hand holds a block flat to the face it is on: of the
   planes through three of 45 points under it (within 10° of the normal it was set with), it
   lies in the one most of them are on, to 5 µm. A normal from the pointer a degree or two off
@@ -450,7 +450,8 @@ one at a time (docs/PLAN.md, T4).
 | sanding block | 1e-5 mm per mm rubbed at 120 grit (0.01 mm a metre) | 300 mm/s | resting on high spots (the line shows its contact) |
 | saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
 | rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
-| scraper, spokeshave, sponge | (as before; T4-5 to T4-7) | scraper 200, spokeshave 150, sponge 300 mm/s | |
+| card scraper | 0.01 mm of oak from each point its burr is pushed over; nothing on the pull | 200 mm/s | resting on high spots |
+| spokeshave, sponge | (as before; T4-6, T4-7) | spokeshave 150, sponge 300 mm/s | |
 
 The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
 less (a corner, a thin stick) goes 2.5 times as fast as 25 mm, a 100 mm chord a quarter as
@@ -480,8 +481,10 @@ loose pieces in its way aside.
   - The flat face lowers what it is rubbed over. Tilted about its line (Shift+wheel) along
     an arris, it takes a chamfer off it, fast at first (it bears on the arris alone), then
     slower as the chamfer widens. The round face hollows.
-- **The card scraper**, flexed, takes a whisper: about 0.006 mm a 100 mm stroke, feathered
-  at its sides, and it cannot tear out. It is for cleaning up tear-out and tool marks.
+- **The card scraper**, flexed and pushed, takes a whisper: 0.01 mm of oak from each point
+  its burr passes over, however long the stroke (a rubbed face 1 mm along and 60 across,
+  resting on what stands highest under it), feathered 4 mm at its sides. Nothing on the
+  pull, and it cannot tear out. It is for cleaning up tear-out and tool marks.
 - **The spokeshave** is a plane with a 40 mm sole.
   - Its sole rests on the work, the lowest line lying on the surface under it: the surface
     itself where it is convex, bridging hollows shorter than the sole.

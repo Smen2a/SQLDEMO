@@ -449,6 +449,28 @@ func _ready() -> void:
 			saw_line.replace("\n", " / ")])
 	_check(pulled == 0.0 and sawn > 0.2 and saw_line.contains("cuts on the push"), "the saw cuts on the push, not the pull")
 
+	# A card scraper pushed four times over 40 mm, direct: a hundredth of a millimetre a push
+	# where it bears with all its card (more where it bears on less: beside earlier cuts).
+	workshop.select_tool("scraper")
+	await _frames(4)
+	var scrape_from := Vector3(-0.04, 0.025, 0.01)
+	var scrape_to := Vector3(0.0, 0.025, 0.01)
+	await _idle()
+	workshop.hover_screen(cam.unproject_position(scrape_from))
+	await _frames(2)
+	workshop.press(cam.unproject_position(scrape_from))
+	for k in 8:
+		workshop.drag_screen(cam.unproject_position(scrape_to if k % 2 == 0 else scrape_from))
+		await _frames(1)
+		await _catch_up()
+	var scraped: float = workshop.stroke_state().get("depth", 0.0)
+	var scrape_line: String = workshop._ui.plan_text()
+	workshop.release()
+	workshop.board.flush()
+	print("tool planning: four scraper pushes took %.4f mm: \"%s\"" % [scraped, scrape_line.replace("\n", " / ")])
+	_check(scraped > 0.035 and scraped < 0.12 and scrape_line.contains("cuts on the push"),
+			"the scraper takes a hundredth of a millimetre a push")
+
 	# The camera: middle-drag orbits, Shift+middle-drag pans, the right button leaves it be.
 	var yaw: float = cam.yaw
 	var target: Vector3 = cam.target
@@ -463,17 +485,21 @@ func _ready() -> void:
 	get_tree().quit(1 if _failed else 0)
 
 
-## Locks a stroke in at `from` (`free`: no edge lock) and aims it at `to` (world), once the
-## board is idle, and waits for its plan.
-func _plan(from: Vector3, to: Vector3, free := false) -> Dictionary:
-	var cam: Camera3D = workshop.camera
+## Until the board is idle: its edits applied, and the cuts so far refined (the pointer's
+## rays read the refined surface, and a lock does not depend on how far refining has got).
+func _idle() -> void:
 	workshop.board.flush()
-	# And until the cuts so far are refined: the pointer's rays read the refined surface, and
-	# the lock does not depend on how far refining has got.
 	for i in 1200:
 		if not workshop.board.is_busy() and not workshop.board.get_stats().get("refine_pending", false):
 			break
 		await _frames(1)
+
+
+## Locks a stroke in at `from` (`free`: no edge lock) and aims it at `to` (world), once the
+## board is idle, and waits for its plan.
+func _plan(from: Vector3, to: Vector3, free := false) -> Dictionary:
+	var cam: Camera3D = workshop.camera
+	await _idle()
 	workshop.hover_screen(cam.unproject_position(from))
 	await _frames(2)
 	workshop.lock(cam.unproject_position(from), free)

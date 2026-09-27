@@ -375,9 +375,8 @@ private:
 		const vec2 l = g.centre.local(at);
 		g.centre.lo = gl::min(g.centre.lo, l);
 		g.centre.hi = gl::max(g.centre.hi, l);
-		// Drifting across its line by up to half the face; not jumping beyond it.
-		if (g.centre.hi.y - g.centre.lo.y > g.reach.y || l.x < p.centre.lo.x - 2.0f * g.reach.x ||
-				l.x > p.centre.hi.x + 2.0f * g.reach.x) {
+		// Drifting across its line by up to half the face.
+		if (g.centre.hi.y - g.centre.lo.y > g.reach.y) {
 			return false;
 		}
 		const float rest = map_.highest(g.ground());

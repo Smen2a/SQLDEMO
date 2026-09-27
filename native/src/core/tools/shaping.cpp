@@ -37,85 +37,6 @@ vec4 along_x() {
 	return quat_axis_angle({0, 0, 1}, -90.0f * kDeg);
 }
 
-// A tool worked back and forth along a line over [0, length] from where it was set: every
-// millimetre of travel deepens its pass by `rate`. Applied as it moves, the pass is re-cut
-// every 5 um it deepens; merged (the preview, the commit), it is exactly as deep as the
-// travel has taken it. Its dust: each bit deeper takes the pass's width at that depth
-// (`width_at`: a round face's grows as it goes in) over its length, as far as that is over
-// material, in grains `grain` mm across.
-class PassStroke : public Stroke {
-public:
-	using Pass = std::function<Edit(float depth)>;
-	using Width = std::function<float(float depth)>;
-	PassStroke(const Frame &frame, float length, float rate, Pass pass, Width width_at, float grain)
-		: frame_(frame), length_(length), rate_(rate), pass_(std::move(pass)), width_at_(std::move(width_at)),
-		  grain_(grain) {}
-
-	StrokeUpdate move_to(vec3 point) override {
-		const float s = std::clamp(gl::dot(point - frame_.origin, frame_.x), 0.0f, length_);
-		travel_ += std::fabs(s - at_);
-		if (s != at_) {
-			heading_ = s > at_ ? 1.0f : -1.0f;
-		}
-		at_ = s;
-		const float depth = rate_ * travel_;
-		StrokeUpdate u;
-		if (depth >= cut_ + 0.005f) {
-			u.drop = cut_ > 0.0f ? 1 : 0;
-			u.edits.push_back(pass_(depth));
-			cut_ = depth;
-		}
-		return u;
-	}
-
-	std::vector<Edit> edits() const override {
-		if (travel_ <= 0.0f) {
-			return {};
-		}
-		return {pass_(rate_ * travel_)};
-	}
-
-	Frame pose() const override {
-		Frame f = frame_;
-		f.origin = frame_.point({at_, 0.0f, -rate_ * travel_});
-		return f;
-	}
-
-	void debris(const Body &body, const Octree &octree, Debris &out, bool ended) override {
-		out.ended = out.ended || ended;
-		const float depth = rate_ * travel_;
-		if (depth > dusted_) {
-			const float mid = 0.5f * (dusted_ + depth), width = width_at_(mid);
-			const float fraction = material_fraction(body, octree, frame_, {0.0f, -0.5f * width},
-					{length_, 0.5f * width}, mid, 13, 5);
-			pending_ += (depth - dusted_) * width * length_ * fraction;
-			dusted_ = depth;
-		}
-		if (pending_ < kLeastDust && !(ended && pending_ > 0.0f)) {
-			return;
-		}
-		// Off the tool where it is now, pushed the way it was going.
-		Dust d;
-		d.point = frame_.point({at_, 0.0f, 0.0f});
-		d.direction = gl::normalize(frame_.x * heading_ + frame_.z * 0.5f);
-		d.volume = pending_;
-		d.grain = grain_;
-		d.spread = 0.5f * width_at_(depth);
-		out.dust.push_back(d);
-		pending_ = 0.0f;
-	}
-
-private:
-	Frame frame_;
-	float length_, rate_;
-	Pass pass_;
-	Width width_at_;
-	float grain_;
-	float travel_ = 0.0f, at_ = 0.0f, cut_ = 0.0f;
-	float heading_ = 1.0f;                 // the way it last moved along its line
-	float dusted_ = 0.0f, pending_ = 0.0f; // dust: the depth reported down to, held back
-};
-
 } // namespace
 
 // --- rasp ------------------------------------------------------------------------------
@@ -204,19 +125,35 @@ Body CardScraper::model() const {
 	return b;
 }
 
-float CardScraper::removal_per_mm(const Wood &wood) const {
-	return 6e-5f * pressure * 5740.0f / std::max(wood.hardness, 1.0f);
+float CardScraper::per_pass(const Wood &wood) const {
+	return 0.01f * pressure * 5740.0f / std::max(wood.hardness, 1.0f);
 }
 
-std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Wood &wood, vec3 contact, vec3 normal,
-		vec3 path, float length) {
-	const Frame f = Frame::at(contact, normal, path);
+std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &work, vec3 contact, vec3 normal,
+		vec3 path, float length, float pace) {
+	// Held to the work (its burr across the stroke); a line 1 mm along it, so a point it
+	// passes over loses per_pass() each push, however long the stroke.
+	const Frame f = settle(work, Frame::at(contact, normal, path), {10.0f, 0.5f * scraper.width});
+	RubFace face;
+	face.length = 1.0f;
+	face.width = scraper.width;
+	face.rate = scraper.per_pass(work.wood(contact - f.z * 0.5f)) / face.length;
+	face.cuts = 1; // pushed
+	face.line = true;
+	face.from = 0.0f;
+	face.to = length;
+	face.grain = 0.3f;
+	face.thrown = true;
+	// Flexed, its cut fades out over its feather at each side.
 	SandingBlock pass_shape;
 	pass_shape.feather = scraper.feather;
-	const float half = 0.5f * scraper.width;
-	return std::make_unique<PassStroke>(f, length, scraper.removal_per_mm(wood), [=](float depth) {
-		return pass_shape.pass(f, {0.0f, -half}, {length, half}, depth);
-	}, [=](float) { return scraper.width; }, 0.3f);
+	face.pass = [pass_shape](const Frame &frame, vec2 lo, vec2 hi, float floor, float depth, float typical) {
+		const float d = typical > 0.0f ? typical : depth;
+		Frame rest = frame;
+		rest.origin = frame.point({0.0f, 0.0f, floor + d});
+		return pass_shape.pass(rest, lo, hi, d);
+	};
+	return rub_stroke(face, work, f, pace);
 }
 
 // --- spokeshave ------------------------------------------------------------------------

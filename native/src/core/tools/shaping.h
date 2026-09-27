@@ -13,8 +13,10 @@
 //   down first, only where it has been, faster where it bears on less (an edge, a bump:
 //   tools/rubbing.h). Its flat face lowers what it is rubbed over (tilted about its stroke,
 //   it takes a chamfer off an arris); its half-round face hollows.
-// - A card scraper, flexed, takes a whisper (about a hundredth of a millimetre a stroke)
-//   and cannot tear out: it is for cleaning up tear-out and tool marks.
+// - A card scraper, flexed and pushed, takes a whisper: a hundredth of a millimetre from
+//   each point its burr passes over, however long the stroke, and it cannot tear out. It is
+//   for cleaning up tear-out and tool marks. Its burr is a line across the stroke, resting
+//   on what stands highest under it (tools/rubbing.h).
 // - A spokeshave is a plane with a 40 mm sole. Its sole rests on the work and its blade
 //   takes a shaving of the depth it is set to below it: an even shaving on a flat face
 //   (where a chisel struggles), following convex curves, bridging hollows shorter than
@@ -46,7 +48,9 @@ struct CardScraper {
 	float feather = 4.0f; // flexed, its cut fades out over this at each side
 
 	Body model() const;
-	float removal_per_mm(const Wood &wood) const;
+	// Depth taken from a point each time the burr is pushed over it: 0.01 mm in oak, in
+	// proportion to the pressure, less in harder wood.
+	float per_pass(const Wood &wood) const;
 };
 
 struct Spokeshave {
@@ -64,8 +68,8 @@ struct Spokeshave {
 // its wood) when it is set.
 std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Work &work, vec3 contact, vec3 normal, vec3 path,
 		float length, float pace = 1.0f);
-std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Wood &wood, vec3 contact, vec3 normal,
-		vec3 path, float length);
+std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &work, vec3 contact, vec3 normal,
+		vec3 path, float length, float pace = 1.0f);
 
 // A spokeshave's pass along `path` for `length` mm from `start`, its blade set `depth` mm
 // below its sole: the floor its sole's rest leaves, the force two hands can put behind it,

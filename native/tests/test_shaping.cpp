@@ -148,18 +148,38 @@ TEST(a_tilted_rasp_chamfers_an_arris) {
 	CHECK(corner > 0.1f && top < 0.0f);
 }
 
-// A card scraper takes about 0.006 mm a 100 mm stroke of ash: twenty strokes, a tenth of a
-// millimetre, feathered at its sides.
+// A card scraper takes a hundredth of a millimetre of oak from each point its burr is pushed
+// over, however long the stroke: ten 100 mm pushes, a tenth of a millimetre; nothing on the
+// pull; only as far as it went.
 TEST(a_card_scraper_takes_a_whisper) {
 	Work_ ash(demo::board(mat::Ash));
 	const Wood wood = ash.work().wood({0, 0, 10});
 	CardScraper scraper;
-	auto stroke = scraper_stroke(scraper, wood, {-50, 0, kTop}, kUp, {1, 0, 0}, 100.0f);
-	ash.apply(worked(*stroke, {-50, 0, kTop}, 100.0f, 20));
+	CHECK(std::fabs(scraper.per_pass(Wood::of(MaterialTable::standard()[mat::Oak])) - 0.01f) < 1e-5f);
+	auto stroke = scraper_stroke(scraper, ash.work(), {-50, 0, kTop}, kUp, {1, 0, 0}, 100.0f);
+	stroke->move_to({50, 0, kTop});
+	const float one = stroke->state().depth;
+	stroke->move_to({-50, 0, kTop});
+	CHECK(stroke->state().depth == one); // the pull takes nothing
+	for (int i = 1; i < 19; ++i) {
+		stroke->move_to({i % 2 ? 50.0f : -50.0f, 0, kTop});
+	}
+	ash.apply(stroke->edits());
 	const float taken = kTop - ash.height(0, 0);
-	std::printf("    twenty 100 mm strokes: %.3f mm\n", double(taken));
-	CHECK(taken > 0.08f && taken < 0.15f);
-	CHECK(scraper.removal_per_mm(wood) * 100.0f < 0.01f);
+	std::printf("    one 100 mm push: %.4f mm; ten: %.3f mm\n", double(one), double(taken));
+	CHECK(std::fabs(one - scraper.per_pass(wood)) < 1e-4f);
+	CHECK(std::fabs(taken - 10.0f * scraper.per_pass(wood)) < 0.01f);
+
+	// Pushed half the way only, it scrapes only there.
+	Work_ half(demo::board(mat::Ash));
+	auto short_ = scraper_stroke(scraper, half.work(), {-50, 0, kTop}, kUp, {1, 0, 0}, 100.0f, 10.0f);
+	for (int i = 1; i <= 10; ++i) {
+		short_->move_to({i % 2 ? 0.0f : -50.0f, 0, kTop});
+	}
+	half.apply(short_->edits());
+	std::printf("    pushed 50 mm of 100: %.3f mm off at 25 mm, %.3f at 75 mm\n", double(kTop - half.height(-25, 0)),
+			double(kTop - half.height(25, 0)));
+	CHECK(kTop - half.height(-25, 0) > 0.3f && std::fabs(half.height(25, 0) - kTop) < 1e-3f);
 }
 
 // A spokeshave's sole sets its shaving: an even 0.1 mm on the flat top of the board from
