@@ -136,23 +136,23 @@ func piles_in(box: AABB) -> Dictionary:
 	return {"count": count, "volume": wood, "top": top}
 
 
-## Takes back what the board's undo step `step` (and any after it) threw: the grains still
-## to land, and its share of every pile.
-func undo_step(step: int) -> void:
+## Takes back what the board's undo step `step` (and any after it, up to `before`) threw: the
+## grains still to land, and its share of every pile.
+func undo_step(step: int, before: int = 1 << 62) -> void:
 	for i in range(_waiting.size() - 1, -1, -1):
-		if _waiting[i][5] >= step:
+		if _waiting[i][5] >= step and _waiting[i][5] < before:
 			_waiting.remove_at(i)
 	for i in range(_fly_slot.size() - 1, -1, -1):
-		if _fly_step[i] >= step:
+		if _fly_step[i] >= step and _fly_step[i] < before:
 			_end_flight(i)
 	for s in _thrown_by.keys():
-		if s >= step:
+		if s >= step and s < before:
 			thrown -= _thrown_by[s]
 			_thrown_by.erase(s)
 	for p in range(piles.size() - 1, -1, -1):
 		var pile: Dictionary = piles[p]
 		for s in pile.by.keys():
-			if s >= step:
+			if s >= step and s < before:
 				pile.by.erase(s)
 		if pile.by.is_empty():
 			pile.view.queue_free()

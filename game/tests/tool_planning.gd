@@ -111,7 +111,6 @@ func _ready() -> void:
 	var flick_from := Vector3(0.0, 0.025, 0.015)
 	var flick_to := Vector3(0.05, 0.025, 0.015)
 	plan = await _plan(flick_from, flick_to)
-	workshop._update_board_collider(true) # (for the block to rest on)
 	var block := RigidBody3D.new()
 	# As an offcut: sliding on the board, 5 g to the solver.
 	block.mass = 0.005

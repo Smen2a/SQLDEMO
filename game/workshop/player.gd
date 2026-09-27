@@ -2,7 +2,8 @@ extends CharacterBody3D
 
 ## A person in the workshop, seen from their own eyes: WASD (or the arrows) to walk, Shift to
 ## hurry, the mouse to look (captured while walking). Its origin is at their feet. Physics
-## layer 2: the tools' push on loose pieces (layer 1) never moves them.
+## layer 2, meeting only the room (layer 4, room.gd): pieces lying about neither block them
+## nor are shoved by them, and the tools' push on loose pieces (layer 1) never moves them.
 ## Tests (and the workshop, when it takes over) drive it with `move_input` and `look()`;
 ## `active` says whether it takes the keyboard and mouse itself.
 
@@ -26,7 +27,7 @@ var pitch := 0.0 # up positive
 
 func _ready() -> void:
 	collision_layer = 2
-	collision_mask = 1
+	collision_mask = 8 # (room.gd ROOM_LAYER)
 	var shape := CollisionShape3D.new()
 	var capsule := CapsuleShape3D.new()
 	capsule.height = HEIGHT

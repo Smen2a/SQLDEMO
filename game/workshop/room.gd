@@ -3,9 +3,12 @@ extends Node3D
 ## The workshop's room, built in code: the light, a floor and walls, the workbench with its
 ## vise, a side table and the lumber rack. The world is in metres with y up. The bench top is
 ## at y = 0 with its middle at the origin, where the vise holds the work; the floor is at
-## y = -0.85. Statics are on physics layer 1; the floor, the bench and the table are "ground"
-## (dust piles up on them: dust.gd).
+## y = -0.85. Statics are on physics layer 1 (what pieces and debris meet) and 4 (what the
+## player walks into: never the pieces lying about); the floor, the bench and the table are
+## "ground" (dust piles up on them: dust.gd).
 
+## The layer the player walks into (the room's statics, not the pieces lying about).
+const ROOM_LAYER := 8
 const FLOOR := -0.85
 const HEIGHT := 2.6 # floor to ceiling
 ## The room's inside: from the wall behind the bench (z = BACK) to the one with the door.
@@ -182,7 +185,7 @@ func _box(size: Vector3, at: Vector3, material: Material, solid: bool, shadows :
 	if not solid:
 		return null
 	var body := StaticBody3D.new()
-	body.collision_layer = 1
+	body.collision_layer = 1 | ROOM_LAYER
 	var shape := CollisionShape3D.new()
 	var box_shape := BoxShape3D.new()
 	box_shape.size = size

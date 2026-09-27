@@ -7,7 +7,10 @@ extends "res://tests/harness.gd"
 ##   hands; the wheel steps along it;
 ## - walking: back from the bench, then forward until the bench stops the player;
 ## - looking at the bench, E steps up to it (the view over the vise, the tools' controls);
-##   Esc steps back.
+##   Esc steps back;
+## - carrying: F takes the board out of the vise (then there is no stepping up to the bench);
+##   it is held in front of the eyes, comes round as the player turns, R turns it; E lets it
+##   go and it lies flat on the floor; E picks it up again.
 
 const Workshop := preload("res://workshop/workshop.tscn")
 
@@ -72,6 +75,55 @@ func _ready() -> void:
 	await _frames(2)
 	_check(workshop.mode == workshop.Mode.WALK and workshop.camera == player.camera and player.active,
 			"Esc steps back")
+
+	# Carrying: F takes the board out of the vise, into the hands; the vise is empty.
+	var ash: RigidBody3D = workshop.clamped
+	player.face(ash.global_position)
+	await _frames(2)
+	_check(workshop.prompt().contains("take it out"), "the line under the crosshair offers it: " + workshop.prompt())
+	_key(KEY_F)
+	await _frames(1)
+	_check(workshop.held == ash and workshop.clamped == null and workshop.board == null and not ash.freeze,
+			"F takes the board out of the vise, into the hands")
+	_check(not workshop.enter_work(false), "with the vise empty, no stepping up to the bench")
+	await _seconds(0.6)
+	var off: float = ash.global_position.distance_to(player.eye() + player.forward() * workshop._hold)
+	_check(off < 0.05, "carried in front of the eyes (%.3f m off)" % off)
+	_key(KEY_1)
+	await _frames(2)
+	_check(workshop.current == "chisel" and not workshop.tools["chisel"].visible, "hands full: the chisel stays out of sight")
+	_key(KEY_0)
+	# It comes round as the player turns; R turns it a quarter.
+	player.look(-PI / 2 / player.SENSITIVITY, 0.0)
+	await _seconds(0.8)
+	off = ash.global_position.distance_to(player.eye() + player.forward() * workshop._hold)
+	_check(off < 0.08, "it comes round with the player (%.3f m off)" % off)
+	var along: Vector3 = ash.global_basis.x.normalized()
+	_key(KEY_R)
+	await _seconds(0.8)
+	var turned := rad_to_deg(along.angle_to(ash.global_basis.x.normalized()))
+	_check(absf(turned - 90.0) < 5.0, "R turns it a quarter (%.1f degrees)" % turned)
+	# Let go over the floor: it falls, and lies flat on it.
+	player.look(PI / 2 / player.SENSITIVITY, 0.0)
+	player.move_input = Vector2(0, -1)
+	await _seconds(0.7)
+	player.move_input = Vector2.ZERO
+	player.face(player.global_position + Vector3(0.0, 0.2, -0.8))
+	await _seconds(0.6)
+	_key(KEY_E)
+	_check(workshop.held == null, "E lets it go")
+	await _seconds(1.5)
+	var lying: float = ash.global_position.y - (-0.85)
+	print("walk and carry: let go over the floor, the board's middle %.2f mm above it, face up %.1f degrees off" % [
+			lying * 1000.0, rad_to_deg(ash.global_basis.y.normalized().angle_to(Vector3.UP))])
+	_check(absf(lying - 0.0125) < 0.002, "it lies flat on the floor (its middle %.1f mm up)" % (lying * 1000.0))
+	# And up again from the floor.
+	player.face(ash.global_position)
+	await _frames(2)
+	_check(workshop.prompt().contains("pick up the ash board"), "the line offers it: " + workshop.prompt())
+	_key(KEY_E)
+	await _frames(1)
+	_check(workshop.held == ash, "E picks it up again")
 
 	print("walk and carry: %s" % ("the workshop is walked and worked in" if not _failed else "FAILED"))
 	get_tree().quit(1 if _failed else 0)

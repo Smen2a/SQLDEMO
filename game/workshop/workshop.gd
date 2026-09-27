@@ -110,6 +110,13 @@ enum { IDLE, PLANNING, ARMED, ACTING }
 ## WALK: about the room, in first person. WORK: at the bench, over the work in the vise.
 enum Mode { WALK, WORK }
 const REACH := 2.0 # m: how far away a hand reaches (E)
+## A piece carried: this far in front of the eyes (m), nearer or farther by the wheel.
+const HOLD := 0.55
+const HOLD_NEAREST := 0.35
+const HOLD_FARTHEST := 1.2
+const LET_GO_SPEED := 1.0 # m/s at most, as it leaves the hands
+## Each piece's undo steps number from its own multiple of this (debris.gd's step keys).
+const STEPS_PER_PIECE := 100000
 ## The tool in hand while walking: where it is held in front of the eyes (camera space, m),
 ## its working direction forward and its face up, turned a little inwards.
 const HAND := Vector3(0.2, -0.2, -0.42)
@@ -176,7 +183,7 @@ var pace := 1.0
 var edge_aim := 20.0
 var edge_fold := 25.0
 
-var board                 # SdfBody
+var board                 # the SdfBody of the piece in the vise (the tools work on it), or null
 var tools := {}           # name -> SdfBody
 var current := ""         # the tool in hand, or ""
 var yaw := 0.0            # the tool's turn about the surface normal, radians
@@ -184,6 +191,14 @@ var camera: Camera3D      # the one in use: the player's eyes (walking) or the v
 var mode := Mode.WALK
 var room                  # room.gd
 var player                # player.gd
+## Every piece of work (a RigidBody3D with meta "workpiece", holding its SdfBody as meta "sdf"),
+## the one in the vise, and the one carried.
+var pieces: Array[RigidBody3D] = []
+var clamped: RigidBody3D
+var held: RigidBody3D
+var _hold := HOLD
+var _hold_turn := Basis() # the carried piece's turn, relative to the player's facing
+var _next_piece := 1
 
 var _orbit                # the view over the bench (orbit_camera.gd)
 var _glide := 1.0         # 0 to 1: how far the view has come down to the bench
@@ -215,15 +230,16 @@ var _opacity := 0.0       # of the tool in hand, in the main view
 var _plane := Plane()
 var _engage_pose := Transform3D()
 var _engage_time := 0.0
-## Pieces sawn off, oldest first: {"body": RigidBody3D, "piece": SdfBody, "steps": the
-## board's step count once its half-space landed, "spawn": where the body started}.
+## Pieces sawn off, oldest first: {"body": RigidBody3D, "piece": SdfBody, "from": the piece
+## it came off (a RigidBody3D), "steps": that piece's step count once its half-space landed,
+## "spawn": where the body started, "island"}.
 var offcuts: Array[Dictionary] = []
 ## An offcut's collider: "box" (its bounds), "hull" (convex, from its surface) or "auto"
 ## (a box when the piece fills nearly all its bounds, as sawn strips do: a box rests and
 ## slides more steadily than a hull of many points).
 var offcut_collider := "auto"
-var _board_collider: StaticBody3D # the board's hull, while offcuts or debris lie about
-## What the tools took off (debris.gd), and the board's undo step the stroke in hand makes.
+## What the tools took off (debris.gd), and the undo step the stroke in hand makes (keyed by
+## piece: see _step_key).
 var debris
 var _debris_step := 0
 
@@ -233,19 +249,17 @@ func _ready() -> void:
 	add_child(room)
 	debris = Debris.new()
 	add_child(debris)
-	board = _new_body()
-	board.load_demo(wood)
-	for v in board.tool_catalog():
-		if not variants.has(v.family):
-			variants[v.family] = []
-		variants[v.family].append(v)
-	board.edited.connect(func(_stats): _ui.refresh())
-	board.separated.connect(_on_separated, CONNECT_DEFERRED)
 	for tool in TOOL_NAMES:
 		var body = _new_body()
 		body.load_tool(tool, settings[tool])
 		tools[tool] = body
 		_show_tool(tool, 0.0) # (out of sight until it is taken from the hotbar)
+	for v in tools["chisel"].tool_catalog():
+		if not variants.has(v.family):
+			variants[v.family] = []
+		variants[v.family].append(v)
+	# An ash board in the vise.
+	_clamp(_new_piece(wood))
 
 	var orbit = OrbitCamera.new()
 	orbit.fov = 40.0
@@ -295,6 +309,7 @@ func enter_work(glide := true) -> bool:
 	player.move_input = Vector2.ZERO
 	_glide_from = player.camera.global_transform
 	_glide = 0.0 if glide else 1.0
+	_orbit.target = clamped.global_position
 	_orbit._apply()
 	_orbit.set_process_unhandled_input(true)
 	_orbit.make_current()
@@ -328,15 +343,73 @@ func _walk() -> void:
 	_show_tool_in_hand()
 
 
-## E: what is in reach in front of the eyes. At the bench, step up to it.
+## E: what is in reach in front of the eyes. Carrying something, let it go; at the bench (or
+## the piece in the vise), step up to it; a piece lying about, pick it up.
 func interact() -> void:
 	if mode != Mode.WALK:
+		return
+	if held != null:
+		let_go()
 		return
 	var hit := look_at_thing()
 	if hit.is_empty():
 		return
-	if hit.collider.has_meta("bench"):
+	var thing: Object = hit.collider
+	if thing.has_meta("bench") or (thing == clamped and clamped != null):
 		enter_work()
+	elif thing.has_meta("workpiece"):
+		pick_up(thing)
+
+
+## F: the piece in the vise, if the eyes are on it, taken out into the hands.
+func take_out() -> void:
+	if mode != Mode.WALK or held != null or clamped == null:
+		return
+	var hit := look_at_thing()
+	if not hit.is_empty() and hit.collider == clamped:
+		pick_up(clamped)
+
+
+## Picks a piece up: it is carried in front of the eyes (turned as it was, relative to the
+## way they face). Out of the vise, it is unclamped.
+func pick_up(piece: RigidBody3D) -> void:
+	if held != null or piece == null:
+		return
+	if piece == clamped:
+		_unclamp()
+	held = piece
+	held.freeze = false
+	held.sleeping = false
+	held.gravity_scale = 0.0
+	held.can_sleep = false
+	_hold = clampf(player.eye().distance_to(held.global_position), HOLD_NEAREST, HOLD)
+	_hold_turn = Basis(Vector3.UP, -player.yaw) * held.global_basis.orthonormalized()
+	_show_tool_in_hand()
+
+
+## Lets the carried piece go where it is: it falls (gently: its speed as it leaves the hands
+## is at most LET_GO_SPEED).
+func let_go() -> void:
+	if held == null:
+		return
+	var piece := held
+	held = null
+	piece.gravity_scale = 1.0
+	piece.can_sleep = true
+	piece.linear_velocity = piece.linear_velocity.limit_length(LET_GO_SPEED)
+	piece.angular_velocity = piece.angular_velocity.limit_length(2.0)
+	_show_tool_in_hand()
+
+
+## R: the carried piece turned a quarter about the vertical.
+func turn_held() -> void:
+	if held != null:
+		_hold_turn = Basis(Vector3.UP, PI / 2) * _hold_turn
+
+
+## The wheel while carrying: nearer (-) or farther.
+func reach_held(steps: int) -> void:
+	_hold = clampf(_hold + 0.05 * steps, HOLD_NEAREST, HOLD_FARTHEST)
 
 
 ## What the eyes rest on within reach (a physics ray from the middle of the view): the
@@ -351,12 +424,24 @@ func look_at_thing() -> Dictionary:
 func prompt() -> String:
 	if mode != Mode.WALK:
 		return ""
+	if held != null:
+		return "E: let go   R: turn it   wheel: nearer, farther"
 	var hit := look_at_thing()
 	if hit.is_empty():
 		return ""
-	if hit.collider.has_meta("bench"):
+	var thing: Object = hit.collider
+	if thing == clamped and clamped != null:
+		return "E: work on the %s   F: take it out of the vise" % _name_of(thing)
+	if thing.has_meta("bench"):
 		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
+	if thing.has_meta("workpiece"):
+		return "E: pick up the %s" % _name_of(thing)
 	return ""
+
+
+## What a piece is called: its wood, and whether it is a board or an offcut.
+func _name_of(piece: Object) -> String:
+	return "%s %s" % [piece.get_meta("wood_name", "wood"), piece.get_meta("kind", "piece")]
 
 
 ## While the view comes down to the bench: part way from the eyes to the view over the work.
@@ -372,7 +457,8 @@ func _orbit_to_glide() -> void:
 ## The tool in hand: held in view while walking; out of sight at the bench until it works.
 func _show_tool_in_hand() -> void:
 	for tool in TOOL_NAMES:
-		_show_tool(tool, (1.0 if mode == Mode.WALK else _opacity) if tool == current else 0.0)
+		var shown := (1.0 if mode == Mode.WALK else _opacity) if tool == current and held == null else 0.0
+		_show_tool(tool, shown)
 
 
 # --- driving the tools (input handlers call these; tests do too) ----------------------
@@ -621,11 +707,7 @@ func act() -> void:
 			_drop_plan()
 		return
 	_state = ACTING
-	_debris_step = board.get_stats().get("steps", 0) + 1
-	if _board_collider == null:
-		# What it takes off will land on the board: its collider, in the physics space before
-		# the first of it comes.
-		_update_board_collider(true)
+	_debris_step = _step_key(board.get_stats().get("steps", 0) + 1)
 	if _lock.get("direct", false):
 		# What the stroke comes to, for the line by the pointer (a chisel's, gouge's or
 		# spokeshave's: the plan it was made from; nothing for the others).
@@ -765,7 +847,8 @@ func _drop_plan() -> void:
 		_state = IDLE
 	_lock = {}
 	_plan = {}
-	board.clear_plan()
+	if board != null:
+		board.clear_plan()
 	_orbit.wheel_zoom = true
 
 
@@ -780,75 +863,87 @@ func _show_tool(tool: String, opacity: float) -> void:
 
 func undo() -> void:
 	cancel()
+	if board == null:
+		return
 	board.flush()
-	if not offcuts.is_empty() and board.get_stats().get("steps", 0) == offcuts.back().steps:
+	var last := -1
+	for i in offcuts.size():
+		if offcuts[i].from == clamped:
+			last = i
+	if last >= 0 and board.get_stats().get("steps", 0) == offcuts[last].steps and offcuts[last].body != held:
 		# Straight after a split: the pieces go back together.
-		var last: Dictionary = offcuts.pop_back()
-		last.body.queue_free()
+		var offcut: Dictionary = offcuts[last]
+		offcuts.remove_at(last)
+		pieces.erase(offcut.body)
+		offcut.body.queue_free()
 		board.rejoin()
 		board.flush()
-		_update_board_collider()
+		_refresh_collider(clamped)
 		_ui.refresh()
 		return
-	debris.undo_step(board.get_stats().get("steps", 0)) # what the stroke took off goes back
+	# What the stroke took off goes back (this piece's, from that step on).
+	debris.undo_step(_step_key(board.get_stats().get("steps", 0)), _step_key(STEPS_PER_PIECE))
 	board.undo()
 
 
 func redo() -> void:
 	cancel()
-	board.redo()
+	if board != null:
+		board.redo()
 
 
+## A fresh board of `choice` (board, board_oak, board_walnut) in the vise, and every other
+## piece, offcut and bit of debris cleared away.
 func set_wood(choice: String) -> void:
 	cancel()
-	for offcut in offcuts:
-		offcut.body.queue_free()
+	let_go()
+	for piece in pieces:
+		piece.queue_free()
+	pieces.clear()
 	offcuts.clear()
+	clamped = null
+	board = null
 	debris.clear()
-	_update_board_collider()
 	wood = choice
-	board.load_demo(wood)
+	_clamp(_new_piece(wood))
+	if mode == Mode.WORK:
+		_orbit.target = clamped.global_position
+		_orbit._apply()
 	_ui.refresh()
 
 
-## The board came apart across a plane (world space), turned so that the smaller side is in
-## front: that side becomes an offcut, a rigid body with a convex hull, nudged away from the
-## kerf. The board measured both sides on its worker, so this reads nothing from it that
-## waits: the half-spaces land on the pieces' workers over the next frames.
-func _on_separated(point: Vector3, normal: Vector3) -> void:
-	var piece = board.split(point, normal)
-	if piece == null:
+## The piece in the vise came apart across a plane (world space), turned so that the
+## smaller side is in front: that side becomes an offcut, a piece of its own (a rigid body
+## with a convex hull), nudged away from the kerf. The piece measured both sides on its
+## worker, so this reads nothing from it that waits: the half-spaces land on the pieces'
+## workers over the next frames.
+func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D) -> void:
+	var sdf = from.get_meta("sdf")
+	var split = sdf.split(point, normal)
+	if split == null:
 		return
 	# An island (no plane: cuts meeting left it) is hidden until it has taken in its region;
 	# its rigid body waits frozen till then.
 	var island := normal == Vector3.ZERO
 	# The rigid body sits at the piece's centre of mass (Godot's own follows shape origins).
-	var body := RigidBody3D.new()
-	add_child(body)
-	var centre: Vector3 = board.global_transform * piece.get_centre_of_mass()
-	body.global_transform = Transform3D(Basis.IDENTITY, centre)
-	piece.transform = Transform3D(board.global_basis, board.global_position - centre)
-	body.add_child(piece)
-	var collider := _collider_for(piece)
+	var centre: Vector3 = sdf.global_transform * split.get_centre_of_mass()
+	var body := _as_piece(split, Transform3D(Basis.IDENTITY, centre), sdf.global_transform,
+			from.get_meta("wood_name", "wood"), "offcut")
 	if island:
-		# An island rests in the board's hollows, on convex pieces: both sharp (Godot's default
+		# An island rests in its piece's hollows, on convex pieces: both sharp (Godot's default
 		# margin, 4 cm, rounds millimetre shapes away).
-		collider.shape.margin = SHAPE_MARGIN
-	body.add_child(collider)
-	body.mass = maxf(piece.get_mass(), 0.005)
-	# Sanded wood on a bench top. Below the width-to-height ratio of a sawn strip, so it
-	# slides off the kerf rather than toppling over.
-	var surface := PhysicsMaterial.new()
-	surface.friction = 0.5
-	body.physics_material_override = surface
+		for shape in _shapes_of(body):
+			shape.shape.margin = SHAPE_MARGIN
 	# As the last saw stroke would: a nudge off the kerf (about 6 mm of slide).
 	body.linear_velocity = normal * 0.25
-	body.freeze = island and not piece.visible
-	# The board's step count once its half-space lands (undo then rejoins the pieces).
-	offcuts.append({"body": body, "piece": piece, "steps": board.get_stats().get("steps", 0) + 1,
+	body.freeze = island and not split.visible
+	# The piece's step count once its half-space lands (undo then rejoins the pieces).
+	offcuts.append({"body": body, "piece": split, "from": from, "steps": sdf.get_stats().get("steps", 0) + 1,
 			"spawn": body.global_transform, "island": island})
 	if not body.freeze:
-		_update_board_collider()
+		# Its piece's collider no longer covers it (hollowed where an island came out), before the
+		# piece's edit lands: else the offcut starts inside it and is thrown clear.
+		_refresh_collider(from)
 	_ui.refresh()
 
 
@@ -857,7 +952,7 @@ func _on_separated(point: Vector3, normal: Vector3) -> void:
 ## width above a surface, a body's first physics step has no contact yet and it falls
 ## 2.7 mm into it (and out of the far side of a thin one); touching, the contact holds.
 func _settle(body: RigidBody3D) -> bool:
-	var collider: CollisionShape3D = body.get_child(body.get_child_count() - 1)
+	var collider: CollisionShape3D = _shapes_of(body)[0]
 	var query := PhysicsShapeQueryParameters3D.new()
 	query.shape = collider.shape
 	query.transform = body.global_transform * collider.transform
@@ -892,55 +987,128 @@ func _collider_for(piece) -> CollisionShape3D:
 ## Sweeps the bench: every shaving and chip goes.
 func sweep() -> void:
 	debris.clear()
-	_update_board_collider()
 
 
 ## What the stroke took off since the last frame (with the edge where the tool is now).
 func _take_debris(edge: Transform3D) -> void:
+	if board == null:
+		return
 	var report: Dictionary = board.take_debris()
 	if report.is_empty() and debris.live_samples() == 0:
 		return
 	debris.feed(report, _debris_step, edge)
-	if _board_collider == null and not debris.is_empty():
-		_update_board_collider()
 
 
-## While offcuts or debris lie about, the board has a (convex) collider too, so they rest
-## on it rather than in it. `debris_coming`: a stroke that will throw some is starting.
-func _update_board_collider(debris_coming := false) -> void:
-	if _board_collider:
-		_board_collider.queue_free()
-		_board_collider = null
-	if offcuts.is_empty() and debris.is_empty() and not debris_coming:
+## A piece's collider, as it is now (after its edits): a box while it fills nearly all its
+## bounds (a board with cuts in it: pieces and debris rest on it steadily, where a hull of
+## its surface has points bunched within a millimetre at its eased corners, which the
+## physics engine lets pieces sink into), else its hull. Where islands came out of it, it
+## is hollowed (a rebate, a notch): convex pieces round where they were, not one hull that
+## would fill the hollows they sit in.
+func _refresh_collider(piece: RigidBody3D) -> void:
+	if piece == null:
 		return
-	_board_collider = StaticBody3D.new()
-	add_child(_board_collider)
-	if offcuts.any(func(o): return o.island):
-		# Where islands came out the board is hollowed (a rebate, a notch): convex pieces round
-		# where they were, not one hull that would fill the hollows they sit in.
-		# The seams between pieces fall a little outside each island (less than half a kerf),
-		# so that it does not settle on one and catch on its neighbour's side.
-		var holes := []
-		for offcut in offcuts:
-			if offcut.island:
-				holes.append(offcut.piece.get_body_bounds().grow(0.3))
-		for points in board.get_collision_hulls(holes):
-			var hull := ConvexPolygonShape3D.new()
-			var placed := PackedVector3Array()
-			for p in points:
-				placed.push_back(board.transform * p)
-			hull.points = placed
-			hull.margin = SHAPE_MARGIN
-			var piece_collider := CollisionShape3D.new()
-			piece_collider.shape = hull
-			_board_collider.add_child(piece_collider)
+	for shape in _shapes_of(piece):
+		piece.remove_child(shape)
+		shape.queue_free()
+	var sdf = piece.get_meta("sdf")
+	var holes := []
+	for offcut in offcuts:
+		if offcut.from == piece and offcut.island:
+			# The seams between pieces fall a little outside each island (less than half a kerf),
+			# so that it does not settle on one and catch on its neighbour's side.
+			holes.append(offcut.piece.get_body_bounds().grow(0.3))
+	if holes.is_empty():
+		var collider := _collider_for(sdf)
+		collider.shape.margin = SHAPE_MARGIN
+		piece.add_child(collider)
 		return
-	# As an offcut's: a box while it fills nearly all its bounds (a board with cuts in it), which
-	# pieces rest on steadily. (A hull of its surface has points bunched within a millimetre at
-	# its eased corners, and the physics engine lets pieces sink into it.)
-	var collider := _collider_for(board)
-	collider.shape.margin = SHAPE_MARGIN
-	_board_collider.add_child(collider)
+	for points in sdf.get_collision_hulls(holes):
+		var hull := ConvexPolygonShape3D.new()
+		var placed := PackedVector3Array()
+		for p in points:
+			placed.push_back(sdf.transform * p)
+		hull.points = placed
+		hull.margin = SHAPE_MARGIN
+		var shape := CollisionShape3D.new()
+		shape.shape = hull
+		piece.add_child(shape)
+
+
+func _shapes_of(piece: RigidBody3D) -> Array:
+	return piece.get_children().filter(func(c): return c is CollisionShape3D)
+
+
+## A new piece of work: a board of `choice` (board, board_oak or board_walnut), loose.
+func _new_piece(choice: String) -> RigidBody3D:
+	var sdf = ClassDB.instantiate("SdfBody")
+	sdf.load_demo(choice)
+	var names := {"board": "ash", "board_oak": "oak", "board_walnut": "walnut"}
+	# Body millimetres, z up -> world metres, y up; the board's middle at the body's origin.
+	var local := Transform3D(Basis(Vector3.RIGHT, -PI / 2) * Basis.from_scale(Vector3.ONE * MM), Vector3.ZERO)
+	return _as_piece(sdf, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)),
+			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)) * local, names.get(choice, "wood"), "board")
+
+
+## An SdfBody made a piece of work: a rigid body at `at` (world) holding it where `placed`
+## puts it (world), with its collider, mass and friction; its edits keep its collider and the
+## panel up to date, and a saw through it splits it.
+func _as_piece(sdf, at: Transform3D, placed: Transform3D, wood_name: String, kind: String) -> RigidBody3D:
+	var body := RigidBody3D.new()
+	body.set_meta("workpiece", true)
+	body.set_meta("sdf", sdf)
+	body.set_meta("wood_name", wood_name)
+	body.set_meta("kind", kind)
+	body.collision_layer = 1
+	body.collision_mask = 1
+	add_child(body)
+	body.global_transform = at
+	if sdf.get_parent() != null:
+		sdf.get_parent().remove_child(sdf)
+	body.add_child(sdf)
+	sdf.transform = at.affine_inverse() * placed
+	sdf.set_meta("piece_id", _next_piece)
+	_next_piece += 1
+	body.mass = maxf(sdf.get_mass(), 0.005)
+	# Sanded wood on a bench top. Below the width-to-height ratio of a sawn strip, so it
+	# slides off the kerf rather than toppling over.
+	var surface := PhysicsMaterial.new()
+	surface.friction = 0.5
+	body.physics_material_override = surface
+	_refresh_collider(body)
+	sdf.edited.connect(func(_stats):
+		_refresh_collider(body)
+		_ui.refresh())
+	sdf.separated.connect(_on_separated.bind(body), CONNECT_DEFERRED)
+	pieces.append(body)
+	return body
+
+
+## Puts a piece in the vise: held still where it is, the one the tools work on.
+func _clamp(piece: RigidBody3D) -> void:
+	clamped = piece
+	board = piece.get_meta("sdf")
+	piece.freeze = true
+	room.close_jaws(0.1)
+
+
+## Takes the piece out of the vise (it is loose again; its edits go with it).
+func _unclamp() -> void:
+	if clamped == null:
+		return
+	if mode == Mode.WORK:
+		leave_work()
+	cancel()
+	clamped.freeze = false
+	clamped = null
+	board = null
+	room.close_jaws(0.0)
+
+
+## The undo step `step` of the piece in the vise, as debris keys it: each piece's steps in a
+## range of their own.
+func _step_key(step: int) -> int:
+	return board.get_meta("piece_id", 0) * STEPS_PER_PIECE + step
 
 
 func reset_board() -> void:
@@ -1065,14 +1233,24 @@ func _walk_input(event: InputEvent) -> void:
 		match (event as InputEventKey).keycode:
 			KEY_E:
 				interact()
+			KEY_F:
+				take_out()
+			KEY_R:
+				turn_held()
 			KEY_ESCAPE:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	elif event is InputEventMouseButton and event.pressed:
 		match (event as InputEventMouseButton).button_index:
 			MOUSE_BUTTON_WHEEL_UP:
-				next_slot(-1)
+				if held != null:
+					reach_held(1)
+				else:
+					next_slot(-1)
 			MOUSE_BUTTON_WHEEL_DOWN:
-				next_slot(1)
+				if held != null:
+					reach_held(-1)
+				else:
+					next_slot(1)
 			MOUSE_BUTTON_LEFT:
 				if DisplayServer.get_name() != "headless":
 					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -1115,9 +1293,10 @@ func _process(delta: float) -> void:
 		board.move_stroke(_at)
 	_place_blade(went / maxf(delta, 1e-6))
 	# (After a stroke too: the sponge's last work lands after it ends.)
-	_take_debris(board.get_tool_pose())
+	if board != null:
+		_take_debris(board.get_tool_pose())
 	# A plan asked for while an edit was landing is planned again once it has.
-	if _state == PLANNING and _plan.get("stale", false):
+	if _state == PLANNING and board != null and _plan.get("stale", false):
 		var fresh: Dictionary = board.get_plan()
 		if not fresh.is_empty() and not fresh.get("stale", false):
 			_plan = fresh
@@ -1133,7 +1312,7 @@ func _process(delta: float) -> void:
 	for offcut in offcuts:
 		if offcut.body.freeze and offcut.piece.visible:
 			if not offcut.has("release"):
-				_update_board_collider()
+				_refresh_collider(offcut.from)
 				offcut.release = Engine.get_physics_frames() + 3
 				offcut.settled = false
 			elif not offcut.settled and Engine.get_physics_frames() >= offcut.release - 1:
@@ -1187,6 +1366,25 @@ func _place_blade(velocity: Vector3) -> void:
 
 func _physics_process(delta: float) -> void:
 	_push_aside(delta)
+	_carry(delta)
+
+
+## The carried piece goes where the hands take it: towards its place in front of the eyes,
+## turned as it was held, at velocities (so it still meets the walls and the bench, and
+## pushes other pieces, rather than passing through them).
+func _carry(delta: float) -> void:
+	if held == null:
+		return
+	var eyes: Transform3D = player.camera.global_transform
+	var to: Vector3 = eyes.origin - eyes.basis.z * _hold - held.global_position
+	held.linear_velocity = (to * 15.0).limit_length(4.0)
+	var want := (Basis(Vector3.UP, player.yaw) * _hold_turn).orthonormalized()
+	var turn := (want * held.global_basis.orthonormalized().inverse()).get_rotation_quaternion()
+	var angle := turn.get_angle()
+	if angle > PI:
+		angle -= TAU
+	held.angular_velocity = turn.get_axis() * angle * 12.0 if absf(angle) > 1e-4 else Vector3.ZERO
+	held.sleeping = false
 
 
 ## Loose pieces (offcuts, islands) the blade meets go on ahead of the edge as it advances:

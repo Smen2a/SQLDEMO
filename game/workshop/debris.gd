@@ -112,13 +112,14 @@ func is_empty() -> bool:
 	return pieces.is_empty() and dust.flying() == 0 and dust.piles.is_empty()
 
 
-## Takes back the pieces and dust the board's undo step `step` made (and any after it).
-func undo_step(step: int) -> void:
+## Takes back the pieces and dust the board's undo step `step` made (and any after it, up to
+## `before`: the steps are numbered per piece of work, each piece's in a range of its own).
+func undo_step(step: int, before: int = 1 << 62) -> void:
 	for i in range(pieces.size() - 1, -1, -1):
-		if pieces[i].step >= step:
+		if pieces[i].step >= step and pieces[i].step < before:
 			pieces[i].body.queue_free()
 			pieces.remove_at(i)
-	dust.undo_step(step)
+	dust.undo_step(step, before)
 
 
 ## Sweeps the bench: every piece goes, and the dust.
