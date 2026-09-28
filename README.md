@@ -1056,6 +1056,23 @@ a score:
   thin, short by 0.8; an uncut mortise 6 mm proud. In the workshop, the head's blank laid
   out and checked, then sawn to length: only the mortise left.
 
+### A joint's fit
+
+How a part goes into its mate, measured before the workshop lets you put them together
+(core `plans/joint.h`, `pieces/fit.h`; `SdfBody.joint_pose`, `SdfBody.fit`):
+- **The joint** from the plan: which part goes in (the tenon, the wedge), how it lies once
+  home and the line it goes in along. The mallet's handle goes 58 mm into the head's face
+  side, its 30 mm along the mortise's 30, to stand 3 mm proud of the back.
+- **The fit:** the moving part's surface, a millimetre apart, pushed along the joint half a
+  millimetre at a time into its mate's exact field. Where a cheek runs into the mate's
+  wood it binds; where a shoulder meets the face end on it is seated. **Snug** goes home by
+  hand (under 0.05 mm tight, under 0.1 mm clear each side); **drives** needs the mallet (up
+  to 0.5 mm tight); **loose** rattles; **won't go** stops short of home.
+- **Measured** (`native/tests/test_fit.cpp`, `game/tests/joint_fit`): the handle as drawn
+  goes home snug in 20–35 ms; a tenon 0.2 mm fat drives; 1.2 mm fat, it won't pass the
+  mouth; 0.4 mm thin, loose; a mortise narrowed below 30 mm stops it there. Putting parts
+  together in the workshop comes next (G3b).
+
 ## Layout
 
 | Path | What it is |
@@ -1067,8 +1084,8 @@ a score:
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
 | `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
-| `native/src/core/plans/` | Plans: a part as a blank with features; the lines that lay it out on a piece of stock, and its intended solid; checking a piece against it (`check.h`). |
-| `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), islands and crumbs cut out by a region (`parts.h`), each piece's bounds, volume, centre of mass and hull points, and convex hulls (`hull.h`). |
+| `native/src/core/plans/` | Plans: a part as a blank with features; the lines that lay it out on a piece of stock, and its intended solid; checking a piece against it (`check.h`); how two parts go together at a joint (`joint.h`). |
+| `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), islands and crumbs cut out by a region (`parts.h`), each piece's bounds, volume, centre of mass and hull points, and convex hulls (`hull.h`); a part's fit going into its mate (`fit.h`). |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live, and the GPU brick sampler. |
@@ -1336,7 +1353,8 @@ The Godot tests come in two tiers:
   - a plan drawn on the pad (`plan_editor`): the mallet's parts and features drawn as the
     drags would, joined, saved, laid on the wood; put down, thrown away, a preset copied;
   - a part checked against its drawing (`check_part`): the head's blank proud at the far
-    end and the mortise, then sawn to length: the mortise only.
+    end and the mortise, then sawn to length: the mortise only;
+  - a joint's fit (`joint_fit`): the handle into the head, as drawn, a little fat, too fat.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

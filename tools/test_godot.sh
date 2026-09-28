@@ -30,7 +30,7 @@
 #     undone and redone
 #   - plans: the rack's stock to size; a plan's sheet laid on the wood in pencil, the knife
 #     taking it; a plan drawn on the pad, saved, and laid out as the preset is; a part checked
-#     against its drawing, before and after it is sawn to length
+#     against its drawing, before and after it is sawn to length; a tenon's fit in its mortise
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -98,6 +98,7 @@ if [[ "$GPU" == 0 ]]; then
 	check plan_transfer "plan transfer: the plan is laid on the wood" res://tests/plan_transfer.tscn
 	check plan_editor "plan editor: the mallet drawn on the pad, saved, laid out" res://tests/plan_editor.tscn
 	check check_part "check part: the part checked against its drawing" res://tests/check_part.tscn
+	check joint_fit "joint fit: the handle fits the head" res://tests/joint_fit.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn

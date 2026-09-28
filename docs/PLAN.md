@@ -21,8 +21,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
   paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
   sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
-  (drawing plans on paper) and G2 (checking a part against its drawing) are done; G3
-  (assembly) is next.
+  (drawing plans on paper), G2 (checking a part against its drawing) and G3a (a joint's
+  fit) are done; G3b (offering a part up, tapping it home, the assembly as one body) is
+  next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -74,6 +75,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G3a | A joint's fit (`plans/joint`: how two parts go together; `pieces/fit`: a part's surface pushed along the joint into its mate, where it binds, loose / snug / drives / won't go; `SdfBody.joint_pose`, `SdfBody.fit`). `test_fit`, `joint_fit` |
 | G2 | Checking a part (`plans/check`, `SdfBody.check_part`, `checking.gd`; K): proud and short places against the part as drawn, joined into spots, named, dotted on the wood. `check_part` |
 | G1b | Drawing a plan on the pad (`plan_editor.gd`, the sheet's drawing shared with the book in `sheet_view.gd`): parts, blanks, features dragged on the views, picked and sized exactly, joints; saved to `user://plans` and laid out as presets are. `plan_editor` |
 | G1a | Plans: a part is a blank with features (`plans/part`: its lines on a piece of stock, its intended solid); the mallet's plan (`game/plans/mallet.json`); the plan book on the side table (P), each part's sheet drawn in three views; a sheet laid on the piece in the vise draws the part on in pencil and makes the piece that part; pencil only guides, the knife and gauge take it; a pencil for drawing on the wood; pencil undone straight after; or scribed on at once, one step. `plan_transfer` |
@@ -814,7 +816,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0, G1a, G1b and G2 done)
+## G. Making an object (current: G0, G1a, G1b, G2 and G3a done)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -862,9 +864,15 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   saved plans. Test `plan_editor`.
 - **G2** — checking a part: proud and short spots against its solid, shown as dots and
   named. Test `check_part`.
-- **G3** — assembly: the fit of a part moving into another along an axis (won't go,
-  drives, snug, loose), assemblies as one rigid body (tools on the part hit), offer up,
-  mallet taps, glue, the wedge. Tests `test_fit`, `assembly`.
+- **G3** — assembly, in three steps (decided with the user: each tried before the next):
+  - **G3a** — the fit of a part moving into another along the joint (won't go, drives,
+    snug, loose). Tests `test_fit`, `joint_fit` (done, below).
+  - **G3b** — offering up (carried to its mate in the vise, it lines up with the joint;
+    E seats it at the mouth, the wheel pushes it in until it binds, mallet taps drive it
+    home), the assembly as one rigid body (tools on the part hit); apart again until glued
+    or wedged. Test `assembly`.
+  - **G3c** — glue (G, a step the player chooses; sets after a minute) and the wedge
+    (driven into the kerf, spreading it; locks the joint), sawn flush. Test `wedge_glue`.
 - **G4** — the mallet end to end (`mallet_build`), the chopping time measured (a brace
   and bit if it is too slow), the finished mallet as a tool.
 
@@ -1012,6 +1020,41 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   mortise; sawn to length on the waste side of the line: the mortise only.
 - **Left for later:** a part checked only where it is laid out (one placement); the
   check on the main thread (a tenth of a second); dots thinned by grid order.
+
+### G3a — a joint's fit (done)
+- **The joint** (core `plans/joint.{h,cpp}`, `joint_pose(a, fa, b, fb)`): which part goes
+  in, how it lies in its mate once home (`home`: its part space into the mate's), the way
+  it goes in and how far (`axis`, `travel`: from the mouth, its leading end on the mate's
+  face), and what of it goes in (`region`). A tenon into a hole: along the tenon, into the
+  hole's face, the section's longer side along the hole's, home with the shoulder on the
+  face (the mallet's handle: 58 mm into the head's face side, 3 mm proud of the back). A
+  wedge into a kerf: thin end first, its thickness across the kerf, home at its bottom.
+- **The fit** (core `pieces/fit.{h,cpp}`): the moving part's surface (`surface_points`:
+  grid points within half a millimetre of it, moved onto it; about 7,000 for the tenon),
+  carried along the way in half-millimetre steps and measured in the mate's field
+  (`parallel_for`). Each point is a side (its normal across the way: a cheek) or an end
+  (along it: a shoulder, the tenon's end). A side point inside the mate: interference, how
+  far the mate's wood runs into it across the way (out along the mate's nearest surface
+  where that lies across the way, else back along the side's normal: near the mouth the
+  nearest surface is the face it is just under). An end point on the mate, facing it end
+  on, past the first millimetre (not the tenon's end catching the mouth's rim): seated.
+  It stops where the interference passes the drive limit (0.5 mm) or it is seated. Home
+  and never over 0.05 mm: snug (by hand), unless over 0.1 mm clear each side (loose);
+  over 0.05: drives (the mallet); short of home: won't go. The clearance where it stops is
+  its side's nearest approach to the mate's side (not a face it passes over end on).
+- **Through the extension:** `SdfBody.joint_pose(a_part, a_feature, b_part, b_feature)`
+  (static) and `part.fit(mate, start, axis, travel, step, region)` (one body's surface in
+  the other's octree, both flushed first).
+- **Measured** (`native/tests/test_fit.cpp`, `game/tests/joint_fit`): the joint poses (the
+  tenon's corners on the mortise's, the wedge's thin end at the kerf's bottom, the joint
+  named either way round); the tenon as drawn snug, home and seated (8,144 points, 117
+  steps, 20–35 ms); 0.2 mm fat, it drives (0.11 mm interference); 1.2 mm fat, it won't go
+  past the mouth; 0.4 mm thin all round, loose (0.20 mm clear); a mortise 0.6 mm narrower
+  each side below 30 mm stops it at 30. The same through the extension on the plan's
+  parts (`load_part`), 19–28 ms.
+- **Left for later:** the surface a millimetre apart (a bump narrower than that can slip
+  between the points); the wood's spring and the wedge's spreading (G3c: a drive limit per
+  joint).
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

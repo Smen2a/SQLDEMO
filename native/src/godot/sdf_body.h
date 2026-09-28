@@ -82,6 +82,21 @@ public:
 	// feature (its index, -1 the blank's), dots (body space), by (mm each)}], the worst first;
 	// "proud", "short" (mm^3 in all), "ms"}. Waits for queued work first.
 	godot::Dictionary check_part(const godot::Dictionary &part, const godot::Transform3D &placement, double tolerance);
+	// The joint between two parts (plans::joint_pose) by their features' names: {"kind"
+	// ("mortise and tenon" or "wedge"), "moving" ("a" or "b": the part that goes in),
+	// "home" (its part space into its mate's, home), "axis" (the way it goes in, the mate's
+	// part space), "travel" (mm from the mouth to home), "region" (what of it goes in, its
+	// part space)}; {} for features that make no joint.
+	static godot::Dictionary joint_pose(const godot::Dictionary &a_part, const godot::String &a_feature,
+			const godot::Dictionary &b_part, const godot::String &b_feature);
+	// How this body goes into `mate` (sdf::fit_along): from `start` (this body's space into
+	// the mate's, at the mouth) along `axis` (the mate's space) for `travel` mm in `step`s,
+	// this body's surface within `region` (its space; empty: all of it) against the mate's.
+	// {"kind" ("loose", "snug", "drives", "won't go"), "stops_at" (mm), "home", "seated",
+	// "most" (mm of interference on the way), "clearance" (mm, where it stops), "steps":
+	// [{t, interference, seated}], "points", "ms"}. Waits for both bodies' queued work.
+	godot::Dictionary fit(SdfBody *mate, const godot::Transform3D &start, const godot::Vector3 &axis, double travel,
+			double step, const godot::AABB &region);
 	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
 	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
 	// cast shadows.

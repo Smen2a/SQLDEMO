@@ -8,7 +8,9 @@
 #include "demo/gallery.h"
 #include "eval/query.h"
 #include "pieces/hull.h"
+#include "pieces/fit.h"
 #include "plans/check.h"
+#include "plans/joint.h"
 #include "plans/part.h"
 
 #include <godot_cpp/classes/array_mesh.hpp>
@@ -450,6 +452,76 @@ Dictionary SdfBody::check_part(const Dictionary &part, const Transform3D &placem
 	out["short"] = double(check.short_);
 	out["samples"] = check.samples;
 	out["ms"] = check.ms;
+	return out;
+}
+
+Dictionary SdfBody::joint_pose(const Dictionary &a_part, const String &a_feature, const Dictionary &b_part,
+		const String &b_feature) {
+	Dictionary out;
+	const plans::Part a = part_of(a_part), b = part_of(b_part);
+	const plans::Feature *fa = plans::feature_named(a, a_feature.utf8().get_data());
+	const plans::Feature *fb = plans::feature_named(b, b_feature.utf8().get_data());
+	if (fa == nullptr || fb == nullptr) {
+		return out;
+	}
+	const plans::JointPose j = plans::joint_pose(a, *fa, b, *fb);
+	if (j.kind == plans::JointPose::Kind::None) {
+		return out;
+	}
+	out["kind"] = j.kind == plans::JointPose::Kind::Wedge ? "wedge" : "mortise and tenon";
+	out["moving"] = j.a_moves ? "a" : "b";
+	out["home"] = Transform3D(Basis(to_godot(j.home.x), to_godot(j.home.y), to_godot(j.home.z)), to_godot(j.home.origin));
+	out["axis"] = to_godot(j.axis);
+	out["travel"] = double(j.travel);
+	out["region"] = AABB(to_godot(j.region.lo), to_godot(j.region.size()));
+	return out;
+}
+
+Dictionary SdfBody::fit(SdfBody *mate, const Transform3D &start, const Vector3 &axis, double travel, double step,
+		const AABB &region) {
+	Dictionary out;
+	if (mate == nullptr || !session_.has_adf() || !mate->session_.has_adf() || travel < 0.0) {
+		UtilityFunctions::push_error("SdfBody.fit: needs two bodies and a way in");
+		return out;
+	}
+	flush();
+	if (mate != this) {
+		mate->flush();
+	}
+	const Body &body = session_.body();
+	const Octree &octree = session_.octree();
+	Aabb box = bounds_.expanded(1.0f);
+	if (region.size.x > 0.0f && region.size.y > 0.0f && region.size.z > 0.0f) {
+		box = {to_vec(region.position), to_vec(region.position + region.size)};
+	}
+	const std::vector<SurfacePoint> points =
+			surface_points([&](vec3 p) { return octree.distance(body, p); }, box, 1.0f);
+	Pose pose;
+	pose.x = to_vec(start.basis.get_column(0));
+	pose.y = to_vec(start.basis.get_column(1));
+	pose.z = to_vec(start.basis.get_column(2));
+	pose.origin = to_vec(start.origin);
+	const Body &mate_body = mate->session_.body();
+	const Octree &mate_octree = mate->session_.octree();
+	const Fit f = fit_along(points, [&](vec3 p) { return mate_octree.distance(mate_body, p); }, pose, to_vec(axis),
+			float(travel), float(step));
+	out["kind"] = fit_name(f.kind);
+	out["stops_at"] = double(f.stops_at);
+	out["home"] = f.home;
+	out["seated"] = f.seated;
+	out["most"] = double(f.most);
+	out["clearance"] = double(f.clearance);
+	Array steps;
+	for (const FitStep &s : f.steps) {
+		Dictionary d;
+		d["t"] = double(s.t);
+		d["interference"] = double(s.interference);
+		d["seated"] = s.seated;
+		steps.push_back(d);
+	}
+	out["steps"] = steps;
+	out["points"] = f.points;
+	out["ms"] = f.ms;
 	return out;
 }
 
@@ -2357,6 +2429,10 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_part", "part", "wood"), &SdfBody::load_part);
 	ClassDB::bind_method(D_METHOD("scribe_lines", "lines", "depth"), &SdfBody::scribe_lines);
 	ClassDB::bind_method(D_METHOD("check_part", "part", "placement", "tolerance"), &SdfBody::check_part, DEFVAL(0.5));
+	ClassDB::bind_static_method("SdfBody", D_METHOD("joint_pose", "a_part", "a_feature", "b_part", "b_feature"),
+			&SdfBody::joint_pose);
+	ClassDB::bind_method(D_METHOD("fit", "mate", "start", "axis", "travel", "step", "region"), &SdfBody::fit, DEFVAL(0.5),
+			DEFVAL(AABB()));
 	ClassDB::bind_method(D_METHOD("load_tool", "name", "settings"), &SdfBody::load_tool, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
