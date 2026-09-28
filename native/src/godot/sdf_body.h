@@ -57,6 +57,10 @@ public:
 	// Builds a demo body by name (see sdf::demo::named_demo): "carved_panel", "blend_<i>",
 	// "material_<i>", "sphere", "session", "board", "board_oak", "board_walnut", "sanded".
 	bool load_demo(const godot::String &name);
+	// A blank of `wood` ("ash", "oak" or "walnut") to work on, `size` mm: its length (along
+	// the grain, body x) by its width (y) by its thickness (z), centred, arrises eased (core
+	// demo::stock). The workshop's "board" is 160 x 100 x 25.
+	bool load_stock(const godot::String &wood, const godot::Vector3 &size);
 	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
 	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
 	// cast shadows.
@@ -283,6 +287,7 @@ private:
 		bool crumbs = false;   // COMMIT: takes crumbs out (crumbling_)
 	};
 
+	void load_body(const Body &body, const Camera &camera); // a new body, framed by `camera`
 	void rebuild();                                // proxy mesh, textures and stats for a new body
 	// A tool's stroke engaged at p (body space), or null (with an error) for an unknown tool.
 	std::unique_ptr<tools::Stroke> make_stroke(const godot::String &tool, vec3 p, vec3 n, vec3 a,

@@ -27,16 +27,32 @@ const TABLE_TOP := Vector3(0.6, 0.04, 0.6)
 const RACK_AT := Vector3(-2.75, FLOOR, 1.0) # the middle of its foot, by the wall
 const RACK_SHELVES := [0.45, 0.9, 1.35] # heights above the floor
 const RACK_SIZE := Vector3(0.4, 1.6, 0.9) # deep (x), high, long (z)
-## Its stock: a stack of each wood's boards (SdfBody.load_demo's names) on the middle shelf,
-## in the woods' colours (core materials: between their early- and latewood).
-const STOCK := {"board": ["ash", Color(0.78, 0.67, 0.5)], "board_oak": ["oak", Color(0.68, 0.53, 0.35)],
-		"board_walnut": ["walnut", Color(0.36, 0.25, 0.17)]}
-const STOCK_BOARD := Vector3(0.1, 0.025, 0.16) # a board of it as it lies there (across, thick, long)
-const STACK := 5 # boards in a stack
+## Its stock (SdfBody.load_stock): a stack of each kind, boards on the middle shelf and the
+## mallet's blanks on the bottom one. Each kind: its "wood"; "size" (mm: long, along the
+## grain; wide; thick); what a piece of it is called ("kind"); the stack's "label"; the
+## "shelf" (of RACK_SHELVES) and where along it ("at", m from the rack's middle); how many
+## lie there ("count").
+const STOCK := {
+	"board": {"wood": "ash", "size": Vector3(160, 100, 25), "kind": "board", "label": "ash", "shelf": 1,
+			"at": -0.28, "count": 5},
+	"board_oak": {"wood": "oak", "size": Vector3(160, 100, 25), "kind": "board", "label": "oak", "shelf": 1,
+			"at": 0.0, "count": 5},
+	"board_walnut": {"wood": "walnut", "size": Vector3(160, 100, 25), "kind": "board", "label": "walnut",
+			"shelf": 1, "at": 0.28, "count": 5},
+	"handle_ash": {"wood": "ash", "size": Vector3(320, 35, 28), "kind": "handle blank", "label": "ash handles",
+			"shelf": 0, "at": -0.22, "count": 5},
+	"head_oak": {"wood": "oak", "size": Vector3(120, 70, 55), "kind": "mallet-head blank", "label": "oak heads",
+			"shelf": 0, "at": 0.1, "count": 3},
+	"strip_oak": {"wood": "oak", "size": Vector3(150, 30, 10), "kind": "strip", "label": "oak strips",
+			"shelf": 0, "at": 0.33, "count": 5},
+}
+## The woods' colours on the rack (core materials: between their early- and latewood).
+const WOOD_COLOUR := {"ash": Color(0.78, 0.67, 0.5), "oak": Color(0.68, 0.53, 0.35),
+		"walnut": Color(0.36, 0.25, 0.17)}
 
 var bench: StaticBody3D
 var table: StaticBody3D
-var stacks := {} # demo name -> its stack's static body (meta "stock": the name; "top": where the next board lies)
+var stacks := {} # stock kind -> its stack's static body (meta "stock": the kind; "top": where the next piece lies)
 var jaws: Array[MeshInstance3D] = []
 
 var _oak := _material(Color(0.3, 0.2, 0.13), 0.8)
@@ -59,7 +75,7 @@ func in_vise(point: Vector3) -> bool:
 
 ## The jaws closed on a piece `width` metres across the bench (or open, 0).
 func close_jaws(width: float) -> void:
-	var gap := clampf(width, 0.03, VISE.y - 2.0 * JAW.z) if width > 0.0 else VISE.y - 2.0 * JAW.z
+	var gap := clampf(width, 0.002, VISE.y - 2.0 * JAW.z) if width > 0.0 else VISE.y - 2.0 * JAW.z
 	for i in jaws.size():
 		var side := -1.0 if i == 0 else 1.0
 		jaws[i].position = Vector3(0.0, 0.5 * JAW.y, side * (0.5 * gap + 0.5 * JAW.z))
@@ -179,8 +195,8 @@ func _table() -> void:
 					TABLE_AT.z + sz * 0.26), _oak, false)
 
 
-## The lumber rack against the left wall: two uprights, a shelf at each height, and on the
-## middle one a stack of boards of each wood, labelled (E on a stack takes one: workshop.gd).
+## The lumber rack against the left wall: two uprights, a shelf at each height, and a stack
+## of each kind of stock (STOCK), labelled (E on a stack takes one: workshop.gd).
 func _rack() -> void:
 	for sz in [-1.0, 1.0]:
 		_box(Vector3(RACK_SIZE.x, RACK_SIZE.y, 0.05), RACK_AT + Vector3(0.0, 0.5 * RACK_SIZE.y, sz * 0.5 * RACK_SIZE.z),
@@ -188,30 +204,31 @@ func _rack() -> void:
 	for h in RACK_SHELVES:
 		var shelf := _box(Vector3(RACK_SIZE.x, 0.025, RACK_SIZE.z), RACK_AT + Vector3(0.0, h - 0.0125, 0.0), _pine, true)
 		shelf.set_meta("ground", true)
-	var names := STOCK.keys()
-	for i in names.size():
-		var wood: String = names[i]
-		var colour: Color = STOCK[wood][1]
-		var foot := RACK_AT + Vector3(0.0, RACK_SHELVES[1], (i - 1) * 0.28)
-		# Each board a shade apart, a little off square, as a stack is.
-		for k in STACK:
+	for name in STOCK:
+		var spec: Dictionary = STOCK[name]
+		var colour: Color = WOOD_COLOUR[spec.wood]
+		# As it lies there: across the shelf its width, up its thickness, along the rack its length.
+		var piece := Vector3(spec.size.y, spec.size.z, spec.size.x) * 0.001
+		var count: int = spec.count
+		var foot := RACK_AT + Vector3(0.0, RACK_SHELVES[spec.shelf], spec.at)
+		# Each piece a shade apart, a little off square, as a stack is.
+		for k in count:
 			var shade := _material(colour.darkened(0.06 * ((k * 7) % 3)), 0.8)
-			var off := Vector3(0.006 * ((k * 5) % 3 - 1), (k + 0.5) * STOCK_BOARD.y, 0.008 * ((k * 3) % 3 - 1))
-			_box(STOCK_BOARD - Vector3(0.0, 0.0005, 0.0), foot + off, shade, false)
-		var stack := _solid(Vector3(STOCK_BOARD.x, STACK * STOCK_BOARD.y, STOCK_BOARD.z),
-				foot + Vector3(0.0, 0.5 * STACK * STOCK_BOARD.y, 0.0))
-		stack.set_meta("stock", wood)
-		stack.set_meta("wood_name", STOCK[wood][0])
-		stack.set_meta("top", foot + Vector3(0.0, STACK * STOCK_BOARD.y, 0.0))
-		stacks[wood] = stack
+			var off := Vector3(0.006 * ((k * 5) % 3 - 1), (k + 0.5) * piece.y, 0.008 * ((k * 3) % 3 - 1))
+			_box(piece - Vector3(0.0, 0.0005, 0.0), foot + off, shade, false)
+		var stack := _solid(Vector3(piece.x, count * piece.y, piece.z), foot + Vector3(0.0, 0.5 * count * piece.y, 0.0))
+		stack.set_meta("stock", name)
+		stack.set_meta("wood_name", spec.wood)
+		stack.set_meta("top", foot + Vector3(0.0, count * piece.y, 0.0))
+		stacks[name] = stack
 		var label := Label3D.new()
-		label.text = STOCK[wood][0]
+		label.text = spec.label
 		label.pixel_size = 0.0008
-		label.font_size = 40
+		label.font_size = 40 if spec.shelf == 1 else 28
 		label.modulate = Color(0.95, 0.93, 0.88)
 		label.outline_size = 10
 		# Lying on the shelf in front of the stack, read from the room (its top towards the wall).
-		label.position = foot + Vector3(0.5 * STOCK_BOARD.x + 0.055, 0.001, 0.0)
+		label.position = foot + Vector3(0.5 * piece.x + 0.055, 0.001, 0.0)
 		label.rotation = Vector3(-PI / 2, PI / 2, 0.0)
 		add_child(label)
 

@@ -207,7 +207,7 @@ var settings := {
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
 	"layout": {"variant": "gauge", "distance": 6.0}, # a marking gauge (mm in from the edge) or a knife
 }
-var wood := "board" ## the board in the vise at the start (and set_wood's): board, board_oak or board_walnut
+var wood := "board" ## the piece in the vise at the start (and set_wood's): a stock kind (Room.STOCK)
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
 ## rate.
 var pace := 1.0
@@ -360,6 +360,10 @@ func enter_work(glide := true) -> bool:
 	_glide_from = player.camera.global_transform
 	_glide = 0.0 if glide else 1.0
 	_orbit.target = board.global_transform * board.get_body_bounds().get_center()
+	# All of a long piece in view (a handle stood on end): no nearer than it takes (nearer
+	# pieces keep the view as it was zoomed).
+	var extent := _extent(board, board.global_transform)
+	_orbit.distance = maxf(_orbit.distance, 0.55 * extent.size.length() / sin(deg_to_rad(_orbit.fov) * 0.5))
 	_orbit._apply()
 	_orbit.set_process_unhandled_input(true)
 	_orbit.make_current()
@@ -414,15 +418,17 @@ func interact() -> void:
 		take_stock(thing)
 
 
-## A new board from a stack on the rack (room.gd), into the hands: off the top of the stack,
-## lying as the stack's boards do, and carried from there. The stack stays as it was.
+## A new piece of stock from a stack on the rack (room.gd), into the hands: off the top of the
+## stack, lying as the stack's pieces do, and carried from there. The stack stays as it was.
 func take_stock(stack: Object) -> RigidBody3D:
 	if held != null:
 		return null
-	var piece := _new_piece(stack.get_meta("stock"))
-	# Its length (body x) along the stack's (the rack's, z), just clear of the top board.
+	var kind: String = stack.get_meta("stock")
+	var piece := _new_piece(kind)
+	# Its length (body x) along the stack's (the rack's, z), just clear of the top one.
 	var top: Vector3 = stack.get_meta("top")
-	piece.global_transform = Transform3D(Basis(Vector3.UP, PI / 2), top + Vector3(0.0, 0.0125 + 0.002, 0.0))
+	var half: float = 0.5 * MM * Room.STOCK[kind].size.z
+	piece.global_transform = Transform3D(Basis(Vector3.UP, PI / 2), top + Vector3(0.0, half + 0.002, 0.0))
 	pick_up(piece)
 	_hold_turn = Basis() # (brought round flat and across the view, as a board is carried)
 	return piece
@@ -594,7 +600,8 @@ func prompt() -> String:
 		return "E: pick up the %s" % _name_of(thing)
 	if thing.has_meta("stock"):
 		var wood_name: String = thing.get_meta("wood_name")
-		return "E: take %s %s board" % ["an" if "aeiou".contains(wood_name[0]) else "a", wood_name]
+		return "E: take %s %s %s" % ["an" if "aeiou".contains(wood_name[0]) else "a", wood_name,
+				Room.STOCK[thing.get_meta("stock")].kind]
 	return ""
 
 
@@ -1376,8 +1383,8 @@ func redo() -> void:
 		layout.redo_step(clamped, board.get_stats().get("steps", 0))
 
 
-## A fresh board of `choice` (board, board_oak, board_walnut) in the vise, and every other
-## piece, offcut and bit of debris cleared away.
+## A fresh piece of the stock kind `choice` (Room.STOCK: board, board_oak...) in the vise,
+## and every other piece, offcut and bit of debris cleared away.
 func set_wood(choice: String) -> void:
 	cancel()
 	let_go()
@@ -1549,14 +1556,16 @@ func _shapes_of(piece: RigidBody3D) -> Array:
 	return piece.get_children().filter(func(c): return c is CollisionShape3D)
 
 
-## A new piece of work: a board of `choice` (board, board_oak or board_walnut), loose.
+## A new piece of work: a piece of the stock kind `choice` (Room.STOCK: board, board_oak,
+## head_oak...), loose, lying flat on the bench top at its middle.
 func _new_piece(choice: String) -> RigidBody3D:
+	var spec: Dictionary = Room.STOCK[choice]
 	var sdf = ClassDB.instantiate("SdfBody")
-	sdf.load_demo(choice)
-	# Body millimetres, z up -> world metres, y up; the board's middle at the body's origin.
+	sdf.load_stock(spec.wood, spec.size)
+	# Body millimetres, z up -> world metres, y up; the piece's middle at the body's origin.
 	var local := Transform3D(Basis(Vector3.RIGHT, -PI / 2) * Basis.from_scale(Vector3.ONE * MM), Vector3.ZERO)
-	return _as_piece(sdf, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)),
-			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0125, 0.0)) * local, Room.STOCK.get(choice, ["wood"])[0], "board")
+	var on_top := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.5 * MM * spec.size.z, 0.0))
+	return _as_piece(sdf, on_top, on_top * local, spec.wood, spec.kind)
 
 
 ## An SdfBody made a piece of work: a rigid body at `at` (world) holding it where `placed`

@@ -262,6 +262,28 @@ bool SdfBody::load_demo(const String &name) {
 		UtilityFunctions::push_error("SdfBody: unknown demo ", name);
 		return false;
 	}
+	load_body(body, camera);
+	return true;
+}
+
+bool SdfBody::load_stock(const String &wood, const Vector3 &size) {
+	std::uint16_t material = 0;
+	if (!demo::wood_named(wood.utf8().get_data(), material) || size.x <= 0.0 || size.y <= 0.0 || size.z <= 0.0) {
+		UtilityFunctions::push_error("SdfBody.load_stock: no stock of ", wood, " ", size);
+		return false;
+	}
+	const vec3 s = to_vec(size);
+	// Framed as the board's demo camera frames it, scaled to its size.
+	const float scale = std::max(s.x, std::max(s.y, s.z)) / 160.0f;
+	Camera camera;
+	camera.eye = vec3(60, -170, 140) * scale;
+	camera.target = {0, 0, 0};
+	camera.fov_deg = 38;
+	load_body(demo::stock(material, s), camera);
+	return true;
+}
+
+void SdfBody::load_body(const Body &body, const Camera &camera) {
 	flush();
 	stroke_.reset();
 	update_overlay();
@@ -274,7 +296,6 @@ bool SdfBody::load_demo(const String &name) {
 	gpu_jobs_total_ = 0;
 	collect_gpu_stats();
 	rebuild();
-	return true;
 }
 
 namespace {
@@ -2118,6 +2139,7 @@ AABB SdfBody::get_body_bounds() const {
 
 void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_demo", "name"), &SdfBody::load_demo);
+	ClassDB::bind_method(D_METHOD("load_stock", "wood", "size"), &SdfBody::load_stock);
 	ClassDB::bind_method(D_METHOD("load_tool", "name", "settings"), &SdfBody::load_tool, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);

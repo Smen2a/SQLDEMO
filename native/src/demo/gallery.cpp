@@ -3,6 +3,7 @@
 #include "compile/octree.h"
 #include "tools/tools.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <random>
@@ -240,12 +241,26 @@ Camera carved_panel_camera() {
 	return c;
 }
 
-Body board(std::uint16_t material) {
-	// A flat-sawn board, 160 x 100 x 25 mm, arrises eased by a millimetre.
-	Body b = block(material, {80, 50, 12.5f}, 1.0f);
-	b.grain_origin = {0, 10, -60};
+Body stock(std::uint16_t material, vec3 size) {
+	// Flat-sawn: the pith 47.5 mm below the underside, a tenth of the width off centre, the
+	// axis tilted a little out of the face and across it.
+	const float ease = std::min(1.0f, 0.2f * std::min(size.x, std::min(size.y, size.z)));
+	Body b = block(material, size * 0.5f, ease);
+	b.grain_origin = {0, 0.1f * size.y, -(0.5f * size.z + 47.5f)};
 	b.grain_axis = gl::normalize(vec3(1, 0.04f, 0.08f));
 	return b;
+}
+
+Body board(std::uint16_t material) {
+	return stock(material, {160, 100, 25});
+}
+
+bool wood_named(const std::string &name, std::uint16_t &material) {
+	if (name == "ash" || name == "oak" || name == "walnut") {
+		material = name == "oak" ? mat::Oak : name == "walnut" ? mat::Walnut : mat::Ash;
+		return true;
+	}
+	return false;
 }
 
 Body sanded_block() {

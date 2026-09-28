@@ -174,6 +174,7 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| G0 | Stock in sizes: the rack holds kinds of stock (ash, oak and walnut boards; the mallet's blanks: ash handles, oak heads, oak strips), each a blank of its wood made to its size (`SdfBody.load_stock`). The vise's jaws close on thin pieces, and the view at the bench takes in a long one stood on end |
 | D3 | Small pieces become debris: a part under 30 mm³ that came away (down to specks) is taken out of the work rather than split off. The look for islands refines, collects every crumb and cuts them out together; the work keeps the rest as an undo step of its own, and each crumb comes away as a chunk of debris (its convex hull, coloured by the wood, that hull its collider). A saw's sliver under 30 mm³ goes the same way; undo straight after puts it back. On the way, `cut_out` learned to prove air clear beyond the octree's root cube (a crumb at the work's edge) |
 | T5-5 | Steering: pivoted mid-stroke, a chisel's bevel steers its depth (tipped past it, it dives; on it, level; under it, it lifts out); dragged round a curve, a chisel, gouge or plane follows the drag's trail, set afresh to the surface as it goes; the chain of segments swept as a few straight and quadratic sweeps |
 | T5-3 | Planes: the spokeshave's slot holds a block plane (a long sole held flat, started at the work's end), the block plane with a chamfer fence (held across an arris at 45°, or on the plane between two gauge lines: an even chamfer to the lines) and a shoulder plane (its iron flush with its sides: into a rebate's inside corner) |
@@ -189,7 +190,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 137 native tests (GCC and Clang, including golden images) and 16
+Test counts today: 137 native tests (GCC and Clang, including golden images) and 17
 headless Godot checks.
 
 ## 5. Where things stand
@@ -286,7 +287,25 @@ to try them together and then work on each. Next: what play turns up, tool by to
 
 Shavings and chips (D1), dust (D2), and small pieces (D3): parts under 30 mm³ that cuts
 free are taken out of the work and come away as chunks of debris, not pieces
-(docs/PLAN.md, D3). Next: Surface finish (3).
+(docs/PLAN.md, D3).
+
+### G. Making an object (under way: G0 done)
+
+The engine cuts like the real tools, but a player can't make anything yet: no goal, no
+idea what a piece is meant to become, no joining. The user chose (docs/PLAN.md, G):
+- a first object, a **wooden mallet** (an oak head with a through mortise, an ash handle
+  with a tenon, an oak wedge): the pickaxe's shape in wood, and once made, the mallet the
+  chisels are struck with;
+- **plans** as rectangular blanks with features on their faces, from a plan book of
+  presets or drawn on paper; laid on the piece in the vise as pencil lines, which the knife
+  and gauge snap onto; or a pencil on the wood;
+- **checking** as a guide (proud and short spots shown), with no score: the real shapes
+  decide whether joints go together;
+- **physical assembly**: offer a part up, it slides until the shapes bind, drive it with
+  the mallet, glue, wedge; one rigid body that can still be worked.
+
+Steps: G0 stock in sizes (done), G1a plans and transfer (next), G1b the sheet editor, G2
+checking, G3 assembly, G4 the mallet end to end. They go ahead of Surface finish and Bake.
 
 ### 3. Surface finish
 

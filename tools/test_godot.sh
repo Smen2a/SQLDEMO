@@ -91,6 +91,7 @@ if [[ "$GPU" == 0 ]]; then
 	check offcut_physics "offcut physics:" res://tests/offcut_physics.tscn
 	check island_split "island split: the rebate came away" res://tests/island_split.tscn
 	check crumbs "crumbs: the crumb came away" res://tests/crumbs.tscn
+	check stock "stock: the stock is as the rack says" res://tests/stock.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn

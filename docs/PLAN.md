@@ -17,8 +17,10 @@ This revision merges those into shared capabilities and keeps finished work to o
   them lines to obey, a guiding hand, planes and steering: all done, to be tried together
   in play.
 - **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut).
-- **Debris** (2) is done: D1 (shavings and chips), D2 (dust) and D3 (small pieces). Next:
-  Surface finish (3).
+- **Debris** (2) is done: D1 (shavings and chips), D2 (dust) and D3 (small pieces).
+- **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
+  paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
+  sizes) is done; G1a (plans, the mallet's preset, transfer, pencil) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -70,6 +72,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G0 | Stock in sizes (`demo::stock`, `SdfBody.load_stock`): the rack's stacks are kinds of stock, boards and the mallet's blanks (ash handles, oak heads, oak strips); the vise's jaws close down to 2 mm; stepping up to the bench, the view takes in a long piece. `stock` |
 | D3 | Small pieces: a part under 30 mm³ that came away (crumbs, down to specks) is taken out of the work, not split off. The look for islands refines first, collects every crumb it holds and cuts them out together (`cut_out` over a set of parts), and the work keeps the rest with one `Op::Keep` step; each crumb comes away as a chunk of debris, its convex hull (`pieces/hull.h`) coloured by the wood, with that hull for its collider (`crumbled`). A saw's sliver under 30 mm³ goes the same way. Undo straight after puts it back. On the way: `cut_out` proves air clear beyond the octree's root cube (a crumb at the work's edge). `crumbs` |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
@@ -97,6 +100,7 @@ path needs compute passes.
 | W5 | **A workshop to work in**: walk, carry, clamp, take stock; pieces that lie still (done) | the fixed bench view, tools on the table | Pieces (rigid bodies) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
 | 2 | **Debris**: removed material made visible (done) | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
+| G | **Making an object**: plans on paper (presets or drawn), parts, assembly; first object a mallet (under way) | — | Tools, layout (T5), Pieces |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
 | 4 | **Bake**: meshes for distance display, physics and export | E4 | Pieces (shapes), finish (maps) |
 | 5 | **Assemblies**: joints, fit and strength, one rigid body | E5 | Pieces, Bake |
@@ -804,6 +808,78 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
     down on top of the box;
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
+
+## G. Making an object (current: G0 done)
+The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
+no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
+a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
+a tenon, and an oak wedge. It rehearses the pickaxe (head, handle, wedge) in wood, and
+finished, it can be the mallet the chisels are struck with. Decided with the user:
+- **Plans:** a part is a rectangular blank with features on its faces (cut to length,
+  hole or mortise, notch or rebate, tenon, kerf, taper, chamfer). Presets are the same
+  data; the player can draw new ones on paper, or draw on the wood with a pencil.
+- **Checking:** the drawing guides, and the real shapes decide whether joints go
+  together. An optional check shows where a part is proud of its drawing or short of it.
+  No score.
+- **Assembly is physical:** a part is offered up to its mate and slides along the joint
+  until the shapes bind; a tight fit is driven home with the mallet, glue sets, a wedge
+  locks it. The result is one rigid body that can still be worked.
+
+**Order.** Plans come first: assembly needs to know which pieces are which parts and where
+they meet, and the plan is what says so. G goes ahead of Surface finish and Bake, neither
+of which blocks making an object.
+
+**The player's way through it:**
+1. At the side table, a plan book (presets) and a pad of paper: a sheet per part, each in
+   three views with dimensions; a parts list with each part's state; joint call-outs.
+2. Stock from the rack.
+3. Lay out: the part's sheet in hand (the Layout slot), placed on the piece in the vise from
+   a reference corner (face side and face edge); a click puts pencil lines on every face
+   the part's features touch (an undo step), and the piece is tagged as that part.
+4. Cut to the lines: pencil only guides; the knife and gauge snap onto it, and their lines
+   stop the tools (T5-2). A quick option scribes the lines as they are transferred.
+5. Check (optional).
+6. Assemble: offer up, bind or go home, drive, glue, wedge; saw flush in the vise.
+
+**The data** (`game/plans/*.json` presets, `user://plans/` the player's): a plan's parts and
+joints. A part: its blank (L × W × T mm, x along the grain; face side +z, face edge +y) and
+features. Each feature compiles into pencil lines (knife across the grain, gauge along it)
+and into the part's intended solid (the blank less its features, an SDF body) for checks,
+ghosts and each joint's pose. A joint pairs two parts' features with an insertion axis.
+On a piece: meta `part = {plan, part, placement}` (part space to body space).
+
+**Steps:**
+- **G0** — stock in sizes (done, below).
+- **G1a** — plans in the core (`plans/part`: part solids and lines), the mallet's preset,
+  the plan book and viewer, transfer to pencil marks, the pencil, knife and gauge snapping
+  to pencil. Test `plan_transfer`.
+- **G1b** — the sheet editor: blanks and features drawn on the views, parts and joints,
+  saved plans. Test `plan_editor`.
+- **G2** — checking a part: proud and short spots against its solid, shown as dots and
+  named. Test `check_part`.
+- **G3** — assembly: the fit of a part moving into another along an axis (won't go,
+  drives, snug, loose), assemblies as one rigid body (tools on the part hit), offer up,
+  mallet taps, glue, the wedge. Tests `test_fit`, `assembly`.
+- **G4** — the mallet end to end (`mallet_build`), the chopping time measured (a brace
+  and bit if it is too slow), the finished mallet as a tool.
+
+### G0 — stock in sizes (done)
+- **`demo::stock(material, size)`:** a blank of a wood, `size` mm (length along x, the
+  grain), flat-sawn (the pith 47.5 mm below it), arrises eased by a millimetre (less on
+  stock under 5 mm). The board is `stock(…, {160, 100, 25})`, unchanged.
+  `SdfBody.load_stock(wood, size)` makes one ("ash", "oak", "walnut").
+- **The rack** (`room.gd` `STOCK`): a stack of each kind, its wood, size, name, shelf and
+  place. The boards stay on the middle shelf; ash handle blanks (320 × 35 × 28), oak head
+  blanks (120 × 70 × 55) and oak strips (150 × 30 × 10) lie on the bottom one. A piece is
+  named by its kind ("an oak mallet-head blank").
+- **The vise** already held a piece flat, on edge or on end. Its jaws closed no nearer
+  than 30 mm, so a board on edge or a handle blank stood loose between them: now down to
+  2 mm. Stepping up to the bench, the view backs off to take in a long piece (a handle
+  blank on end: 0.52 m); nearer pieces keep the view as it was zoomed.
+- **Measured** (`game/tests/stock`): every kind its size to 0.5 mm; its volume 96–99% of
+  its box (the eased arrises, and the ADF's volume, which counts about 0.1 mm short all
+  round the surface: a known bias of its voxel count); each clamped three ways, squared
+  and standing on the bench top between closed jaws.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

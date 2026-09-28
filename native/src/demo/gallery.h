@@ -33,8 +33,13 @@ std::vector<Tile> material_tiles();
 Body carved_panel_body();
 Camera carved_panel_camera();
 
+// A blank of wood to work on: `size` mm (length along x, the grain; width y; thickness z),
+// centred, flat-sawn, arrises eased by a millimetre (less on stock under 5 mm).
+Body stock(std::uint16_t material, vec3 size);
 // A plain board to work on, 160 x 100 x 25 mm, in the given wood.
 Body board(std::uint16_t material);
+// The wood of that name ("ash", "oak", "walnut"): its material id. False for others.
+bool wood_named(const std::string &name, std::uint16_t &material);
 
 // A demo body and a camera that frames it, by name, shared by the tools and the Godot node:
 // "carved_panel", "blend_<i>" and "material_<i>" (gallery tiles), "sphere" (a walnut ball

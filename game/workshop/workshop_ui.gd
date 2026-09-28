@@ -49,7 +49,7 @@ const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane f
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
-		"E: pick up, let go (over the vise: into it), take a board from the rack, work at the bench   F: out of the vise   R: turn what you carry"
+		"E: pick up, let go (over the vise: into it), take stock from the rack, work at the bench   F: out of the vise   R: turn what you carry"
 
 var workshop
 

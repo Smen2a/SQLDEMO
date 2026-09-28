@@ -13,8 +13,12 @@ read [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 Open `game/` in Godot 4.7 and press F5 (or run `godot --path game`). You stand in a small
 workshop, seen through your own eyes: a workbench with a vise in the middle of its top, an
 ash board clamped in it, a side table to its right, and a lumber rack against the left wall
-with stacks of ash, oak and walnut boards. The room is built in code (`game/workshop/room.gd`);
-the world is in metres, the bench top at y = 0 with the vise at its middle.
+with stacks of stock: ash, oak and walnut boards (160 × 100 × 25 mm) on the middle shelf,
+and on the bottom one the blanks for a mallet: ash handle blanks (320 × 35 × 28), oak head
+blanks (120 × 70 × 55) and oak strips (150 × 30 × 10). Each is a blank of its wood,
+flat-sawn, its arrises eased by a millimetre (`SdfBody.load_stock`). The room is built in
+code (`game/workshop/room.gd`); the world is in metres, the bench top at y = 0 with the
+vise at its middle.
 
 **Walking** (`game/workshop/player.gd`, a first-person `CharacterBody3D`):
 - **WASD** or the arrows walk (1.5 m/s), **Shift** hurries (3 m/s), the mouse looks about.
@@ -28,7 +32,7 @@ the world is in metres, the bench top at y = 0 with the vise at its middle.
   ash, walnut, cork and abrasive.
 - **E** does what the line under the crosshair says, within 2 m:
   - on a piece of work lying about (a board, an offcut): **pick it up**;
-  - on a stack on the rack: **take a new board** of that wood into your hands;
+  - on a stack on the rack: **take a new piece** of that stock into your hands;
   - on the bench, or the piece in the vise: **step up to the bench** (below);
   - carrying something: **let go** of it.
 - **Carrying.** A piece in your hands is held in front of your eyes, turned as you turn. It
@@ -39,7 +43,9 @@ the world is in metres, the bench top at y = 0 with the vise at its middle.
 - **The vise.** Let go with the crosshair on the vise (the bench top between its jaws) and
   the piece goes in, squared: the way through it nearest the vertical turned exactly up
   (a board flat, on edge or on end, as you held it), the longer of the other two along the
-  bench, set on the bench top in the middle of the vise. The jaws close on it. The vise
+  bench, set on the bench top in the middle of the vise. The jaws close on it (down to
+  2 mm apart); stepping up to the bench, the view backs off to take in a long piece (a
+  handle blank stood on end). The vise
   holds one piece: with one in it, letting go there just drops what you carry. **F** on
   the piece in the vise takes it out into your hands, its cuts and its undo history with it.
 
@@ -1218,7 +1224,9 @@ The Godot tests come in two tiers:
   - sawdust is the kerf taken and heaps up; sanding dust lies on the face;
   - the workshop walked and worked in (`walk_and_carry`): the hotbar, walking, carrying,
     the vise squaring what goes in it, a board from the rack worked at the bench and
-    carried away with its cut.
+    carried away with its cut;
+  - the rack's stock (`stock`): every kind its wood and size, clamped flat, on edge and on
+    end.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.
