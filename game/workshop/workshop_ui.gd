@@ -38,8 +38,13 @@ const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 ## Sanding blocks' grits, coarse to fine.
 const GRITS := [60, 80, 120, 180, 240, 320]
 const SLOT := Vector2(92, 40) # a hotbar slot's size (pixels)
-const HINTS := "Left-drag on the board: use the tool   C: chop   Tab: variant   Q / E: skew or turn\n" + \
-		"Hold right first: plan it and see it (wheel: how hard, Ctrl+wheel: finely, Shift+wheel: angle), then left-drag: make it\n" + \
+const GAUGE_SIZE := Vector2(240, 104) # the attitude gauge's (pixels)
+const DIAL := 25.0 # its dials' radius
+## How a chisel's or gouge's bevel meets the work (workshop.attitude()): words and colour.
+const BITES := {"rides": ["rides its bevel", Color(0.55, 0.8, 1.0)], "bites": ["bites", Color(0.5, 1.0, 0.5)],
+		"digs in": ["digs in", Color(1.0, 0.5, 0.3)], "chops": ["chops", Color(1.0, 0.85, 0.35)]}
+const HINTS := "Left-drag on the board: use the tool   Right-drag: the guiding hand pivots it on its edge (up / down: angle, left / right: skew or turn, wheel: lean; Ctrl: finely)\n" + \
+		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   C: chop   Tab: variant   Q / E: skew or turn by 15°\n" + \
 		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
 		"E: pick up, let go (over the vise: into it), take a board from the rack, work at the bench   F: out of the vise   R: turn what you carry"
@@ -56,6 +61,7 @@ var _redo: Button
 var _status: Label
 var _hints: Label
 var _plan: Label  # beside the pointer: what the stroke being planned or made comes to
+var _gauge: Control # by the pointer while the guiding hand has the tool: its attitude
 var _left: Control   # the tool's settings (at the bench)
 var _right: Control  # the wood, undo, pace... (at the bench)
 var _crosshair: Label
@@ -214,6 +220,11 @@ func _ready() -> void:
 	_plan.add_theme_constant_override("shadow_offset_x", 1)
 	_plan.add_theme_constant_override("shadow_offset_y", 1)
 	root.add_child(_plan)
+	_gauge = Control.new()
+	_gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_gauge.size = GAUGE_SIZE
+	_gauge.draw.connect(_draw_gauge)
+	root.add_child(_gauge)
 	refresh()
 
 
@@ -333,17 +344,95 @@ func update_status() -> void:
 	elif line != "" or workshop.is_engaged():
 		pass
 	elif workshop.current != "":
-		line = "left-drag: use it   hold right: plan it first"
+		line = "left-drag: use it   right-drag: pivot it   hold Space: plan it first"
 	_plan.text = line
 	# Below and right of the pointer; left of it where the line would run off the view.
-	var pointer: Vector2 = workshop.get_viewport().get_mouse_position()
+	var pointer: Vector2 = workshop.pointer_at()
 	var at: Vector2 = pointer + Vector2(18, 14)
 	var size := _plan.get_combined_minimum_size()
 	if at.x + size.x > view.x - 8.0:
 		at.x = maxf(8.0, pointer.x - 18.0 - size.x)
 	at.y = clampf(at.y, 8.0, maxf(8.0, view.y - 8.0 - size.y))
 	_plan.position = at
+	# The attitude gauge above and left of the pointer (right of it by the view's left edge).
+	_gauge.visible = workshop.attitude_shown() and workshop.current != "" and workshop.current != "layout"
+	if _gauge.visible:
+		var g := pointer + Vector2(-GAUGE_SIZE.x - 14.0, -GAUGE_SIZE.y - 10.0)
+		if g.x < 8.0:
+			g.x = pointer.x + 18.0
+		g.y = maxf(g.y, 8.0)
+		_gauge.position = g
+		_gauge.queue_redraw()
 	_update_line()
+
+
+## The guiding hand's hold on the tool, in words: a chisel's or gouge's angle and how its
+## bevel meets the work, its skew; another's turn; the lean (a rasp's tilt).
+func attitude_text() -> String:
+	return "   ".join(_attitude_parts())
+
+
+func _attitude_parts() -> Array[String]:
+	var a: Dictionary = workshop.attitude()
+	var parts: Array[String] = []
+	if a.has("angle"):
+		parts.append("%.1f° to the work, %s" % [a.angle, BITES[a.bite][0]])
+		parts.append("skew %.0f°" % a.skew)
+	else:
+		parts.append("turned %.0f°" % wrapf(a.turn, -180.0, 180.0))
+	if a.tool in workshop.LEANS or a.tool == "rasp":
+		parts.append(("tilt %.1f°" if a.tool == "rasp" else "lean %.1f°") % a.lean)
+	return parts
+
+
+## The attitude gauge: the tool seen side on at its angle to the work (a chisel's or
+## gouge's: its bevel's colour says how it meets the work), from above (its skew, or its
+## turn), end on (its lean); and in words.
+func _draw_gauge() -> void:
+	var a: Dictionary = workshop.attitude()
+	var font := ThemeDB.fallback_font
+	var dim := Color(1, 1, 1, 0.45)
+	var ink := Color(1, 1, 1, 0.9)
+	var tool_colour: Color = workshop.TOOL_COLOURS.get(a.tool, Color.WHITE).lightened(0.2)
+	_gauge.draw_rect(Rect2(Vector2.ZERO, GAUGE_SIZE), Color(0.05, 0.05, 0.06, 0.72))
+	var centres := [Vector2(40, 34), Vector2(120, 34), Vector2(200, 34)]
+	# Side on: the work's face, and the tool rising from its edge at its angle.
+	var c: Vector2 = centres[0] + Vector2(DIAL * 0.7, DIAL * 0.6)
+	_gauge.draw_line(c - Vector2(DIAL * 1.4, 0), c + Vector2(DIAL * 0.3, 0), dim, 2.0)
+	if a.has("angle"):
+		var up := Vector2(-cos(deg_to_rad(a.angle)), -sin(deg_to_rad(a.angle)))
+		var bite: Color = BITES[a.bite][1]
+		_gauge.draw_line(c, c + up * DIAL * 1.5, tool_colour, 3.0)
+		# The bevel: its angle, under the blade (where it would ride flat).
+		var bevel := Vector2(-cos(deg_to_rad(a.bevel)), -sin(deg_to_rad(a.bevel)))
+		_gauge.draw_line(c, c + bevel * DIAL * 0.9, bite, 2.0)
+	else:
+		_gauge.draw_line(c + Vector2(-DIAL * 1.2, -3), c + Vector2(0, -3), tool_colour, 3.0)
+	# From above: the way it goes (up), and its edge across (a chisel's or gouge's, skewed) or
+	# the tool turned.
+	c = centres[1]
+	_gauge.draw_arc(c, DIAL, 0.0, TAU, 32, dim, 1.0)
+	if a.has("skew"):
+		_gauge.draw_line(c + Vector2(0, DIAL * 0.8), c - Vector2(0, DIAL * 0.8), dim, 1.0)
+		var edge := Vector2.RIGHT.rotated(deg_to_rad(a.skew)) * DIAL * 0.8
+		_gauge.draw_line(c - edge, c + edge, tool_colour, 3.0)
+	else:
+		var way := Vector2.UP.rotated(-deg_to_rad(a.turn)) * DIAL * 0.8
+		_gauge.draw_line(c - way, c + way, tool_colour, 3.0)
+		_gauge.draw_circle(c + way, 3.0, tool_colour)
+	# End on: the work's face, and the tool's leaned on it.
+	c = centres[2] + Vector2(0, DIAL * 0.6)
+	_gauge.draw_line(c - Vector2(DIAL, 0), c + Vector2(DIAL, 0), dim, 2.0)
+	var across := Vector2.RIGHT.rotated(-deg_to_rad(a.lean)) * DIAL * 0.8
+	var normal := Vector2.UP.rotated(-deg_to_rad(a.lean)) * DIAL * 0.9
+	_gauge.draw_line(c - across + normal * 0.1, c + across + normal * 0.1, tool_colour, 3.0)
+	_gauge.draw_line(c + normal * 0.1, c + normal, tool_colour, 1.0)
+	# In words: the angle (a chisel's or gouge's), then the rest.
+	var parts := _attitude_parts()
+	var lines := [parts[0], "   ".join(parts.slice(1))] if a.has("angle") else ["   ".join(parts), ""]
+	for i in 2:
+		_gauge.draw_string(font, Vector2(8, GAUGE_SIZE.y - 24 + 16 * i), lines[i], HORIZONTAL_ALIGNMENT_LEFT,
+				GAUGE_SIZE.x - 16, 12, ink)
 
 
 ## The status line: the board's edits and how long they took, the frame's GPU time.

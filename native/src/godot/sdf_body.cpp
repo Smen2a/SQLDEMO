@@ -413,6 +413,8 @@ Array SdfBody::tool_catalog() {
 		d["width"] = double(v.chisel.width);
 		d["bevel"] = double(v.chisel.bevel_deg);
 		d["mallet"] = double(v.chisel.mallet);
+		d["skew"] = double(v.chisel.skew_deg);      // (its own: a skew chisel's)
+		d["flat"] = v.chisel.kind == gl::SDF_TOOL_FLAT; // (only a flat edge skews)
 		out.push_back(d);
 	}
 	for (const tools::RaspVariant &v : tools::rasp_catalog()) {

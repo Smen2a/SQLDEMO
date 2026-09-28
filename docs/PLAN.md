@@ -76,6 +76,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W5 | A workshop to work in: a room built in code (bench and vise, side table, lumber rack), a first-person player, tools on a hotbar (none on the table), every piece of work a rigid body you pick up and carry, the vise squaring what is let go on it, the rack's stacks giving new boards; the old bench view is the work view you step into at the vise |
 | W5-5 | Pieces and debris land and lie still: Jolt named (DEFAULT had been GodotPhysics3D), debris resting on the board in the vise, CCD and a plane floor, guarded pushes and vise, old debris fading. `physics_calm` |
 | T5-1 | Laying out (the Layout slot, 9): a marking gauge (its fence riding the nearest edge, the wheel for its distance) and a knife with a square, each scribing a real V line 0.3 mm deep and recording a mark on the piece (body space, undone with its cut), drawn while a tool is in hand |
+| T5-4 | The guiding hand: right-drag pivots the tool on its edge (up / down its angle to the work, left / right its skew or turn, the wheel its lean: rolled about its way), hovering or planned, the pointer held where it was; Space plans (Shift+wheel's angle went); an attitude gauge by the pointer (side on with the bevel riding, biting or digging in, from above, end on, in words). `guiding_hand` |
 | T5-2 | The lines stop the tools (`tools/layout.h`: `Stop`, `Limits`, `limit_plan`): flat on a face, a depth line beside is a floor, a line on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square, no lift-out); across the corner, the plane through lines on both faces is a chamfer the tool is laid on and cuts down to, and no further; the saw snaps onto a knife line and stops at a depth line. Rasps, scraper and block keep to the floor and the waste strip. Alt crosses them. `layout_lines` |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
@@ -428,6 +429,33 @@ walnut.
     (3 × 3 / 2) of section, 1.50 mm down halfway, the last pass taking nothing; a knife line
     stopping a pass square (0.300 mm deep 1.5 mm before it, nothing 1.5 mm past); Alt
     crossing it; the saw stopping at a 5 mm depth line (5.00 mm).
+
+  - **T5-4, the guiding hand** (done). Right press takes the tool (`begin_pivot`: the
+    mouse held, the orbit's wheel zoom off); the motion pivots it (`pivot(relative,
+    fine)`, 0.25° a pixel, Ctrl a fifth), the wheel leans it (`lean`, 2.5° a notch), and
+    right release puts the pointer back (`end_pivot`). Per tool:
+    - chisel, gouge: up / down the angle (paring kept below 60°, a chop at or above:
+      C switches), left / right the skew (drawn on the edge's outline, with a skew
+      chisel's own: the catalog now gives `skew` and `flat`), the wheel the lean;
+    - saw, spokeshave: left / right the turn, the wheel the lean (the saw's kerf
+      bevelled);
+    - rasp: left / right the turn, the wheel its tilt;
+    - scraper, sanding block, sponge: left / right the turn (the core scraper has no
+      tilt to give).
+
+    The lean is the workshop's: the normal the stroke and its plan are given is rolled
+    about the way the tool goes (`_leaned`), so every rule of the core holds for the
+    leaned tool (a floor held to a line, too). A chisel's model is held at its angle when
+    the hand lets go (or the stroke begins), not at every motion. Planning moved to Space
+    (held; `lock()` and `unlock()` are unchanged, so tests drive them as before), and
+    Shift+wheel's angle went; `adjust(steps, true)` still sets it. The attitude gauge
+    (`workshop_ui.gd`) shows while the hand has the tool and 1.5 s after. Mid-stroke the
+    hand does nothing yet: T5-5. `guiding_hand` drives it all through the input handler:
+    10° for 40 pixels up, 5° of skew for 20 right, 5° of lean for two notches, a fifth with
+    Ctrl, paring kept paring and a chop a chop, a plan pivoted under its bevel's clearance
+    skating (and the gauge saying it rides), Space's plan dropped when it comes up, a 5°
+    lean cutting 0.65 mm deep 4 mm to one side of a 0.3 mm pass and nothing 4 mm to the
+    other, the rasp tilted, the block turned.
 
 **Left for later:** a view model per tool that looks held (it floats at a fixed offset);
 putting tools down; the rack's stacks running out; a vise that holds a piece off the bench

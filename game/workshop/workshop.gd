@@ -141,13 +141,24 @@ const INTENSITY := {
 	"sanding_sponge": ["pressure", 0.25, 0.25, 3.0, "pressure %.2f"],
 	"layout": ["distance", 0.5, 1.0, 60.0, "%.1f mm in"], # (the marking gauge's)
 }
-## And what Shift+wheel sets (a chisel's or gouge's angle to the work: 60 or more chops).
+## And the angle the guiding hand tilts (a chisel's or gouge's to the work: 60 or more chops;
+## a rasp's about its line, its lean). adjust(steps, true) sets it too.
 const TILT := {
 	"chisel": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
 	"gouge": ["angle", 1.0, 10.0, 90.0, "%.0f° to the work"],
 	"rasp": ["tilt", 5.0, -60.0, 60.0, "tilted %.0f°"],
 }
 const CHOP_ANGLE := 60.0
+## The guiding hand (right-drag): degrees the tool pivots for a pixel of the pointer's motion
+## (Ctrl: a fifth as far), and a notch of the wheel leans it.
+const PIVOT_RATE := 0.25
+const LEAN_STEP := 2.5
+const LEAN_LIMIT := 30.0
+## The tools it leans: rolled about the way they go (the saw: a bevelled kerf). The rasp's
+## lean is its tilt.
+const LEANS := ["chisel", "gouge", "saw", "spokeshave"]
+## Seconds the attitude gauge stays by the pointer once the hand lets the tool go.
+const ATTITUDE_LINGER := 1.5
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
 const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.0, "spokeshave": 40.0,
 		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
@@ -170,13 +181,13 @@ const TOOL_COLOURS := {
 const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
 ## Per tool: a chisel's or gouge's variant (SdfBody.tool_catalog()), depth (mm, at most),
-## angle to the work and skew (degrees); grit and pressure (1: an ordinary hand's worth).
+## angle to the work, skew and lean (degrees); grit and pressure (1: an ordinary hand's worth).
 var settings := {
-	"chisel": {"variant": "bench_12", "depth": 0.2, "angle": 30.0, "skew": 0.0, "blow": 1.0},
-	"gouge": {"variant": "gouge_7_12", "depth": 0.3, "angle": 30.0, "skew": 0.0, "blow": 1.0},
-	"saw": {"pressure": 1.0}, # ("feed": a set feed, either way, for tests)
+	"chisel": {"variant": "bench_12", "depth": 0.2, "angle": 30.0, "skew": 0.0, "lean": 0.0, "blow": 1.0},
+	"gouge": {"variant": "gouge_7_12", "depth": 0.3, "angle": 30.0, "skew": 0.0, "lean": 0.0, "blow": 1.0},
+	"saw": {"pressure": 1.0, "lean": 0.0}, # ("feed": a set feed, either way, for tests)
 	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
-	"spokeshave": {"depth": 0.1},
+	"spokeshave": {"depth": 0.1, "lean": 0.0},
 	"scraper": {"pressure": 1.0},
 	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
@@ -219,7 +230,11 @@ var _pointer := Vector2.ZERO
 var _hit := {}            # the board under the pointer (SdfBody.raycast)
 var _state := IDLE
 var _engaged := false     # a stroke is on the board (ACTING)
-var _right_held := false
+var _plan_held := false   # Space (or lock()) held: a stroke is planned first, and the next after it
+var _pivoting := false    # the right button held: the guiding hand has the tool
+var _pivot_from := Vector2.ZERO # where the pointer was when it took it (it comes back there)
+var _refit := false       # the tool's model is to be held at its new angle
+var _attitude_shown := 0.0 # s the attitude gauge stays by the pointer
 ## The stroke being planned or made: {"point", "normal" (world), "plane", "along" (the
 ## tool's facing), "path" (unit, the direction it works in), "length" (mm), "seed",
 ## "direct" (made without a plan)}.
@@ -343,6 +358,7 @@ func leave_work() -> void:
 	if mode == Mode.WALK:
 		return
 	cancel()
+	end_pivot()
 	_walk()
 	_ui.refresh()
 
@@ -590,6 +606,7 @@ func _show_tool_in_hand() -> void:
 func select_tool(tool: String) -> void:
 	if _engaged:
 		release()
+	end_pivot()
 	_drop_plan()
 	current = tool
 	_opacity = 0.0
@@ -644,11 +661,11 @@ func _surface_at(position: Vector2) -> Dictionary:
 	return hit
 
 
-## Right button down: locks a stroke in where the pointer is on the board (the tool in hand
-## set on the surface there), and plans it towards the pointer.
+## Space down: locks a stroke in where the pointer is on the board (the tool in hand set on
+## the surface there), and plans it towards the pointer.
 ## `free` (Alt): no edge lock.
 func lock(position: Vector2, free := false) -> void:
-	_right_held = true
+	_plan_held = true
 	if _state != IDLE or current == "" or current == "layout":
 		return
 	hover_screen(position)
@@ -766,11 +783,149 @@ func _snap(asked: Vector3) -> void:
 		settings[current].depth = clampf(snappedf(-edge.step, 0.01), spec[2], spec[3])
 
 
-## Right button up: a plan not acted on is dropped; a stroke in progress carries on.
+## Space up: a plan not acted on is dropped; a stroke in progress carries on.
 func unlock() -> void:
-	_right_held = false
+	_plan_held = false
 	if _state == PLANNING:
 		_drop_plan()
+
+
+# --- the guiding hand ----------------------------------------------------------------------
+
+## Right button down: the guiding hand takes the tool in hand. The pointer stays where it is
+## (the mouse is held), and its motion pivots the tool on its edge (pivot()); the wheel leans
+## it (lean()). Hovering or planning (the plan follows live); not yet mid-stroke.
+func begin_pivot() -> void:
+	if current == "" or current == "layout" or _engaged or mode != Mode.WORK:
+		return
+	_pivoting = true
+	_pivot_from = _pointer
+	_attitude_shown = ATTITUDE_LINGER
+	_orbit.wheel_zoom = false # (the wheel leans it)
+	if DisplayServer.get_name() != "headless":
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Right button up: the hand lets go, and the pointer is back where it was, over the edge.
+func end_pivot() -> void:
+	if not _pivoting:
+		return
+	_pivoting = false
+	_attitude_shown = ATTITUDE_LINGER
+	_orbit.wheel_zoom = _state != PLANNING and current != "layout"
+	_refit_tool()
+	if DisplayServer.get_name() != "headless":
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		Input.warp_mouse(_pivot_from)
+
+
+func is_pivoting() -> bool:
+	return _pivoting
+
+
+## Where the pointer is on the view (while the guiding hand has the tool, where it was).
+func pointer_at() -> Vector2:
+	return _pivot_from if _pivoting else get_viewport().get_mouse_position()
+
+
+## The guiding hand moves `relative` pixels. Up and down raise and lower the handle: a
+## chisel's or gouge's angle to the work (paring stays below a chop, a chop above it: C goes
+## between them). Left and right skew its edge across the push, or turn another tool about
+## the surface. `fine` (Ctrl): a fifth as far.
+func pivot(relative: Vector2, fine := false) -> void:
+	if current == "" or current == "layout" or _engaged:
+		return
+	var rate := PIVOT_RATE / (5.0 if fine else 1.0)
+	_attitude_shown = ATTITUDE_LINGER
+	if current == "chisel" or current == "gouge":
+		var s: Dictionary = settings[current]
+		var lo := CHOP_ANGLE if is_chopping() else float(TILT[current][2])
+		var hi := float(TILT[current][3]) if is_chopping() else CHOP_ANGLE - 1.0
+		var angle := clampf(s.angle - relative.y * rate, lo, hi)
+		if angle != s.angle:
+			s.angle = angle
+			_refit = true # (its model is held at its angle: set once the hand lets go)
+		s.skew = clampf(s.skew + relative.x * rate, -45.0, 45.0)
+	else:
+		yaw -= deg_to_rad(relative.x * rate)
+		if _state == PLANNING and not _faces_its_path():
+			_lock.along = _lock.path.rotated(_lock.normal, yaw)
+	_held_changed()
+
+
+## The wheel while the guiding hand has the tool: `steps` notches of lean, the tool rolled
+## about the way it goes (a chisel's corner lower, a gouge rolled, a saw's kerf bevelled; a
+## rasp's tilt). `fine` (Ctrl): a fifth of a notch.
+func lean(steps: int, fine := false) -> void:
+	if _engaged:
+		return
+	if current == "rasp":
+		var spec: Array = TILT.rasp
+		var step: float = spec[1] / 5.0 if fine else spec[1]
+		settings.rasp.tilt = clampf(settings.rasp.tilt + step * steps, spec[2], spec[3])
+	elif current in LEANS:
+		var step := LEAN_STEP / (5.0 if fine else 1.0)
+		settings[current].lean = clampf(settings[current].lean + step * steps, -LEAN_LIMIT, LEAN_LIMIT)
+	else:
+		return
+	_attitude_shown = ATTITUDE_LINGER
+	_held_changed()
+
+
+## The tool's attitude, for the gauge by the pointer: {"tool", "turn" (degrees about the
+## surface), "lean"}; a chisel's or gouge's also "angle" (to the work), "skew", "bevel", and
+## "bite": how its bevel meets the work mid-face (core tools/cutting): "rides" (it skates,
+## not tipped 2 degrees past its bevel), "bites" (it dives at the difference), "digs in" (more
+## than 8 degrees past), or "chops".
+func attitude() -> Dictionary:
+	var s: Dictionary = settings.get(current, {})
+	var a := {"tool": current, "turn": rad_to_deg(yaw),
+			"lean": s.get("tilt", 0.0) if current == "rasp" else s.get("lean", 0.0)}
+	if current == "chisel" or current == "gouge":
+		var bevel: float = variant().get("bevel", 25.0)
+		a.angle = s.angle
+		a.skew = s.skew
+		a.bevel = bevel
+		if is_chopping():
+			a.bite = "chops"
+		elif s.angle < bevel + 2.0:
+			a.bite = "rides"
+		elif s.angle <= bevel + 8.0:
+			a.bite = "bites"
+		else:
+			a.bite = "digs in"
+	return a
+
+
+## Whether the attitude gauge shows by the pointer (the hand has the tool, or just had it).
+func attitude_shown() -> bool:
+	return _pivoting or _attitude_shown > 0.0
+
+
+## The hand has moved the tool: a plan follows it, and the panel.
+func _held_changed() -> void:
+	if _state == PLANNING:
+		_replan()
+	elif _ui != null:
+		_ui.refresh()
+
+
+## The tool's model held at its angle, once the hand has changed it.
+func _refit_tool() -> void:
+	if not _refit or current == "":
+		return
+	_refit = false
+	_load_tool(tools[current], current)
+	_show_tool(current, _opacity)
+
+
+## A normal leaned by the guiding hand: rolled about `way` (the way the tool goes) by the
+## tool in hand's lean.
+func _leaned(normal: Vector3, way: Vector3) -> Vector3:
+	var by: float = settings.get(current, {}).get("lean", 0.0)
+	if absf(by) < 1e-3 or way.length() < 1e-6:
+		return normal
+	return normal.rotated(way.normalized(), deg_to_rad(by))
 
 
 ## The wheel while planning: `steps` notches of the tool's intensity, or of its tilt; `fine`
@@ -834,7 +989,9 @@ func act() -> void:
 	_target = 0.0
 	_at = _lock.point
 	_goal = _lock.point
-	_engaged = board.begin_stroke(current, _lock.point, _lock.normal, _lock.along, _stroke_settings())
+	_refit_tool()
+	_engaged = board.begin_stroke(current, _lock.point, _leaned(_lock.normal, _lock.path), _lock.along,
+			_stroke_settings())
 	if not _engaged:
 		if _state == ARMED:
 			_drop_plan()
@@ -909,7 +1066,7 @@ func release() -> void:
 	_engaged = false
 	_state = IDLE
 	_take_debris(edge)
-	if _right_held and not _lock.get("direct", false):
+	if _plan_held and not _lock.get("direct", false):
 		_state = PLANNING
 		_replan()
 	else:
@@ -980,7 +1137,8 @@ func get_plan() -> Dictionary:
 
 func _replan() -> void:
 	_lock.limits = layout.hold(_lock, current) # (the lines marked on the work: may set the lock)
-	_plan = board.plan_stroke(current, _lock.point, _lock.normal, _lock.along, _lock.length, _stroke_settings())
+	_plan = board.plan_stroke(current, _lock.point, _leaned(_lock.normal, _lock.path), _lock.along, _lock.length,
+			_stroke_settings())
 	board.set_plan_tint(Color(TOOL_COLOURS[current], 0.55))
 	_ui.refresh()
 
@@ -1342,6 +1500,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_walk_input(event)
 		return
 	if event is InputEventMouseMotion:
+		if _pivoting:
+			pivot((event as InputEventMouseMotion).relative, (event as InputEventMouseMotion).ctrl_pressed)
+			return
 		match _state:
 			ACTING, ARMED:
 				drag_screen(event.position)
@@ -1359,18 +1520,27 @@ func _unhandled_input(event: InputEvent) -> void:
 					release()
 			MOUSE_BUTTON_RIGHT:
 				if button.pressed:
-					lock(button.position, button.alt_pressed)
+					begin_pivot()
 				else:
-					unlock()
+					end_pivot()
 			MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
-				if button.pressed and current == "layout":
-					layout.adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.ctrl_pressed)
-				elif button.pressed and _state == PLANNING:
-					adjust(1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1, button.shift_pressed,
-							button.ctrl_pressed)
+				var notch := 1 if button.button_index == MOUSE_BUTTON_WHEEL_UP else -1
+				if not button.pressed:
+					pass
+				elif _pivoting:
+					lean(notch, button.ctrl_pressed)
+				elif current == "layout":
+					layout.adjust(notch, button.ctrl_pressed)
+				elif _state == PLANNING:
+					adjust(notch, false, button.ctrl_pressed)
+	elif event is InputEventKey and not event.pressed and (event as InputEventKey).keycode == KEY_SPACE:
+		unlock()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		match key.keycode:
+			KEY_SPACE:
+				# Held: the stroke is planned from where the pointer is, and made by a left-drag.
+				lock(_pointer, key.alt_pressed)
 			KEY_TAB:
 				next_variant()
 			KEY_C:
@@ -1434,6 +1604,8 @@ func _walk_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if not _pivoting:
+		_attitude_shown = maxf(_attitude_shown - delta, 0.0)
 	if _glide < 1.0:
 		_glide = minf(_glide + delta / 0.3, 1.0)
 		_orbit_to_glide()
@@ -1451,7 +1623,7 @@ func _process(delta: float) -> void:
 			body.global_transform = _engage_pose.interpolate_with(board.get_tool_pose(), t)
 		elif _state == PLANNING:
 			# Set on the work where the stroke starts, out of sight until it acts.
-			body.global_transform = board.pose_at(_lock.point, _lock.normal, _lock.along, 0.0)
+			body.global_transform = board.pose_at(_lock.point, _leaned(_lock.normal, _lock.path), _lock.along, 0.0)
 		else:
 			body.global_transform = body.global_transform.interpolate_with(_hover_pose(), follow)
 	# The tool follows where it was dragged at its working speed.
@@ -1619,7 +1791,8 @@ func _hover_pose() -> Transform3D:
 	if _hit.is_empty():
 		var up := Vector3.UP
 		return board.pose_at(board.global_position + up * 0.0125, up, _along(up), 60.0)
-	return board.pose_at(_hit.position, _hit.normal, _along(_hit.normal), HOVER_LIFT)
+	var along := _along(_hit.normal)
+	return board.pose_at(_hit.position, _leaned(_hit.normal, along), along, HOVER_LIFT)
 
 
 ## The tool's facing on a surface, turned by `yaw`: the chisel pushes away from the viewer;
@@ -1664,7 +1837,12 @@ func _draw_outline() -> void:
 	match current:
 		"chisel", "gouge":
 			var w: float = variant().get("width", 12.0) * 0.5 * MM
-			segments = [p - s * w, p + s * w, p, p + a * 0.012, p + a * 0.012, p + a * 0.009 + s * 0.002,
+			# The edge, turned by its skew (the hand's and a skew chisel's own; only a flat edge
+			# skews: core plan_cut), and the way it goes.
+			var edge := s
+			if variant().get("flat", true):
+				edge = s.rotated(n, -deg_to_rad(settings[current].skew + variant().get("skew", 0.0)))
+			segments = [p - edge * w, p + edge * w, p, p + a * 0.012, p + a * 0.012, p + a * 0.009 + s * 0.002,
 					p + a * 0.012, p + a * 0.009 - s * 0.002]
 		"saw":
 			var l := 0.07

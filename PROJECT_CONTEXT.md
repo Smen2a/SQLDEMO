@@ -127,7 +127,8 @@ body node is scaled by 0.001 and turned −90° about x.
 1. **At the bench** (E with a piece in the vise), **take a tool from the hotbar and
    point.** An outline shows what it would touch. The tool in hand stays
    hidden until it acts.
-2. **Plan it (optional):** hold the right button.
+2. **Plan it (optional):** hold Space. Right-drag (the guiding hand) pivots the tool on
+   its edge, hovering or planned: its angle, skew or turn, and lean (the wheel).
    - `SdfBody.plan_stroke` runs the stroke along its path without making it. For
      chisels, gouges and the spokeshave, the cutting model works it out against the wood
      (`tools/cutting.h`): force against a hand's 200 N, grain, clearance, tear-out.
@@ -173,6 +174,7 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| T5-4 | The guiding hand: right-drag pivots the tool on its edge (up / down its angle to the work, left / right its skew or turn, the wheel its lean), hovering or while planned, the pointer held where it was. Space plans. An attitude gauge by the pointer shows the angle (with the bevel riding, biting or digging in), the skew and the lean |
 | T5-2 | The lines stop the tools. Flat on a face: a gauge line on the face beside is a floor (a rebate's depth), one on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square). Across the corner: the plane through gauge lines on both faces is a chamfer; the tool is laid on it and each pass takes the corner down to it, then nothing. The saw snaps onto a knife line and stops at a depth line; rasps, scraper and block keep to the floor and the waste. Alt crosses them. In the core: `Limits` (`tools/layout.h`) and a stop *at the line* |
 | T5-1 | Laying out: a marking gauge and a knife with a square (the Layout slot, 9) scribe real V lines 0.3 mm deep and record them as marks on the piece, undone with their cuts |
 | W5 | A workshop to work in: a room built in code, a first-person player, tools on a hotbar, every piece of work a rigid body you pick up and carry (R turns it, the wheel reaches it), a vise that squares what is let go on it (flat, along the bench, on its top) and holds the piece the tools work on, a rack whose stacks give new boards. The old bench view is the work view you step into (E) and out of (Esc) |
@@ -184,7 +186,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 128 native tests (GCC and Clang, including golden images) and 12
+Test counts today: 128 native tests (GCC and Clang, including golden images) and 13
 headless Godot checks.
 
 ## 5. Where things stand
@@ -239,7 +241,7 @@ so correctness can be checked here, but not speed.
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
 
-### T5. Lines the tools obey, and a guiding hand (in progress: T5-1 and T5-2 done)
+### T5. Lines the tools obey, and a guiding hand (in progress: T5-1, T5-2 and T5-4 done)
 
 From play: a chisel pass takes one strip, so corners and whole sections never come out
 crisp, and the tools work on one axis at one angle. Real work gets crisp edges from

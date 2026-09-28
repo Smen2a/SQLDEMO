@@ -122,16 +122,16 @@ under the crosshair says to put a piece in it.
    meets the grain, and what goes wrong. For the sanding block, how much it has taken and
    on how much of its face it bears. Let go of the left button to finish: one undo
    step.
-4. **Or plan it first: hold the right button.** The stroke is locked in where you pressed,
-   and runs from there towards the pointer. Nothing is cut yet:
+4. **Or plan it first: hold Space.** The stroke is locked in where the pointer is, and
+   runs from there towards the pointer as you move it. Nothing is cut yet:
    - The cut it would make shows on the board, hatched in the tool's colour.
    - The **wheel** sets how hard the tool works (a chisel's or gouge's depth in steps of
      0.05 mm, the spokeshave's shaving, the pressure on the saw, the rasp, the scraper and
      the sanding tools; held up to chop, the blow). **Ctrl+wheel** steps a
-     fifth as far: a chisel's depth by hundredths of a millimetre. **Shift+wheel** sets a
-     chisel's or gouge's angle to the work, or tilts the rasp about its line. **Q / E**
-     skew a chisel's edge, or turn the sanding tools. (The panel's sliders set the same
-     things at any time, as finely as Ctrl+wheel.)
+     fifth as far: a chisel's depth by hundredths of a millimetre. The guiding hand
+     (right-drag, below) pivots the tool as it is planned, and the plan follows. **Q / E**
+     skew a chisel's edge, or turn the other tools, 15° at a time. (The panel's sliders
+     set the same things at any time, as finely as Ctrl+wheel.)
    - The line beside the pointer says what it comes to. For example: *Bench chisel 12 mm
      0.48 mm deep (asked 1.00) 30° to the work 40 mm 200 of 200 N, along the grain,
      downhill; only as deep as a hand can push it.*
@@ -157,9 +157,28 @@ under the crosshair says to put a piece in it.
      Hold **Alt** as you lock or press to place a stroke freely. A left-drag without a plan
      locks the same way, once its drag shows the way.
 
-   Then press the left button and drag (the right can come up once you have): the tool
-   follows the plan as far as you take it, never past its end. Keep holding the right
-   button and the next pass is planned from the same spot.
+   Then press the left button and drag (Space can come up once you have): the tool
+   follows the plan as far as you take it, never past its end. Keep holding Space and the
+   next pass is planned from the same spot.
+5. **Hold it as a hand would: right-drag, the guiding hand.** While the right button is
+   held the pointer stays where it is, over the edge, and the mouse's motion pivots the
+   tool on it; let go and the pointer is back where it was. It works hovering (for the
+   next stroke) and while a stroke is planned (the hatch follows as you pivot); a stroke
+   being made keeps the attitude it began with.
+   - **Up and down** raise and lower the handle: a chisel's or gouge's angle to the work,
+     0.25° for a pixel (**Ctrl**: a fifth as far). Paring stays below 60°, a chop at or
+     above it (**C** goes between them).
+   - **Left and right** skew a chisel's edge across its push (a skew chisel's own skew
+     adds to it; only a flat edge skews), or turn the other tools about the surface.
+   - **The wheel** leans the tool: rolls it about the way it goes, 2.5° a notch (Ctrl: a
+     fifth). A chisel's floor turns with it, one corner deeper (5° on a 0.3 mm pass: 0.65 mm
+     deep 4 mm to one side, nothing 4 mm to the other); a gouge rolls; the saw's kerf is
+     bevelled; the rasp tilts about its line.
+   - **The attitude gauge**, above the pointer while the hand has the tool (and a moment
+     after): the tool side on at its angle, its bevel coloured by how it meets the work
+     mid-face (it *rides its bevel* and skates within 2° of it, *bites* diving at the
+     difference up to 8° past it, *digs in* beyond); the edge from above, skewed or
+     turned; the lean end on; and all of it in words.
 
 Other controls at the bench:
 - Esc drops the plan or the stroke in progress, or steps back from the bench.
@@ -377,8 +396,8 @@ pointer says what it comes to.
   - It hollows nothing out. Within reach of an open face on its bevel side, the chip
     between pops off along the grain: chop near an edge, or chop a line and pare towards it.
   - A paring chisel is never struck: pushed by hand, it barely goes in.
-- **Skew.** Q / E turn a chisel's edge across its push, and a skewed edge slices for less
-  force.
+- **Skew.** The guiding hand (left and right) or Q / E turn a chisel's edge across its
+  push, and a skewed edge slices for less force.
 - **What it cannot do.** The chip is everything between the floor and the surface above it,
   and the plan checks it every millimetre across the edge (nine columns), so no cut runs
   under the work:
@@ -554,9 +573,9 @@ loose pieces in its way aside.
     harder wood: 6.7e-4 × coarseness × pressure × 5740 / Janka mm per mm pushed. A cabinet
     rasp takes 0.05 mm of oak in a 150 mm push with all its face bearing; on the workshop
     board, its face overhanging an end, about 0.02 mm in a 40 mm push.
-  - The flat face lowers what it is rubbed over. Tilted about its line (Shift+wheel) along
-    an arris, it takes a chamfer off it, fast at first (it bears on the arris alone), then
-    slower as the chamfer widens. The round face hollows.
+  - The flat face lowers what it is rubbed over. Tilted about its line (the guiding hand's
+    wheel) along an arris, it takes a chamfer off it, fast at first (it bears on the arris
+    alone), then slower as the chamfer widens. The round face hollows.
 - **The card scraper**, flexed and pushed, takes a whisper: 0.01 mm of oak from each point
   its burr passes over, however long the stroke (a rubbed face 1 mm along and 60 across,
   resting on what stands highest under it), feathered 4 mm at its sides. Nothing on the
