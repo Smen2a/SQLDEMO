@@ -17,7 +17,7 @@ with stacks of stock: ash, oak and walnut boards (160 × 100 × 25 mm) on the mi
 and on the bottom one the blanks for a mallet: ash handle blanks (320 × 35 × 28), oak head
 blanks (120 × 70 × 55) and oak strips (150 × 12 × 5, a wedge's section). Each is a blank of
 its wood, flat-sawn, its arrises eased by a millimetre (`SdfBody.load_stock`). The plan book
-lies on the side table. The room is built in code (`game/workshop/room.gd`); the world is in
+and a pad of paper lie on the side table. The room is built in code (`game/workshop/room.gd`); the world is in
 metres, the bench top at y = 0 with the vise at its middle.
 
 **Walking** (`game/workshop/player.gd`, a first-person `CharacterBody3D`):
@@ -35,6 +35,7 @@ metres, the bench top at y = 0 with the vise at its middle.
   - on a piece of work lying about (a board, an offcut): **pick it up**;
   - on a stack on the rack: **take a new piece** of that stock into your hands;
   - on the plan book on the side table: **open it** (*Plans* below; **P** opens it anywhere);
+  - on the pad beside it: **draw a plan** (*Drawing a plan* below);
   - on the bench, or the piece in the vise: **step up to the bench** (below);
   - carrying something: **let go** of it.
 - **Carrying.** A piece in your hands is held in front of your eyes, turned as you turn. It
@@ -997,6 +998,36 @@ driven into a kerf in the tenon.
   handle's tenon and kerf, 36,328 mm³ (36,325); the head laid on its blank in 12 pencil
   lines, where `part_lines` puts them; the length line knifed in by a click beside it.
 
+### Drawing a plan
+
+The pad of paper beside the plan book (E on it; or *New plan*, *Edit*, *Edit a copy* in the
+book) is for drawing plans of your own (`game/workshop/plan_editor.gd`):
+- **The plan:** its name and what it is; its parts, each named, of a wood, how many, and
+  its blank's length along the grain, width and thickness (the line under them says which
+  stock on the rack it is cut from, or that none is big enough).
+- **Features are drawn on the part's sheet** (`sheet_view.gd`, the book's drawing), a tool
+  at a time; the pointer's place is snapped to half millimetres and onto the blank's
+  outline, and what the drag comes to shows as it goes:
+  - **Hole:** a box on the face side or the face edge (a mortise, through; untick it for a
+    depth);
+  - **Tenon:** its section as a box on the end; or a box from an end on the face side (its
+    length and width) or the face edge (its length and thickness);
+  - **Kerf:** a line across the end, or from an end along the face side or edge (its depth);
+  - **Rebate:** a box in a corner of the end, or along an edge of the face side or edge;
+  - **Chamfer:** a drag from a corner of the end, as wide as it goes; or along an edge;
+  - **Taper:** a line along the face edge from end to end, the thickness it leaves at each.
+- **Pick** chooses a feature (a click on it): its name and sizes to type exactly, and *Take
+  it off* (or Delete).
+- **Joints:** a part and one of its features, the other part and one of its, and the kind.
+- **Save** writes it to `user://plans/<id>.json`; it is in the plan book with the presets,
+  marked yours, and laid out as they are (*Take this sheet*). A preset is only ever edited
+  as a copy. Put down (P, Esc), the pad keeps what is on it until it is saved or thrown
+  away; *Delete* (pressed twice) deletes a saved plan.
+- **Measured** (`game/tests/plan_editor`): the mallet drawn on the pad, each part laid out
+  in the same lines as the preset's; saved, reloaded, its head laid on a blank in 12 pencil
+  lines; edited and put down, the file unchanged; a copy of the preset saved and deleted,
+  the preset untouched.
+
 ## Layout
 
 | Path | What it is |
@@ -1273,7 +1304,9 @@ The Godot tests come in two tiers:
   - the rack's stock (`stock`): every kind its wood and size, clamped flat, on edge and on
     end;
   - a plan laid on the wood (`plan_transfer`): the plan book, the sheet in pencil, undo,
-    the knife taking a pencil line, the pencil, scribing a sheet on at once.
+    the knife taking a pencil line, the pencil, scribing a sheet on at once;
+  - a plan drawn on the pad (`plan_editor`): the mallet's parts and features drawn as the
+    drags would, joined, saved, laid on the wood; put down, thrown away, a preset copied.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

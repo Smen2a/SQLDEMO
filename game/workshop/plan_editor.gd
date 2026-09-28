@@ -321,6 +321,7 @@ func add_part() -> void:
 	plan.parts.append(_new_part())
 	_changed()
 	_fill_parts()
+	_fill_joints()
 	show_part(plan.parts.size() - 1)
 
 
@@ -597,6 +598,7 @@ func add_feature(f: Dictionary) -> void:
 	_changed()
 	_show()
 	_fill_feature()
+	_fill_joints()
 	_say("Drawn: " + PlanViewer._feature_text(named, SheetView.size_of(p)))
 
 
@@ -784,14 +786,19 @@ func _fill_joints() -> void:
 	_fill_joint_features()
 
 
+## Each joint row's features, of the part chosen in it (the feature chosen kept where the part
+## still has it).
 func _fill_joint_features() -> void:
 	for pair in [[_pick_a, _pick_a_feature], [_pick_b, _pick_b_feature]]:
 		var features: OptionButton = pair[1]
+		var was := features.get_item_text(features.selected) if features.selected >= 0 else ""
 		features.clear()
 		var i: int = pair[0].selected
 		if i >= 0 and i < plan.parts.size():
 			for f in plan.parts[i].get("features", []):
 				features.add_item(f.get("name", f.kind))
+				if f.get("name", "") == was:
+					features.select(features.item_count - 1)
 
 
 # --- the whole plan ----------------------------------------------------------------------------

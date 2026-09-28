@@ -28,6 +28,8 @@
 #     pushed by a tool, dropped from carry height; never sunk into what they rest on
 #   - laying out: the marking gauge's and knife's lines, scribed where they should be, and
 #     undone and redone
+#   - plans: the rack's stock to size; a plan's sheet laid on the wood in pencil, the knife
+#     taking it; a plan drawn on the pad, saved, and laid out as the preset is
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -93,6 +95,7 @@ if [[ "$GPU" == 0 ]]; then
 	check crumbs "crumbs: the crumb came away" res://tests/crumbs.tscn
 	check stock "stock: the stock is as the rack says" res://tests/stock.tscn
 	check plan_transfer "plan transfer: the plan is laid on the wood" res://tests/plan_transfer.tscn
+	check plan_editor "plan editor: the mallet drawn on the pad, saved, laid out" res://tests/plan_editor.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
