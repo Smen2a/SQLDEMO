@@ -97,6 +97,7 @@ if [[ "$GPU" == 0 ]]; then
 	check layout_lines "layout lines: the lines are laid out" res://tests/layout_lines.tscn
 	check guiding_hand "guiding hand: the hand pivots the tools" res://tests/guiding_hand.tscn
 	check planes "planes: the planes take whole sections to the lines" res://tests/planes.tscn
+	check steering "steering: the hand steers the edge" res://tests/steering.tscn
 	exit $status
 fi
 

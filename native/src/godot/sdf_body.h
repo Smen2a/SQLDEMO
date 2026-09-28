@@ -127,6 +127,16 @@ public:
 	double get_opacity() const { return opacity_; }
 	// The tool moved to `point` (world space, on the plane it was engaged on).
 	void move_stroke(const godot::Vector3 &point);
+	// A chisel's, gouge's or plane's stroke steered as it goes (core tools/cutting.h
+	// SteeredStroke): it goes on from where its edge has got to, along `along` on the surface
+	// facing `normal` (world), as the tool is now held (`settings`, as begin_stroke's: the
+	// angle, skew, depth...; "length" mm on at most). The bevel steers a chisel's or gouge's
+	// depth from there (plan_cut's entry); a plane's sole sets its own. get_plan() then
+	// reports the new segment. Returns {start (world: where the new segment's path begins, on
+	// the surface over the edge; move_stroke() from there), normal, path, segments}, or {}
+	// (no steerable stroke).
+	godot::Dictionary steer_stroke(const godot::Vector3 &normal, const godot::Vector3 &along,
+			const godot::Dictionary &settings);
 	void end_stroke();    // finishes the cut and makes it one undo step
 	void cancel_stroke(); // takes the stroke's cut back
 	bool is_stroking() const { return stroke_ != nullptr; }
@@ -310,9 +320,15 @@ private:
 	godot::Dictionary plan_report_;
 	bool plan_stale_ = false;
 	godot::Dictionary compute_plan();
-	// A chisel's, gouge's or spokeshave's plan against `work`, from its settings.
+	// A chisel's, gouge's or spokeshave's plan against `work`, from its settings (with
+	// "entry": going on from a cut that deep; "continuing": a plane's going on).
 	static tools::CutPlan plan_for(const godot::String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a,
 			float length, const godot::Dictionary &settings);
+	// What a plan comes to, for get_plan().
+	static godot::Dictionary report_of(const tools::CutPlan &plan);
+	// The stroke a plan is made as: steerable, unless it is a chop.
+	static std::shared_ptr<tools::Stroke> steerable(const tools::CutPlan &plan);
+	godot::String stroke_tool_; // the tool of the stroke being made
 	// What came off since take_debris(), with a colour per shaving sample and chip.
 	tools::Debris debris_;
 	std::vector<vec3> shaving_colours_, chip_colours_, dust_colours_;

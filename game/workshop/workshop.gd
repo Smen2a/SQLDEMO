@@ -166,6 +166,13 @@ const LEAN_LIMIT := 30.0
 const LEANS := ["chisel", "gouge", "saw", "spokeshave"]
 ## Seconds the attitude gauge stays by the pointer once the hand lets the tool go.
 const ATTITUDE_LINGER := 1.5
+## Steering a pushed tool as it goes (a chisel, gouge or plane, made directly): the edge
+## follows the pointer, turning towards it once it is further than LAZY (mm) from the edge
+## and heads STEER_TURN degrees or more off the edge's way (at most STEER_MOST at a time); and
+## where the surface under the edge turns STEER_TURN, the tool is set to it afresh.
+const LAZY := 4.0
+const STEER_TURN := 3.0
+const STEER_MOST := 30.0
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
 const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.0, "spokeshave": 40.0,
 		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
@@ -242,6 +249,11 @@ var _pivoting := false    # the right button held: the guiding hand has the tool
 var _pivot_from := Vector2.ZERO # where the pointer was when it took it (it comes back there)
 var _refit := false       # the tool's model is to be held at its new angle
 var _attitude_shown := 0.0 # s the attitude gauge stays by the pointer
+var _aim = null           # where the pointer asks a pushed tool to go (world, on its plane), or null
+var _trail: Array[Vector3] = [] # the way the pointer has gone, dragging a pushed tool (every 0.5 mm)
+var _trail_at := 0        # the first point of it the edge has not yet come to
+var _resteer := false     # the hand has changed its hold mid-stroke: go on at the new attitude
+var _surface_checked := 0.0 # mm along the segment where the surface under the edge was last looked at
 ## The stroke being planned or made: {"point", "normal" (world), "plane", "along" (the
 ## tool's facing), "path" (unit, the direction it works in), "length" (mm), "seed",
 ## "direct" (made without a plan)}.
@@ -852,7 +864,7 @@ func unlock() -> void:
 ## (the mouse is held), and its motion pivots the tool on its edge (pivot()); the wheel leans
 ## it (lean()). Hovering or planning (the plan follows live); not yet mid-stroke.
 func begin_pivot() -> void:
-	if current == "" or current == "layout" or _engaged or mode != Mode.WORK:
+	if current == "" or current == "layout" or (_engaged and not _steerable()) or mode != Mode.WORK:
 		return
 	_pivoting = true
 	_pivot_from = _pointer
@@ -889,7 +901,7 @@ func pointer_at() -> Vector2:
 ## between them). Left and right skew its edge across the push, or turn another tool about
 ## the surface. `fine` (Ctrl): a fifth as far.
 func pivot(relative: Vector2, fine := false) -> void:
-	if current == "" or current == "layout" or _engaged:
+	if current == "" or current == "layout" or (_engaged and not _steerable()):
 		return
 	var rate := PIVOT_RATE / (5.0 if fine else 1.0)
 	_attitude_shown = ATTITUDE_LINGER
@@ -913,7 +925,7 @@ func pivot(relative: Vector2, fine := false) -> void:
 ## about the way it goes (a chisel's corner lower, a gouge rolled, a saw's kerf bevelled; a
 ## rasp's tilt). `fine` (Ctrl): a fifth of a notch.
 func lean(steps: int, fine := false) -> void:
-	if _engaged:
+	if _engaged and not _steerable():
 		return
 	if current == "rasp":
 		var spec: Array = TILT.rasp
@@ -958,11 +970,15 @@ func attitude_shown() -> bool:
 	return _pivoting or _attitude_shown > 0.0
 
 
-## The hand has moved the tool: a plan follows it, and the panel.
+## The hand has moved the tool: a plan follows it; a stroke being made goes on from where its
+## edge is, held so (_steer()); and the panel.
 func _held_changed() -> void:
 	if _state == PLANNING:
 		_replan()
-	elif _ui != null:
+		return
+	if _engaged:
+		_resteer = true
+	if _ui != null:
 		_ui.refresh()
 
 
@@ -973,6 +989,102 @@ func _refit_tool() -> void:
 	_refit = false
 	_load_tool(tools[current], current)
 	_show_tool(current, _opacity)
+
+
+## Whether the stroke being made can be steered as it goes: a chisel's, gouge's or plane's,
+## not a chop.
+func _steerable() -> bool:
+	return _engaged and current in PUSHED and not is_chopping()
+
+
+## Steers the pushed tool's stroke (SdfBody.steer_stroke) from where its edge is:
+##   - the hand changed its hold (the guiding hand, mid-stroke): at the new attitude, the way
+##     it was going (the bevel then steers its depth: tipped past it, it dives; on it, level;
+##     lowered under it, it lifts out);
+##   - a stroke made directly, not held to an edge or to lines: along the way the pointer
+##     went, towards the first point of its trail LAZY or more ahead of the edge, where that
+##     heads STEER_TURN or more off its way (turned at most STEER_MOST at a time): a curving
+##     drag cuts that curve, however far ahead the pointer runs;
+##   - made so, the surface under the edge has turned STEER_TURN (looked at each millimetre):
+##     set to it afresh, so its angle to the work holds over a curve or a slope.
+## At least half a millimetre on from the last segment.
+func _steer() -> void:
+	if not _steerable() or _progress < 0.5:
+		return
+	if _plan.get("stop", "") != "" and _progress >= _plan.get("length", INF) - 0.01:
+		return # (stopped short, or lifted out: the edge goes no further)
+	var edge: Vector3 = _lock.point + _lock.path * (_progress * MM)
+	var way: Vector3 = _lock.path
+	var normal: Vector3 = _lock.normal
+	var why := _resteer
+	# (Free hand: not held along an edge or to lines, nor to a plan it was shown.)
+	var free_hand: bool = _aim != null and _lock.get("direct", false) and not _lock.get("snapped", false) \
+			and _lock.get("limits", {}).is_empty()
+	if free_hand:
+		# Along the way the pointer went, not straight at where it is now: towards the first
+		# point of its trail at least LAZY ahead of the edge.
+		while _trail_at < _trail.size():
+			var q: Vector3 = _trail[_trail_at] - edge
+			q -= normal * q.dot(normal)
+			if q.length() >= LAZY * MM and q.dot(way) > 0.0:
+				break
+			_trail_at += 1
+		if _trail_at < _trail.size():
+			var d: Vector3 = _trail[_trail_at] - edge
+			d -= normal * d.dot(normal)
+			var off := way.angle_to(d)
+			if off >= deg_to_rad(STEER_TURN) and off < PI / 2:
+				way = way.slerp(d.normalized(), minf(1.0, deg_to_rad(STEER_MOST) / off)).normalized()
+				why = true
+	if free_hand and _progress - _surface_checked >= 1.0:
+		_surface_checked = _progress
+		var under := _normal_at(edge, normal)
+		if under.angle_to(normal) >= deg_to_rad(STEER_TURN):
+			normal = under
+			why = true
+	if not why:
+		return
+	way = (way - normal * way.dot(normal)).normalized()
+	var s := _stroke_settings()
+	s["length"] = _lock.length
+	if _resteer and (current == "chisel" or current == "gouge"):
+		# Held another way by the hand, its bevel steers how deep it goes, as deep as a hand
+		# can push it (the depth set is where a stroke begun mid-face levels).
+		s["depth"] = INTENSITY[current][3]
+	var got: Dictionary = board.steer_stroke(_leaned(normal, way), way, s)
+	_resteer = false
+	if got.is_empty():
+		return
+	_refit_tool()
+	_lock.point = got.start
+	_lock.normal = normal
+	_lock.path = got.path
+	_lock.along = _lock.path
+	_plane = Plane(normal, got.start)
+	_lock.plane = _plane
+	_progress = 0.0
+	_surface_checked = 0.0
+	_target = 0.0 if _aim == null else clampf((_aim - _lock.point).dot(_lock.path) / MM, 0.0, _lock.length)
+	_plan = board.get_plan()
+
+
+## The surface's normal at the work over `at` (world; `n` roughly out of it): a plane through
+## hits 4 mm either side, so a kerf or a scribed line there does not tip it. `n` where they
+## miss.
+func _normal_at(at: Vector3, n: Vector3) -> Vector3:
+	var t := n.cross(Vector3.RIGHT if absf(n.x) < 0.9 else Vector3.UP).normalized()
+	var b := n.cross(t)
+	var hits: Array[Vector3] = []
+	for o in [t, -t, b, -b]:
+		var h: Dictionary = board.raycast(at + o * 0.004 + n * 0.005, -n, 0.02)
+		if h.is_empty() or h.get("stale", false):
+			return n
+		hits.append(h.position)
+	var m := (hits[0] - hits[1]).cross(hits[2] - hits[3])
+	if m.length() < 1e-12:
+		return n
+	m = m.normalized()
+	return m if m.dot(n) > 0.0 else -m
 
 
 ## A normal leaned by the guiding hand: rolled about `way` (the way the tool goes) by the
@@ -1053,6 +1165,11 @@ func act() -> void:
 			_drop_plan()
 		return
 	_state = ACTING
+	_aim = null
+	_trail.clear()
+	_trail_at = 0
+	_resteer = false
+	_surface_checked = 0.0
 	_debris_step = _step_key(board.get_stats().get("steps", 0) + 1)
 	layout.forget_redo(clamped)
 	if _lock.get("direct", false):
@@ -1098,7 +1215,11 @@ func drag_screen(position: Vector2) -> void:
 	var path: Vector3 = _lock.path
 	match current:
 		"chisel", "gouge", "spokeshave":
-			# Where the pointer asks it to be: _process takes it there at its working speed.
+			# Where the pointer asks it to be: _process takes it there at its working speed
+			# (and steers it there, _steer()).
+			_aim = point
+			if _trail.is_empty() or point.distance_to(_trail.back()) > 0.5 * MM:
+				_trail.append(point)
 			_target = clampf((point - start).dot(path) / MM, _target, _lock.length)
 		"saw", "rasp", "scraper":
 			_goal = start + path * (point - start).dot(path)
@@ -1685,11 +1806,16 @@ func _process(delta: float) -> void:
 	# The tool follows where it was dragged at its working speed.
 	var went := Vector3.ZERO
 	if _engaged and current in PUSHED:
-		if _progress < _target:
-			var step := minf(_target, _progress + working_speed() * delta) - _progress
+		# Half a millimetre at a time, steered after each (however long the frame, or fast
+		# the pace): a curve is followed as finely at a few frames a second as at sixty.
+		var budget := working_speed() * delta
+		while budget > 1e-6 and _progress < _target:
+			var step := minf(minf(budget, 0.5), _target - _progress)
 			_progress += step
-			went = _lock.path * (step * MM)
+			budget -= step
+			went += _lock.path * (step * MM)
 			board.move_stroke(_lock.point + _lock.path * (_progress * MM))
+			_steer()
 	elif _engaged and _at != _goal and not is_chopping():
 		var reach := working_speed() * delta * MM
 		var to_go := _goal - _at

@@ -103,7 +103,7 @@ float resistance(const Wood &wood, vec3 fibre, vec3 travel, vec3 edge) {
 std::vector<std::string> warning_names(unsigned warnings) {
 	static const char *names[] = {"skates", "shallow", "tears out", "corners buried", "breaks out", "not struck",
 			"slit only", "pops off", "digs in", "splits", "blocked", "blade meets the work", "too wide for the gap",
-			"stalls", "mouth", "at the line"};
+			"stalls", "mouth", "at the line", "lifts out"};
 	std::vector<std::string> out;
 	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
 		if (warnings & (1u << i)) {
@@ -172,18 +172,14 @@ std::vector<Edit> CutPlan::edits(float upto, bool finished) const {
 	return out;
 }
 
-std::vector<Edit> CutPlan::floor_edits(float upto) const {
-	std::vector<Edit> out;
-	if (chop) {
-		out.push_back(slit);
-		return out;
-	}
-	if (floor.size() < 2) {
-		return out;
+std::vector<vec2> CutPlan::floor_points(float upto) const {
+	std::vector<vec2> kept;
+	if (chop || floor.size() < 2) {
+		return kept;
 	}
 	const float end = std::min(upto, length);
 	if (end <= floor.front().x) {
-		return out;
+		return kept;
 	}
 	std::vector<vec2> points;
 	for (const vec2 &f : floor) {
@@ -193,32 +189,49 @@ std::vector<Edit> CutPlan::floor_edits(float upto) const {
 		points.push_back(f);
 	}
 	points.push_back({end, depth_at(end)});
-	std::vector<vec2> kept{points.front()};
+	kept.push_back(points.front());
 	if (points.size() > 1) {
 		simplify(points, 0, points.size() - 1, 0.015f, kept);
+	}
+	return kept;
+}
+
+ToolProfile CutPlan::profile(float deepest) const {
+	Chisel c = chisel;
+	if (c.kind == gl::SDF_TOOL_FLAT) {
+		c.width = width;
+	}
+	return c.profile(height > 0.0f ? height : deepest + 2.0f);
+}
+
+std::vector<Edit> CutPlan::floor_edits(float upto) const {
+	std::vector<Edit> out;
+	if (chop) {
+		out.push_back(slit);
+		return out;
+	}
+	const std::vector<vec2> kept = floor_points(upto);
+	if (kept.size() < 2) {
+		return out;
 	}
 	float deepest = 0.0f;
 	for (const vec2 &k : kept) {
 		deepest = std::max(deepest, k.y);
 	}
-	Chisel c = chisel;
-	if (c.kind == gl::SDF_TOOL_FLAT) {
-		c.width = width;
-	}
-	const ToolProfile profile = c.profile(height > 0.0f ? height : deepest + 2.0f);
+	const ToolProfile section = profile(deepest);
 	for (std::size_t i = 0; i + 1 < kept.size(); ++i) {
 		// A cut that starts at depth (from an open face) starts just outside it; one that
 		// ramps in, just above the surface. Pieces overlap half a millimetre: flush ends
 		// leave a seam the raymarcher would see as a wall.
 		vec2 a = kept[i], b = kept[i + 1];
 		if (i == 0) {
-			a = open || a.y > 0.0f ? vec2(a.x - 0.5f, a.y) : vec2(a.x, -0.2f);
+			a = open || a.y > 0.0f ? vec2(a.x - lead_in, a.y) : vec2(a.x, -0.2f);
 		}
 		vec3 from = point(a.x, a.y), to = point(b.x, b.y);
 		if (i + 2 < kept.size()) {
 			to = to + gl::normalize(to - from) * 0.5f;
 		}
-		out.push_back(cut(Primitive::sweep(from, to, normal, profile)));
+		out.push_back(cut(Primitive::sweep(from, to, normal, section)));
 	}
 	return out;
 }
@@ -359,7 +372,7 @@ void add_tear_out(CutPlan &p, const Work &work, float scale, std::uint32_t seed)
 }
 
 CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, float skew_deg, std::uint32_t seed, float blow) {
+		float depth, float skew_deg, std::uint32_t seed, float blow, float entry) {
 	CutPlan p;
 	p.chisel = chisel;
 	p.start = start;
@@ -395,12 +408,30 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	};
 
 	// In: from an open face at its depth at once; mid-face, only past its bevel's clearance,
-	// diving at the difference.
-	const bool open = open_behind(work, start, t, n, b, p.width, depth);
+	// diving at the difference. Going on from a cut, the edge is in it already: the bevel
+	// steers it from its depth there, towards `target` at `rate` (mm a mm along).
+	const bool going_on = entry >= 0.0f;
+	const bool open = going_on || open_behind(work, start, t, n, b, p.width, depth);
 	p.open = open;
 	const float tilt = chisel.approach_deg * kDeg, bevel = chisel.bevel_deg * kDeg;
-	float dive = 1e9f;
-	if (!open) {
+	float dive = 1e9f, target = depth;
+	bool lifting = false;
+	if (going_on) {
+		if (tilt > bevel + kClearance) {
+			dive = std::tan(tilt - bevel); // tipped past its bevel: it dives, to the depth asked
+			target = std::max(depth, entry);
+			if (tilt - bevel > kDigIn + 1e-4f) {
+				p.warnings |= kDigsIn;
+			}
+		} else if (tilt >= bevel - kClearance) {
+			dive = 0.0f; // riding its bevel on the floor it has cut: level
+			target = entry;
+		} else {
+			dive = std::tan(bevel - tilt); // lowered under it: it rises, and lifts out
+			target = 0.0f;
+			lifting = true;
+		}
+	} else if (!open) {
 		if (tilt < bevel + kClearance) {
 			p.warnings |= kSkates;
 			stop(0.0f, kSkates);
@@ -489,8 +520,9 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	// never deeper than the hand can push the chip there, and rising only gently.
 	const int steps = std::max(1, int(std::ceil(length)));
 	const float ds = length / float(steps);
-	float d = open ? deepest_pushed(column(0.0f, depth), 0.0f, depth, attached_sides(work, start, n, b, p.width, depth))
-				   : 0.0f;
+	float d = going_on ? entry
+			: open	   ? deepest_pushed(column(0.0f, depth), 0.0f, depth, attached_sides(work, start, n, b, p.width, depth))
+					   : 0.0f;
 	p.floor.push_back({0.0f, d});
 	if (const unsigned why = blade(0.0f, d, d)) {
 		stop(0.0f, why); // the blade cannot get there
@@ -515,7 +547,15 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 	for (int i = 1; i <= steps; ++i) {
 		const float s = float(i) * ds;
 		const vec3 at = start + t * s;
-		float next = std::min(depth, d + dive * ds);
+		float next = d <= target ? std::min(target, d + dive * ds) : std::max(target, d - dive * ds);
+		if (lifting && next <= 0.0f) {
+			// Lifted out: the edge leaves the wood here, where it rises to the surface.
+			const float out = s - ds + d / std::max(dive, 1e-6f);
+			p.floor.push_back({out, 0.0f});
+			p.warnings |= kLifts;
+			stop(out, kLifts);
+			break;
+		}
 		const Column col = column(s, next);
 		const float chip = col.thickest;
 		if (chip > 0.02f) {
@@ -575,6 +615,9 @@ CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal
 		if (d < next && d + dive * ds > next) {
 			// It levels between samples: exactly where, so the ramp stays one straight piece.
 			p.floor.push_back({s - ds + (next - d) / dive, next});
+		}
+		if (d > next && d - dive * ds < next && next > 0.0f) {
+			p.floor.push_back({s - ds + (d - next) / dive, next}); // (it levels, risen)
 		}
 		d = next;
 		p.floor.push_back({s, d});
@@ -644,6 +687,10 @@ namespace {
 // The shaving is sampled every half millimetre; thinner than this, nothing came off.
 constexpr float kShavingStep = 0.5f;
 constexpr float kShavingLeast = 0.01f;
+
+} // namespace
+
+namespace detail {
 
 class PlannedStroke : public Stroke {
 public:
@@ -763,6 +810,16 @@ private:
 		}
 	}
 
+public:
+	const CutPlan &plan() const { return plan_; }
+	float reached() const { return reached_; }
+	// Its shaving goes on from `from`'s (steered on from it).
+	void go_on_from(const PlannedStroke &from) {
+		piece_ = from.piece_;
+		gap_ = from.gap_;
+	}
+
+private:
 	CutPlan plan_;
 	float reached_ = 0.0f;
 	std::size_t emitted_ = 0;
@@ -775,10 +832,254 @@ private:
 	std::vector<bool> chip_sent_;
 };
 
-} // namespace
+} // namespace detail
 
 std::unique_ptr<Stroke> planned_stroke(const CutPlan &plan) {
-	return std::make_unique<PlannedStroke>(plan);
+	return std::make_unique<detail::PlannedStroke>(plan);
+}
+
+// --- steered strokes -------------------------------------------------------------------
+
+namespace {
+
+// A point of a steered stroke's floor, the way its segment sweeps it.
+struct FloorPoint {
+	vec3 at;
+	std::size_t segment;
+	bool joint = false; // where a segment steered on from the last begins
+};
+
+// Whether two segments sweep the same section (height aside) the same way up.
+bool same_sweep(const CutPlan &a, const CutPlan &b) {
+	return a.chisel.kind == b.chisel.kind && std::fabs(a.width - b.width) < 1e-4f &&
+			std::fabs(a.chisel.sweep_radius - b.chisel.sweep_radius) < 1e-4f &&
+			std::fabs(a.chisel.v_angle_deg - b.chisel.v_angle_deg) < 1e-4f && gl::dot(a.normal, b.normal) > 0.99995f;
+}
+
+float distance_to_segment(vec3 p, vec3 a, vec3 b) {
+	const vec3 d = b - a;
+	const float t = std::clamp(gl::dot(p - a, d) / std::max(gl::dot(d, d), 1e-12f), 0.0f, 1.0f);
+	return gl::length(p - (a + d * t));
+}
+
+float distance_to_bezier(vec3 p, vec3 a, vec3 c, vec3 b) {
+	auto at = [&](float t) {
+		const float u = 1.0f - t;
+		return gl::length(p - (a * (u * u) + c * (2.0f * u * t) + b * (t * t)));
+	};
+	// The nearest of 64 samples along it, then narrowed down between its neighbours.
+	int nearest = 0;
+	float best = 1e9f;
+	for (int i = 0; i <= 64; ++i) {
+		const float d = at(float(i) / 64.0f);
+		if (d < best) {
+			best = d;
+			nearest = i;
+		}
+	}
+	float lo = float(std::max(nearest - 1, 0)) / 64.0f, hi = float(std::min(nearest + 1, 64)) / 64.0f;
+	for (int k = 0; k < 30; ++k) {
+		const float m1 = lo + (hi - lo) / 3.0f, m2 = hi - (hi - lo) / 3.0f;
+		(at(m1) < at(m2) ? hi : lo) = at(m1) < at(m2) ? m2 : m1;
+	}
+	return std::min(best, at(0.5f * (lo + hi)));
+}
+
+// Where the lines through a (along da) and b (along db) come closest: the control point of
+// the quadratic leaving a along da and arriving at b along db; false where they are parallel
+// or it lies behind either end.
+bool control_point(vec3 a, vec3 da, vec3 b, vec3 db, vec3 &c) {
+	const vec3 w = a - b;
+	const float d1 = gl::dot(da, da), d2 = gl::dot(da, db), d3 = gl::dot(db, db);
+	const float e1 = gl::dot(da, w), e2 = gl::dot(db, w);
+	const float den = d1 * d3 - d2 * d2;
+	if (den < 1e-8f * d1 * d3) {
+		return false;
+	}
+	const float s = (d2 * e2 - d3 * e1) / den, t = (d1 * e2 - d2 * e1) / den;
+	if (s <= 0.0f || t >= 0.0f) {
+		return false;
+	}
+	c = 0.5f * ((a + da * s) + (b + db * t));
+	return true;
+}
+
+} // namespace
+
+SteeredStroke::SteeredStroke(const CutPlan &first) {
+	segments_.push_back(std::make_unique<detail::PlannedStroke>(first));
+}
+
+SteeredStroke::~SteeredStroke() = default;
+
+StrokeUpdate SteeredStroke::move_to(vec3 point) {
+	return segments_.back()->move_to(point);
+}
+
+const CutPlan &SteeredStroke::plan() const {
+	return segments_.back()->plan();
+}
+
+float SteeredStroke::reached() const {
+	return segments_.back()->reached();
+}
+
+vec3 SteeredStroke::edge() const {
+	const CutPlan &p = plan();
+	return p.point(reached(), p.depth_at(reached()));
+}
+
+SteeredStroke::Going SteeredStroke::going_on(const Work &work, vec3 normal) const {
+	const vec3 at = edge(), up = gl::normalize(normal);
+	const float entry = depth_below_surface(work.body, work.octree, at, up, 30.0f);
+	return {at + up * entry, entry};
+}
+
+void SteeredStroke::steer(CutPlan next) {
+	const detail::PlannedStroke &last = *segments_.back();
+	// Its sweep reaches back over the joint far enough to cover the outer corner there.
+	const float turn = std::acos(std::clamp(gl::dot(last.plan().path, next.path), -1.0f, 1.0f));
+	next.lead_in = std::min(0.5f + 0.5f * next.width * std::tan(std::min(turn, 1.0f)), 4.0f);
+	auto segment = std::make_unique<detail::PlannedStroke>(next);
+	segment->go_on_from(last);
+	segments_.push_back(std::move(segment));
+}
+
+Frame SteeredStroke::pose() const {
+	return segments_.back()->pose();
+}
+
+std::vector<Edit> SteeredStroke::finish() {
+	return segments_.back()->finish();
+}
+
+void SteeredStroke::debris(const Body &body, const Octree &octree, Debris &out, bool ended) {
+	segments_.back()->debris(body, octree, out, ended);
+}
+
+std::vector<Edit> SteeredStroke::edits() const {
+	if (segments_.size() == 1) {
+		return segments_.front()->edits();
+	}
+	// The floor's points, segment after segment (each segment's first where the last's edge
+	// had got to: the same point twice).
+	std::vector<FloorPoint> points;
+	std::vector<Edit> chips;
+	std::vector<float> deepest(segments_.size(), 0.0f);
+	for (std::size_t k = 0; k < segments_.size(); ++k) {
+		const CutPlan &p = segments_[k]->plan();
+		const float upto = segments_[k]->reached();
+		const std::vector<vec2> kept = p.floor_points(upto);
+		for (std::size_t i = 0; i < kept.size(); ++i) {
+			deepest[k] = std::max(deepest[k], kept[i].y);
+			points.push_back({p.point(kept[i].x, kept[i].y), k, k > 0 && i == 0});
+		}
+		for (std::size_t i = 0; i < p.chips.size(); ++i) {
+			if (p.chips_at[i] <= std::min(upto, p.length)) {
+				chips.push_back(p.chips[i]);
+			}
+		}
+	}
+	auto same_point = [&](std::size_t a, std::size_t b) { return gl::length(points[a].at - points[b].at) < 1e-3f; };
+	// The way the floor goes at a point: from the point before it to the one after (past
+	// repeated points), which a polyline round a curve has as its tangent; at its ends, the
+	// way of the piece there.
+	auto tangent = [&](std::size_t i) {
+		std::size_t before = i, after = i;
+		while (before > 0 && same_point(before, i)) {
+			--before;
+		}
+		while (after + 1 < points.size() && same_point(after, i)) {
+			++after;
+		}
+		const vec3 a = same_point(before, i) ? points[i].at : points[before].at;
+		const vec3 b = same_point(after, i) ? points[i].at : points[after].at;
+		return b - a;
+	};
+	// Runs of points one segment's sweep can take (the same section, the same way up), each
+	// swept as few pieces as fit within kSteeredFit: straight where they lie in line, else a
+	// quadratic leaving and arriving along the floor there.
+	std::vector<Edit> out;
+	std::size_t i = 0;
+	while (i + 1 < points.size()) {
+		const CutPlan &first = segments_[points[i].segment]->plan();
+		std::size_t end = i + 1; // the furthest point a piece from i reaches
+		vec3 control{0.0f};
+		bool curved = false;
+		for (std::size_t j = i + 1; j < points.size(); ++j) {
+			if (!same_sweep(first, segments_[points[j].segment]->plan())) {
+				break;
+			}
+			if (j == i + 1 || same_point(j, i)) {
+				end = j;
+				continue;
+			}
+			// In line?
+			bool fits = true;
+			for (std::size_t m = i + 1; m < j && fits; ++m) {
+				fits = distance_to_segment(points[m].at, points[i].at, points[j].at) <= kSteeredFit;
+			}
+			if (fits) {
+				end = j;
+				curved = false;
+				continue;
+			}
+			// A quadratic: leaving along the floor at i, arriving along it at j; one the field
+			// stays near-exact round (bending no tighter than its section follows: the body
+			// takes none bending tighter still).
+			vec3 c;
+			if (control_point(points[i].at, tangent(i), points[j].at, tangent(j), c)) {
+				float deep = 0.0f;
+				for (std::size_t m = i; m <= j; ++m) {
+					deep = std::max(deep, deepest[points[m].segment]);
+				}
+				fits = Primitive::sweep(points[i].at, c, points[j].at, first.normal, first.profile(deep)).lipschitz() <=
+						kSteeredBend;
+				for (std::size_t m = i + 1; m < j && fits; ++m) {
+					fits = distance_to_bezier(points[m].at, points[i].at, c, points[j].at) <= kSteeredFit;
+				}
+				if (fits) {
+					end = j;
+					control = c;
+					curved = true;
+					continue;
+				}
+			}
+			break;
+		}
+		if (same_point(end, i)) {
+			i = end; // (nothing to sweep: a joint's repeated point)
+			continue;
+		}
+		// Its section: the deepest of its segments' (height aside, they are the same).
+		float deep = 0.0f;
+		for (std::size_t m = i; m <= end; ++m) {
+			deep = std::max(deep, deepest[points[m].segment]);
+		}
+		const ToolProfile section = first.profile(deep);
+		// Its ends as a segment's sweep has them: the stroke's start (just above the surface,
+		// or just outside an open face) or a joint's reach back over the corner there; half a
+		// millimetre on into the next piece.
+		vec3 from = points[i].at;
+		const vec3 out_way = gl::normalize(curved ? control - points[i].at : points[end].at - points[i].at);
+		if (i == 0) {
+			const vec2 f = first.floor_points(segments_[0]->reached()).front();
+			from = first.open || f.y > 0.0f ? from - out_way * first.lead_in : first.point(f.x, -0.2f);
+		} else if (points[i].joint) {
+			from = from - out_way * first.lead_in;
+		}
+		vec3 to = points[end].at;
+		const vec3 in_way = gl::normalize(curved ? points[end].at - control : points[end].at - points[i].at);
+		if (end + 1 < points.size()) {
+			to = to + in_way * 0.5f;
+		}
+		out.push_back(cut(curved ? Primitive::sweep(from, control, to, first.normal, section)
+								 : Primitive::sweep(from, to, first.normal, section)));
+		// The next piece begins here (a joint's second copy: with its reach back).
+		i = end + 1 < points.size() && points[end + 1].joint && same_point(end + 1, end) ? end + 1 : end;
+	}
+	out.insert(out.end(), chips.begin(), chips.end());
+	return out;
 }
 
 } // namespace sdf::tools

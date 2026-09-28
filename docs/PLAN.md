@@ -76,6 +76,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | W5 | A workshop to work in: a room built in code (bench and vise, side table, lumber rack), a first-person player, tools on a hotbar (none on the table), every piece of work a rigid body you pick up and carry, the vise squaring what is let go on it, the rack's stacks giving new boards; the old bench view is the work view you step into at the vise |
 | W5-5 | Pieces and debris land and lie still: Jolt named (DEFAULT had been GodotPhysics3D), debris resting on the board in the vise, CCD and a plane floor, guarded pushes and vise, old debris fading. `physics_calm` |
 | T5-1 | Laying out (the Layout slot, 9): a marking gauge (its fence riding the nearest edge, the wheel for its distance) and a knife with a square, each scribing a real V line 0.3 mm deep and recording a mark on the piece (body space, undone with its cut), drawn while a tool is in hand |
+| T5-5 | Steering: a chisel's, gouge's or plane's stroke is a chain of planned segments (`SteeredStroke`), each begun at the depth the last reached. Pivoted mid-stroke, the bevel steers it (dives, runs level, lifts out); dragged round a curve, the edge follows the drag's trail (4 mm lazy, 3° steps, re-fitted to the surface); the segments merged into straight and quadratic sweeps (a quarter circle: 6 edits). `steering` |
 | T5-3 | Planes (the Planes slot, the spokeshave's): a block plane (150 mm sole, 35 mm iron) held flat, started at the work's end; with a chamfer fence, held across an arris by edge lock at 45° to the piece's faces or on the plane between two gauge lines, each pass widening the chamfer evenly to the lines; a shoulder plane, its iron flush with its sides, into a rebate's inside corner. `planes` |
 | T5-4 | The guiding hand: right-drag pivots the tool on its edge (up / down its angle to the work, left / right its skew or turn, the wheel its lean: rolled about its way), hovering or planned, the pointer held where it was; Space plans (Shift+wheel's angle went); an attitude gauge by the pointer (side on with the bevel riding, biting or digging in, from above, end on, in words). `guiding_hand` |
 | T5-2 | The lines stop the tools (`tools/layout.h`: `Stop`, `Limits`, `limit_plan`): flat on a face, a depth line beside is a floor, a line on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square, no lift-out); across the corner, the plane through lines on both faces is a chamfer the tool is laid on and cuts down to, and no further; the saw snaps onto a knife line and stops at a depth line. Rasps, scraper and block keep to the floor and the waste strip. Alt crosses them. `layout_lines` |
@@ -485,6 +486,55 @@ walnut.
       nothing past the width line. Natively: the block plane's full-width shaving from the
       end, the fenced chamfer, the shoulder plane into the corner and the block plane's
       3.5 mm strip.
+
+  - **T5-5, steering** (done).
+    - **Core** (`tools/cutting.{h,cpp}`):
+      - `plan_cut(..., entry)` goes on from a cut `entry` deep. Tilted past the bevel's
+        2° clearance it dives at tan(difference) to `max(depth, entry)`; within the
+        clearance it runs level; under it, it rises and ends where the floor reaches the
+        surface (`kLifts`).
+      - `SteeredStroke` chains `PlannedStroke` segments; `going_on()` is the surface point
+        over the edge and the edge's depth under it; `steer()` sets the next segment's
+        `lead_in` to cover the outer corner of the joint.
+      - `edits()` merges the floor points: straight where in line, quadratic where they fit
+        within `kSteeredFit` (0.03 mm). Tangents are central differences (neighbour to
+        neighbour); a quadratic is taken only if its Lipschitz bound is ≤ `kSteeredBend`
+        (1.2).
+      - `plan_spokeshave(..., continuing)`: a plane going on is not started again at the
+        work's end.
+    - **SdfBody:** every chisel, gouge or plane stroke but a chop is a `SteeredStroke`.
+      `steer_stroke(normal, along, settings)` plans the next segment (the entry measured in
+      the body as it was before the stroke, or from the plan when strokes are applied as
+      they go) and reports it through `get_plan()`.
+    - **Workshop:**
+      - The pushed tool advances half a millimetre at a time, steering after each (`_steer`).
+      - The guiding hand works mid-stroke: a changed hold steers on at the new attitude, the
+        depth cap raised to the tool's greatest, so the bevel alone decides.
+      - Free-hand direct strokes follow the drag's trail: the first point 4 mm ahead of the
+        edge, a turn at 3° or more and at most 30°. The surface normal is re-fitted every
+        millimetre.
+      - Steering stops where a segment ended short (lifted out, blocked).
+    - **Found on the way:**
+      - An edge that lags a fast drag and heads for the pointer cuts inside the curve
+        (4.5 mm); following the trail fixes it.
+      - One quadratic bending tighter than its section made the body refuse the whole
+        stroke.
+      - Steering once a frame faceted curves at a few frames a second.
+    - **Measured:**
+      - Natively, a stroke steered on its way cuts as its plan (1 sweep); the bevel dives
+        0.3 → 0.6 mm at tan 6°, stays level, and lifts out at 2.85 mm; a 90° arc steered
+        every 3° is followed within 0.03 mm in 6 sweeps.
+      - In the workshop (`steering`), a 40 mm quarter circle is followed within 0.17 mm,
+        with at most 5 overlay edits; the hand mid-stroke gives 0.300, then 0.823 mm, held,
+        then lifted out.
+    - **Left:**
+      - A stroke whose merged sweeps exceed the overlay (16 edits: a long, wandering curve)
+        shows only its newest until it lands.
+      - Its older sweeps could be applied as it goes.
+
+  T5 is done. Rendered: a curve pared across the top and a chamfer planed to its lines on
+  the end (`docs/images/t5_curve_and_chamfer.png`, `t5_chamfer_close.png`), and the
+  attitude gauge.
 
 **Left for later:** a view model per tool that looks held (it floats at a fixed offset);
 putting tools down; the rack's stacks running out; a vise that holds a piece off the bench

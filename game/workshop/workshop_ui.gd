@@ -26,6 +26,7 @@ const WARNINGS := {
 	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
 	"mouth": "its mouth passes no thicker a shaving",
 	"at the line": "held to the marked lines: no deeper, no further",
+	"lifts out": "lifts out: the handle lowered under its bevel",
 }
 ## What stops a stroke going on (SdfBody.get_stroke_state's "limit"), in words.
 const LIMITS := {
@@ -43,9 +44,10 @@ const DIAL := 25.0 # its dials' radius
 ## How a chisel's or gouge's bevel meets the work (workshop.attitude()): words and colour.
 const BITES := {"rides": ["rides its bevel", Color(0.55, 0.8, 1.0)], "bites": ["bites", Color(0.5, 1.0, 0.5)],
 		"digs in": ["digs in", Color(1.0, 0.5, 0.3)], "chops": ["chops", Color(1.0, 0.85, 0.35)]}
-const HINTS := "Left-drag on the board: use the tool   Right-drag: the guiding hand pivots it on its edge (up / down: angle, left / right: skew or turn, wheel: lean; Ctrl: finely)\n" + \
-		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   C: chop   Tab: variant   Q / E: skew or turn by 15°\n" + \
-		"Alt: no edge lock   Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
+const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane follows a curving drag)   C: chop   Tab: variant   Q / E: skew or turn by 15°\n" + \
+		"Right-drag, the guiding hand (also mid-stroke): up / down the angle, left / right skew or turn, wheel the lean (Ctrl: finely)\n" + \
+		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
+		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
 		"E: pick up, let go (over the vise: into it), take a board from the rack, work at the bench   F: out of the vise   R: turn what you carry"
 

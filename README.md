@@ -94,6 +94,7 @@ under the crosshair says to put a piece in it.
      (see *Chisels and gouges* below), and lifted out when you let go. It goes no faster
      than a hand works it: drag ahead and it follows at its working speed (below); let go
      and the stroke ends where it got to. Its blade pushes loose pieces in its way aside.
+     Drag round a curve and the edge follows it (*Steering* below).
      Held up to chop (**C**), each click is a mallet blow (a tap, a firm blow or a heavy one,
      from the panel or the wheel), at most one every 0.35 s.
    - **Saw:** slides back and forth along its line at its working speed, its handle towards
@@ -167,8 +168,9 @@ under the crosshair says to put a piece in it.
 5. **Hold it as a hand would: right-drag, the guiding hand.** While the right button is
    held the pointer stays where it is, over the edge, and the mouse's motion pivots the
    tool on it; let go and the pointer is back where it was. It works hovering (for the
-   next stroke) and while a stroke is planned (the hatch follows as you pivot); a stroke
-   being made keeps the attitude it began with.
+   next stroke), while a stroke is planned (the hatch follows as you pivot) and while a
+   chisel, gouge or plane is being pushed: the stroke goes on from where its edge is, held
+   the new way (*Steering* below).
    - **Up and down** raise and lower the handle: a chisel's or gouge's angle to the work,
      0.25° for a pixel (**Ctrl**: a fifth as far). Paring stays below 60°, a chop at or
      above it (**C** goes between them).
@@ -402,6 +404,31 @@ pointer says what it comes to.
   - A paring chisel is never struck: pushed by hand, it barely goes in.
 - **Skew.** The guiding hand (left and right) or Q / E turn a chisel's edge across its
   push, and a skewed edge slices for less force.
+- **Steering.** A chisel's, gouge's or plane's stroke can be steered as it goes: a chain of
+  planned segments (core `SteeredStroke`, `tools/cutting.h`), each begun where the last's
+  edge has got to, at the depth it had got to.
+  - **By the bevel.** Pivot the tool mid-stroke with the guiding hand and it goes on at the
+    new attitude, steered by its bevel (`plan_cut`'s `entry`): tipped past the bevel's
+    clearance it dives at the difference (as deep as the hand can push it); held on its
+    bevel it runs level; lowered under it, it rises at the difference and lifts out
+    (*lifts out*). In the workshop, a 6 mm chisel along the board: level at 0.300 mm on
+    its bevel, 0.823 mm after 5 mm raised 6°, held there on the bevel, lifted out once
+    lowered 6° under it.
+  - **Along a curve.** Made directly, and not held along an edge or to lines, the edge
+    follows the way the pointer went: towards the first point of the drag's trail at least
+    4 mm ahead of it, turning when that heads 3° or more off its way (30° at most at a
+    time), checked every half millimetre it goes. Where the surface under it turns 3°, it
+    is set to it afresh, so its angle to the work holds over a curve or a slope. Round a
+    40 mm quarter circle the cut's middle keeps within 0.17 mm of it at its 0.3 mm depth;
+    natively, round a 90° arc steered every 3°, within 0.03 mm.
+  - **One cut.** The segments' floors are swept as one: runs in line as one sweep, curving
+    runs as quadratic sweeps within 0.03 mm (none bending tighter than its section can
+    follow): 30 segments of a quarter circle take 6 edits, and the overlay holds a curve
+    whole. A steer is planned in 0.3 ms; merging 30 segments takes 0.5 ms.
+  - The shaving goes on from one segment to the next; each segment's report (depth, force,
+    grain) is the line by the pointer.
+
+  ![A curve pared with a 6 mm chisel across the top, and a 3 mm chamfer planed to its gauge lines on the end with the fenced block plane](docs/images/t5_curve_and_chamfer.png)
 - **What it cannot do.** The chip is everything between the floor and the surface above it,
   and the plan checks it every millimetre across the edge (nine columns), so no cut runs
   under the work:
@@ -615,6 +642,8 @@ loose pieces in its way aside.
     between them. Each pass widens the chamfer evenly along the board; once it meets the
     lines, a pass takes nothing (3 mm lines: 4.50 mm² of section at every point along the
     board after 5 passes of 0.5 mm, then nothing).
+
+    ![A 3 mm chamfer planed to its gauge lines along the board's end, close up](docs/images/t5_chamfer_close.png)
   - **The shoulder plane:** 19 mm wide, its iron flush with its sides, a 160 mm sole. Set
     flush on a rebate's width line (a line marked on the face), it cuts right into the
     inside corner: a 8 × 1.5 mm rebate in 4 passes, its floor 1.500 mm down from end to

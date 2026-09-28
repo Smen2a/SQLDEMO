@@ -395,15 +395,93 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	return true;
 }
 
+Dictionary SdfBody::report_of(const tools::CutPlan &c) {
+	Dictionary report;
+	report["depth"] = double(c.depth);
+	report["length"] = double(c.length);
+	report["force"] = double(c.force);
+	report["available"] = double(c.available);
+	report["grain"] = double(c.grain);
+	report["slope"] = c.slope;
+	report["chop"] = c.chop;
+	report["blow"] = double(c.blow);
+	report["bevel"] = double(c.chisel.bevel_deg);
+	PackedStringArray warnings;
+	for (const std::string &w : tools::warning_names(c.warnings)) {
+		warnings.push_back(String(w.c_str()));
+	}
+	report["warnings"] = warnings;
+	// Where a rule stopped it short, and which.
+	report["stop_at"] = double(c.stop_at);
+	const std::vector<std::string> stop = tools::warning_names(c.stop);
+	report["stop"] = stop.empty() ? String() : String(stop.front().c_str());
+	report["wall"] = double(c.wall);
+	return report;
+}
+
+std::shared_ptr<tools::Stroke> SdfBody::steerable(const tools::CutPlan &plan) {
+	if (plan.chop) {
+		return tools::planned_stroke(plan); // (one blow: nothing to steer)
+	}
+	return std::make_shared<tools::SteeredStroke>(plan);
+}
+
+Dictionary SdfBody::steer_stroke(const Vector3 &normal, const Vector3 &along, const Dictionary &settings) {
+	Dictionary out;
+	auto *steered = dynamic_cast<tools::SteeredStroke *>(stroke_.get());
+	if (steered == nullptr) {
+		return out;
+	}
+	gather_debris(false); // what the segment so far took, before the next begins
+	settle_body();        // (it reads the body)
+	const tools::Work work{session_.body(), session_.octree(), materials_};
+	const vec3 n = gl::normalize(to_body_direction(normal));
+	tools::SteeredStroke::Going going;
+	if (previewing_) {
+		going = steered->going_on(work, n); // the body is as it was before the stroke
+	} else {
+		// Applied as it goes: the body has the cut in it already. The edge as deep as the plan
+		// has it.
+		const float entry = steered->plan().depth_at(steered->reached());
+		going = {steered->edge() + n * entry, entry};
+	}
+	const vec3 a = tools::Frame::at(going.start, n, to_body_direction(along)).x;
+	Dictionary s = settings.duplicate();
+	if (stroke_tool_ == "spokeshave") {
+		s["continuing"] = true;
+	} else {
+		s["entry"] = double(going.entry);
+	}
+	const tools::CutPlan plan = plan_for(stroke_tool_, work, going.start, n, a,
+			float(double(settings.get("length", 300.0))), s);
+	if (plan.chop) {
+		return out;
+	}
+	steered->steer(plan);
+	stroke_rise_ = plan.chisel.approach_deg;
+	plan_report_ = report_of(plan);
+	if (previewing_) {
+		update_overlay();
+	}
+	const Transform3D xf = get_global_transform();
+	out["start"] = xf.xform(to_godot(plan.start));
+	out["normal"] = xf.basis.xform(to_godot(plan.normal)).normalized();
+	out["path"] = xf.basis.xform(to_godot(plan.path)).normalized();
+	out["segments"] = int64_t(steered->segments());
+	return out;
+}
+
 tools::CutPlan SdfBody::plan_for(const String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a, float length,
 		const Dictionary &s) {
 	const std::uint32_t seed = std::uint32_t(int64_t(s.get("seed", 1)));
 	tools::CutPlan plan;
 	if (tool == "spokeshave") {
-		plan = tools::plan_spokeshave(plane_from(s), work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
+		plan = tools::plan_spokeshave(plane_from(s), work, p, n, a, length, float(double(s.get("depth", 0.1))), seed,
+				bool(s.get("continuing", false)));
 	} else {
 		plan = tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 0.2))),
-				float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))));
+				float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))),
+				float(double(s.get("entry", -1.0))));
 	}
 	tools::limit_plan(plan, limits_from(s)); // (the lines marked on the work)
 	return plan;
@@ -606,7 +684,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		if (plan_stale_) {
 			flush(); // lands the edit and plans again against it
 		}
-		stroke_ = tools::planned_stroke(*cut_plan_); // the plan it was shown
+		stroke_ = steerable(*cut_plan_); // the plan it was shown
 	} else if (planned_tool(tool)) {
 		// Not planned first: planned now, against the body as it is, and made without a
 		// preview (its report still says what it comes to).
@@ -614,7 +692,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		plan_request_ = PlanRequest{tool, contact, normal, along, double(settings.get("length", 40.0)), settings.duplicate()};
 		compute_plan();
 		if (cut_plan_) {
-			stroke_ = tools::planned_stroke(*cut_plan_);
+			stroke_ = steerable(*cut_plan_);
 		}
 	} else {
 		if (reads_body(tool)) {
@@ -623,6 +701,7 @@ bool SdfBody::begin_stroke(const String &tool, const Vector3 &contact, const Vec
 		stroke_ = make_stroke(tool, p, n, a, settings);
 	}
 	stroke_rise_ = cut_plan_ ? cut_plan_->chisel.approach_deg : 0.0f;
+	stroke_tool_ = tool;
 	plan_request_.reset();
 	cut_plan_.reset();
 	if (!planned_.empty()) {
@@ -674,28 +753,9 @@ Dictionary SdfBody::compute_plan() {
 	if (planned_tool(r.tool)) {
 		const tools::Work work{session_.body(), session_.octree(), materials_};
 		cut_plan_ = plan_for(r.tool, work, p, n, a, float(r.length), r.settings);
-		const tools::CutPlan &c = *cut_plan_;
-		planned_ = c.edits();
+		planned_ = cut_plan_->edits();
+		report = report_of(*cut_plan_);
 		report["edits"] = int64_t(planned_.size());
-		report["depth"] = double(c.depth);
-		report["length"] = double(c.length);
-		report["force"] = double(c.force);
-		report["available"] = double(c.available);
-		report["grain"] = double(c.grain);
-		report["slope"] = c.slope;
-		report["chop"] = c.chop;
-		report["blow"] = double(c.blow);
-		report["bevel"] = double(c.chisel.bevel_deg);
-		PackedStringArray warnings;
-		for (const std::string &w : tools::warning_names(c.warnings)) {
-			warnings.push_back(String(w.c_str()));
-		}
-		report["warnings"] = warnings;
-		// Where a rule stopped it short, and which.
-		report["stop_at"] = double(c.stop_at);
-		const std::vector<std::string> stop = tools::warning_names(c.stop);
-		report["stop"] = stop.empty() ? String() : String(stop.front().c_str());
-		report["wall"] = double(c.wall);
 		plan_stale_ = false;
 		plan_report_ = report;
 		update_overlay();
@@ -1916,6 +1976,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_opacity", "opacity"), &SdfBody::set_opacity);
 	ClassDB::bind_method(D_METHOD("get_opacity"), &SdfBody::get_opacity);
 	ClassDB::bind_method(D_METHOD("move_stroke", "point"), &SdfBody::move_stroke);
+	ClassDB::bind_method(D_METHOD("steer_stroke", "normal", "along", "settings"), &SdfBody::steer_stroke);
 	ClassDB::bind_method(D_METHOD("end_stroke"), &SdfBody::end_stroke);
 	ClassDB::bind_method(D_METHOD("cancel_stroke"), &SdfBody::cancel_stroke);
 	ClassDB::bind_method(D_METHOD("is_stroking"), &SdfBody::is_stroking);

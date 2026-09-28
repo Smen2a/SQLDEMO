@@ -97,7 +97,9 @@ constexpr float kPlaneStart = 20.0f;
 // `depth` mm below its sole (held flat on the work: tools/rubbing.h settle(); with a fence,
 // as it was set): the floor its sole's rest leaves (the highest across the sole), the force two hands can put behind the chip, where its toe is stopped (and
 // why), tear-out against the grain. Made with planned_stroke() (cutting.h).
+// `continuing`: it goes on from a pass steered its way (steered_stroke(): `start` over the
+// edge): not started again at the work's end.
 CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, std::uint32_t seed);
+		float depth, std::uint32_t seed, bool continuing = false);
 
 } // namespace sdf::tools

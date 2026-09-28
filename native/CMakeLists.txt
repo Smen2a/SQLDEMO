@@ -89,6 +89,7 @@ if(ZLIB_FOUND)
 		tests/test_smoothing.cpp
 		tests/test_cutting.cpp
 		tests/test_shaping.cpp
+		tests/test_steering.cpp
 		tests/test_debris.cpp
 		tests/test_edges.cpp
 		tests/test_rubbing.cpp

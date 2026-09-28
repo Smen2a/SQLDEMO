@@ -235,7 +235,7 @@ Body Spokeshave::model() const {
 }
 
 CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, std::uint32_t seed) {
+		float depth, std::uint32_t seed, bool continuing) {
 	Chisel blade;
 	blade.width = shave.blade_width;
 	blade.approach_deg = shave.bed_deg;
@@ -267,7 +267,7 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	// A plane (its sole long) is started with its iron over the near end of the work: set on
 	// within kPlaneStart of that end, its pass begins there. (Begun further in, its sole
 	// would ride the wood an earlier pass left standing at the end, and take less and less.)
-	if (shave.kind != Spokeshave::Kind::Spokeshave) {
+	if (shave.kind != Spokeshave::Kind::Spokeshave && !continuing) {
 		for (float back = 0.5f; back <= kPlaneStart; back += 0.5f) {
 			if (!on_work(start - t * back)) {
 				start -= t * (back - 0.5f);

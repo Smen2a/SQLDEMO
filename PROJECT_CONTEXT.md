@@ -174,6 +174,7 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| T5-5 | Steering: pivoted mid-stroke, a chisel's bevel steers its depth (tipped past it, it dives; on it, level; under it, it lifts out); dragged round a curve, a chisel, gouge or plane follows the drag's trail, set afresh to the surface as it goes; the chain of segments swept as a few straight and quadratic sweeps |
 | T5-3 | Planes: the spokeshave's slot holds a block plane (a long sole held flat, started at the work's end), the block plane with a chamfer fence (held across an arris at 45°, or on the plane between two gauge lines: an even chamfer to the lines) and a shoulder plane (its iron flush with its sides: into a rebate's inside corner) |
 | T5-4 | The guiding hand: right-drag pivots the tool on its edge (up / down its angle to the work, left / right its skew or turn, the wheel its lean), hovering or while planned, the pointer held where it was. Space plans. An attitude gauge by the pointer shows the angle (with the bevel riding, biting or digging in), the skew and the lean |
 | T5-2 | The lines stop the tools. Flat on a face: a gauge line on the face beside is a floor (a rebate's depth), one on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square). Across the corner: the plane through gauge lines on both faces is a chamfer; the tool is laid on it and each pass takes the corner down to it, then nothing. The saw snaps onto a knife line and stops at a depth line; rasps, scraper and block keep to the floor and the waste. Alt crosses them. In the core: `Limits` (`tools/layout.h`) and a stop *at the line* |
@@ -187,7 +188,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 131 native tests (GCC and Clang, including golden images) and 14
+Test counts today: 134 native tests (GCC and Clang, including golden images) and 15
 headless Godot checks.
 
 ## 5. Where things stand
@@ -233,6 +234,9 @@ so correctness can be checked here, but not speed.
 - **Shadows:** under the Compatibility renderer, Live bodies receive no shadow-map
   shadows (coordinates are per vertex on the proxy box). Forward+ and Mobile look them
   up per fragment, which is still to be confirmed on hardware.
+- **Steering:** a stroke whose merged sweeps outgrow the overlay (16 edits: a long,
+  wandering curve) shows only its newest until it lands; its older sweeps could be applied
+  as it goes.
 - **Dust:** it doesn't ride on the pieces it lands on (it falls once a sawn piece has slid
   away), and tools pass over it without pushing it.
 - **Other:** redo doesn't bring back offcuts or debris; there is no mesh export yet.
@@ -242,7 +246,7 @@ so correctness can be checked here, but not speed.
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
 
-### T5. Lines the tools obey, and a guiding hand (in progress: T5-1 to T5-4 done)
+### T5. Lines the tools obey, and a guiding hand (done)
 
 From play: a chisel pass takes one strip, so corners and whole sections never come out
 crisp, and the tools work on one axis at one angle. Real work gets crisp edges from
@@ -252,7 +256,7 @@ crosses them), scribed and drawn, and two-handed control with the mouse and keyb
 (right-drag pivots the tool on its edge, Space plans). The plan (docs/PLAN.md, T5): T5-1
 layout, T5-2 the lines stop the tools, then T5-4 the guiding hand, T5-3 planes (a block
 plane with a chamfer fence, a shoulder plane), T5-5 steering mid-stroke and curved
-strokes.
+strokes. All five are done. Next: try them together in play.
 
 ### W5. A workshop to work in (done)
 
@@ -475,6 +479,14 @@ build directory).
   end; resting it on the highest point under it is right, but then anything a pass left
   standing (half a millimetre at the far end) holds it off the wood for half a sole's
   length. Start planes at the near end and run them off the far one.
+- **Follow the way the pointer went, not where it is.** An edge that lags a fast drag (it
+  goes at a hand's speed) and heads for the pointer cuts the corner: 4.5 mm inside a
+  40 mm curve. Following the drag's trail keeps it within 0.2 mm.
+- **One bad edit refuses the whole batch.** A merged quadratic bending tighter than its
+  section follows has a Lipschitz bound over 2; the session rejects the stroke's whole
+  commit, and nothing is cut. Check each candidate's bound, not just its fit.
+- **Step the tool finer than a frame.** Steering once a frame faceted curves when frames
+  took half a second; the pushed tool now advances and steers every half millimetre.
 - **Wait for the board to be idle between strokes in a test.** A ray right after a commit
   can read the body as it was: lock the next stroke only once `is_busy()` is false and no
   refine is pending.

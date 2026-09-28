@@ -94,6 +94,7 @@ enum CutWarning : unsigned {
 	kStalls = 1u << 13,       // the chip grows thicker than the hand can push
 	kMouth = 1u << 14,        // a spokeshave's mouth passes no thicker shaving
 	kAtLine = 1u << 15,       // held to a marked line (tools/layout.h): no deeper, or no further
+	kLifts = 1u << 16,        // steered with the handle lowered under its bevel: the edge lifts out
 };
 // The warnings' names ("skates", "shallow", ...), in bit order.
 std::vector<std::string> warning_names(unsigned warnings);
@@ -106,6 +107,8 @@ struct CutPlan {
 	float width = 0.0f;       // swept width (a skewed flat edge sweeps less than its width)
 	float length = 0.0f;      // mm along the path it cuts
 	bool open = false;        // it starts at its depth (from an open face, or under a sole)
+	float lead_in = 0.5f;     // mm its floor's sweep begins before its start, starting at depth
+	                          // (more where it goes on from a cut steered off another way)
 	float height = 0.0f;      // how far its section reaches above the floor (0: to above the plane)
 	float lift_depth = -1.0f; // the depth it lifts out from (< 0: the floor's there)
 	bool square_end = false;  // it ends at a knife line: square there, not lifted out beyond
@@ -135,6 +138,11 @@ struct CutPlan {
 	std::vector<Edit> edits(float upto = 1e9f, bool finished = true) const;
 	// Just the floor swept, as far as `upto` (a chop: its slit).
 	std::vector<Edit> floor_edits(float upto = 1e9f) const;
+	// The floor's corners as far as `upto` ((along, depth), simplified: where it bends), and
+	// the section it is swept with (reaching `deepest` + 2 above the floor, or the plan's
+	// height).
+	std::vector<vec2> floor_points(float upto = 1e9f) const;
+	ToolProfile profile(float deepest) const;
 	// How long a piece the shaving comes off in before it breaks: cut along the fibres it
 	// holds together (a long ribbon); severing them it crumbles into short pieces, the
 	// shorter the more readily the wood splits.
@@ -148,8 +156,13 @@ struct CutPlan {
 // the edge turned `skew_deg` across the path by the hand (a skew chisel's own is added).
 // At 60 degrees or more it is a chop at `start`: one blow (the waste on the path's side),
 // `blow` times a firm one (0.3 a tap, 1.6 a heavy blow).
+// With `entry` (>= 0) it goes on from a cut steered its way (steered_stroke()): the edge is
+// already `entry` deep under `start`, and the bevel steers it. Tipped past the bevel's
+// clearance it dives at the difference (to `depth` at most); riding its bevel (within the
+// clearance) it runs level; lowered under it, it rises at the difference and lifts out
+// (kLifts: the cut ends where the edge leaves the wood).
 CutPlan plan_cut(const Chisel &chisel, const Work &work, vec3 start, vec3 normal, vec3 path, float length,
-		float depth, float skew_deg, std::uint32_t seed, float blow = 1.0f);
+		float depth, float skew_deg, std::uint32_t seed, float blow = 1.0f, float entry = -1.0f);
 
 // The chip over a plan's edge is looked at in this many columns across it.
 constexpr int kChipColumns = 9;
@@ -166,5 +179,52 @@ void add_tear_out(CutPlan &plan, const Work &work, float scale, std::uint32_t se
 // A stroke making a plan: pushed along its path, never back and never past where it
 // stops; a chop is one blow, made at once.
 std::unique_ptr<Stroke> planned_stroke(const CutPlan &plan);
+
+namespace detail {
+class PlannedStroke;
+}
+
+// A chisel's, gouge's or plane's stroke that can be steered as it goes: a chain of planned
+// cuts, each begun where the one before had got to (its start over the edge, its `entry`
+// the edge's depth there: plan_cut()), held another way (the handle raised or lowered, the
+// edge skewed or leaned) or turned along a curve. Unsteered, it is planned_stroke(plan).
+// Its cut is the segments' floors swept as one: runs of them in line as one sweep, curving
+// runs as quadratic sweeps (within kSteeredFit), so a curve takes a few edits. The shaving
+// goes on from one to the next.
+class SteeredStroke : public Stroke {
+public:
+	explicit SteeredStroke(const CutPlan &first);
+	~SteeredStroke() override;
+
+	StrokeUpdate move_to(vec3 point) override;
+	std::vector<Edit> edits() const override;
+	std::vector<Edit> finish() override;
+	Frame pose() const override;
+	void debris(const Body &body, const Octree &octree, Debris &out, bool ended = false) override;
+
+	// The segment being made, how far along it the edge has got, and where the edge is.
+	const CutPlan &plan() const;
+	float reached() const;
+	vec3 edge() const;
+	// Where it goes on from, the work's surface there facing `normal`: the point on the
+	// surface over the edge (along `normal`), and the edge's depth under it (0 in the air).
+	struct Going {
+		vec3 start;
+		float entry = 0.0f;
+	};
+	Going going_on(const Work &work, vec3 normal) const;
+	// Goes on along `next` (planned from going_on(): `entry` its plan_cut() entry) from where
+	// the edge is.
+	void steer(CutPlan next);
+	std::size_t segments() const { return segments_.size(); }
+
+private:
+	std::vector<std::unique_ptr<detail::PlannedStroke>> segments_;
+};
+
+// How closely a steered stroke's merged sweeps keep to its segments' floors (mm), and the
+// most a curved one may stretch the field (its Lipschitz bound: Primitive::lipschitz()).
+constexpr float kSteeredFit = 0.03f;
+constexpr float kSteeredBend = 1.2f;
 
 } // namespace sdf::tools
