@@ -16,14 +16,22 @@ extends Node
 ##
 ## Pencil is not an edit of the body: what it draws is undone by the workshop's undo straight
 ## after (the piece's meta "pencil_log"), before any cut.
+##
+## The player's own plans, drawn on the pad (plan_editor.gd), are saved in user://plans and
+## listed with the presets (flagged "mine"); they are laid out as any preset is.
 
+const Room := preload("res://workshop/room.gd")
 const PLANS_DIR := "res://plans"
+const USER_DIR := "user://plans"
 
 var workshop
 ## Plans by id (the file's name): the parsed JSON ({name, about, parts, joints}).
 var plans := {}
 ## The sheet in hand: {"plan", "part"} (ids), or {}.
 var sheet := {}
+## What is on the pad, left there when it was put down unsaved: {"plan" (as drawn), "id" (the
+## plan it was saved as or opened from, "" for none), "saved"}; {} for a clean pad.
+var draft := {}
 var _serial := 0
 
 
@@ -31,20 +39,96 @@ func _ready() -> void:
 	load_plans()
 
 
+## The presets (res://plans) and the player's own (user://plans, "mine"), by id.
 func load_plans() -> void:
 	plans = {}
-	var dir := DirAccess.open(PLANS_DIR)
-	if dir == null:
-		return
-	for file in dir.get_files():
-		if not file.ends_with(".json"):
+	for path in [PLANS_DIR, USER_DIR]:
+		var dir := DirAccess.open(path)
+		if dir == null:
 			continue
-		var text := FileAccess.get_file_as_string(PLANS_DIR + "/" + file)
-		var plan = JSON.parse_string(text)
-		if plan is Dictionary:
-			plans[file.get_basename()] = plan
+		for file in dir.get_files():
+			if not file.ends_with(".json"):
+				continue
+			var id := file.get_basename()
+			if plans.has(id):
+				continue # (a preset's id: saved plans never take one)
+			var plan = JSON.parse_string(FileAccess.get_file_as_string(path + "/" + file))
+			if plan is Dictionary and plan.get("parts") is Array:
+				if path == USER_DIR:
+					plan.mine = true
+				plans[id] = plan
+			else:
+				push_error("plans: %s/%s is not a plan" % [path, file])
+
+
+## An id for a new plan of the player's, from its name: its words in lower case joined by
+## "_", numbered where a plan has it already.
+func new_id(name: String) -> String:
+	var base := ""
+	for c in name.to_lower():
+		base += c if (c >= "a" and c <= "z") or (c >= "0" and c <= "9") else "_"
+	while base.contains("__"):
+		base = base.replace("__", "_")
+	base = base.trim_prefix("_").trim_suffix("_")
+	if base == "":
+		base = "plan"
+	var id := base
+	var n := 2
+	while plans.has(id) or FileAccess.file_exists("%s/%s.json" % [USER_DIR, id]):
+		id = "%s_%d" % [base, n]
+		n += 1
+	return id
+
+
+## Saves one of the player's plans (user://plans/<id>.json) and loads the plans again. Each
+## part notes the stock on the rack it is cut from (stock_for). "" or what went wrong.
+func save_plan(id: String, plan: Dictionary) -> String:
+	if id == "" or (plans.has(id) and not plans[id].get("mine", false)):
+		return "not a plan of yours"
+	var out: Dictionary = plan.duplicate(true)
+	out.erase("mine")
+	for p in out.get("parts", []):
+		var stock := stock_for(p)
+		if stock == "":
+			p.erase("stock")
 		else:
-			push_error("plans: %s is not a plan" % file)
+			p.stock = stock
+	DirAccess.make_dir_recursive_absolute(USER_DIR)
+	var file := FileAccess.open("%s/%s.json" % [USER_DIR, id], FileAccess.WRITE)
+	if file == null:
+		return "could not write %s/%s.json" % [USER_DIR, id]
+	file.store_string(JSON.stringify(out, "\t", false))
+	file.close()
+	load_plans()
+	return ""
+
+
+## Deletes one of the player's plans (a preset stays). The sheet in hand goes with it.
+func delete_plan(id: String) -> bool:
+	if not plans.get(id, {}).get("mine", false):
+		return false
+	DirAccess.remove_absolute("%s/%s.json" % [USER_DIR, id])
+	if sheet.get("plan", "") == id:
+		sheet = {}
+	load_plans()
+	return true
+
+
+## The stock on the rack (Room.STOCK) a part is best cut from: of its wood, at least its
+## length along the grain and its width and thickness either way round, the least wood of
+## those; "" where none is big enough.
+static func stock_for(p: Dictionary) -> String:
+	var s := size_of(p)
+	var best := ""
+	var least := INF
+	for kind in Room.STOCK:
+		var spec: Dictionary = Room.STOCK[kind]
+		var t: Vector3 = spec.size
+		var fits := t.x >= s.x - 0.05 and ((t.y >= s.y - 0.05 and t.z >= s.z - 0.05) or (t.y >= s.z - 0.05 and t.z >= s.y - 0.05))
+		if spec.wood == p.get("wood", "") and fits and t.x * t.y * t.z < least:
+			least = t.x * t.y * t.z
+			best = kind
+	return best
 
 
 ## A plan's part by id, or {}.

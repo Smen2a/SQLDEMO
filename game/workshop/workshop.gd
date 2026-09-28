@@ -427,6 +427,8 @@ func interact() -> void:
 		take_stock(thing)
 	elif thing.has_meta("plans"):
 		_ui.open_plans()
+	elif thing.has_meta("pad"):
+		_ui.open_editor("", false, true)
 
 
 ## A new piece of stock from a stack on the rack (room.gd), into the hands: off the top of the
@@ -611,6 +613,8 @@ func prompt() -> String:
 		return "E: pick up the %s" % _name_of(thing)
 	if thing.has_meta("plans"):
 		return "E: open the plan book"
+	if thing.has_meta("pad"):
+		return "E: draw a plan" if plans.draft.is_empty() else "E: go on drawing the plan on the pad"
 	if thing.has_meta("stock"):
 		var wood_name: String = thing.get_meta("wood_name")
 		return "E: take %s %s %s" % ["an" if "aeiou".contains(wood_name[0]) else "a", wood_name,
@@ -1698,7 +1702,8 @@ func stroke_state() -> Dictionary:
 # --- per frame ---------------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
-	# The plan book, open over everything: P or Esc closes it.
+	# The plan book or the pad, open over everything: P or Esc closes it (what is on the pad
+	# stays there).
 	if _ui != null and _ui.plans_open():
 		if event is InputEventKey and event.pressed and not event.echo and \
 				((event as InputEventKey).keycode == KEY_P or (event as InputEventKey).keycode == KEY_ESCAPE):

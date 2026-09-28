@@ -6,6 +6,7 @@ extends CanvasLayer
 ## GPU frame time).
 
 const PlanViewer := preload("res://workshop/plan_viewer.gd")
+const PlanEditor := preload("res://workshop/plan_editor.gd")
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
 		"spokeshave": "5 Planes", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
 		"layout": "9 Layout"}
@@ -69,7 +70,7 @@ var _left: Control   # the tool's settings (at the bench)
 var _right: Control  # the wood, undo, pace... (at the bench)
 var _crosshair: Label
 var _prompt: Label   # under the crosshair: what E would do
-var _viewer: Control # the plan book, while it is open (plan_viewer.gd)
+var _viewer: Control # the plan book or the pad, while it is open (plan_viewer.gd, plan_editor.gd)
 
 
 func _ready() -> void:
@@ -257,9 +258,32 @@ func open_plans() -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+## The pad (plan_editor.gd), over everything as the book is: a plan of the player's to change
+## (`id`), a copy of one (`copy`), what was left on the pad (`resume`, else a new plan).
+func open_editor(id := "", copy := false, resume := false) -> void:
+	if plans_open():
+		_viewer.queue_free() # (from the book's own button: not freed under it)
+	_viewer = PlanEditor.new()
+	_viewer.workshop = workshop
+	_viewer.open_id = id
+	_viewer.open_copy = copy
+	_viewer.open_resume = resume
+	add_child(_viewer)
+	if workshop.mode == workshop.Mode.WALK:
+		workshop.player.active = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func editor_open() -> bool:
+	return plans_open() and _viewer is PlanEditor
+
+
+## Closes the book or the pad (what is drawn on it stays there).
 func close_plans() -> void:
 	if not plans_open():
 		return
+	if _viewer.has_method("put_down"):
+		_viewer.put_down()
 	_viewer.queue_free()
 	_viewer = null
 	if workshop.mode == workshop.Mode.WALK:

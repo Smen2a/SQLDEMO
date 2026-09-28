@@ -4,14 +4,14 @@ extends Control
 ## the joints between them, and a part's sheet, drawn as a woodworker's drawing: its face
 ## side, face edge and end, each with the lines that lay it out (the far faces' dashed), its
 ## sizes, and what each feature comes to. "Take this sheet" puts it in hand: the Layout
-## slot's plan sheet, laid on the piece in the vise to draw the part on.
+## slot's plan sheet, laid on the piece in the vise to draw the part on. "New plan" and "Edit"
+## (the player's own plans) or "Edit a copy" (the presets) open the pad (plan_editor.gd).
+
+const SheetView := preload("res://workshop/sheet_view.gd")
 
 const INK := Color(0.16, 0.14, 0.13)
 const FAINT := Color(0.16, 0.14, 0.13, 0.5)
 const PAPER := Color(0.95, 0.92, 0.84)
-const SIZES := Color(0.6, 0.22, 0.14) # dimensions
-const MARGIN := 44.0 # px round the views (room for their sizes)
-const GAP := 36.0    # px between them
 
 var workshop
 var plan_id := ""
@@ -21,9 +21,9 @@ var _about: Label
 var _parts: ItemList
 var _joints: Label
 var _features: Label
-var _sheet: Control
+var _sheet: SheetView
 var _take: Button
-var _lines := {} # part id -> its lines (SdfBody.part_lines), for the drawing
+var _edit: Button
 
 
 func _ready() -> void:
@@ -76,6 +76,17 @@ func _ready() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_vertical = SIZE_EXPAND_FILL
 	left.add_child(spacer)
+	var drawing := HBoxContainer.new()
+	left.add_child(drawing)
+	var new := Button.new()
+	new.text = "New plan"
+	new.focus_mode = FOCUS_NONE
+	new.pressed.connect(func(): workshop._ui.open_editor("", false, false))
+	drawing.add_child(new)
+	_edit = Button.new()
+	_edit.focus_mode = FOCUS_NONE
+	_edit.pressed.connect(edit)
+	drawing.add_child(_edit)
 	var buttons := HBoxContainer.new()
 	left.add_child(buttons)
 	_take = Button.new()
@@ -92,10 +103,10 @@ func _ready() -> void:
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = SIZE_EXPAND_FILL
 	row.add_child(right)
-	_sheet = Control.new()
+	_sheet = SheetView.new()
 	_sheet.size_flags_horizontal = SIZE_EXPAND_FILL
 	_sheet.size_flags_vertical = SIZE_EXPAND_FILL
-	_sheet.draw.connect(_draw_sheet)
+	_sheet.mouse_filter = MOUSE_FILTER_IGNORE
 	right.add_child(_sheet)
 	_features = _label(right, "", 15)
 	_features.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -103,7 +114,8 @@ func _ready() -> void:
 	var ids: Array = workshop.plans.plans.keys()
 	ids.sort()
 	for id in ids:
-		_plans.add_item(workshop.plans.plans[id].get("name", id))
+		var plan: Dictionary = workshop.plans.plans[id]
+		_plans.add_item(plan.get("name", id) + ("  (yours)" if plan.get("mine", false) else ""))
 		_plans.set_item_metadata(_plans.item_count - 1, id)
 	_plans.item_selected.connect(func(i): show_plan(_plans.get_item_metadata(i)))
 	_parts.item_selected.connect(func(i): show_part(_parts.get_item_metadata(i)))
@@ -124,6 +136,8 @@ func show_plan(id: String, part := "") -> void:
 		if _plans.get_item_metadata(i) == id:
 			_plans.select(i)
 	_about.text = plan.get("about", "")
+	_edit.text = "Edit" if plan.get("mine", false) else "Edit a copy"
+	_edit.disabled = plan.is_empty()
 	var laid: Dictionary = workshop.plans.status(id)
 	_parts.clear()
 	for p in plan.get("parts", []):
@@ -152,7 +166,18 @@ func show_part(id: String) -> void:
 	for f in p.get("features", []):
 		said.append(_feature_text(f, workshop.plans.size_of(p)))
 	_features.text = "\n".join(said)
-	_sheet.queue_redraw()
+	var plan: Dictionary = workshop.plans.plans.get(plan_id, {})
+	var s: Vector3 = workshop.plans.size_of(p) if not p.is_empty() else Vector3.ZERO
+	_sheet.title = "" if p.is_empty() else "%s: %s, %s, %s x %s x %s mm" % [plan.get("name", plan_id), p.get("name", p.id),
+			p.get("wood", "wood"), _mm(s.x), _mm(s.y), _mm(s.z)]
+	_sheet.set_part(p)
+
+
+## The plan shown, on the pad to change: the player's own as it is, a preset as a copy.
+func edit() -> void:
+	var plan: Dictionary = workshop.plans.plans.get(plan_id, {})
+	if not plan.is_empty():
+		workshop._ui.open_editor(plan_id, not plan.get("mine", false), false)
 
 
 ## Puts the part's sheet in hand (the Layout slot's plan sheet) and closes the book.
@@ -205,115 +230,3 @@ func _label(parent: Control, text: String, size: int) -> Label:
 	l.add_theme_font_size_override("font_size", size)
 	parent.add_child(l)
 	return l
-
-
-## The sheet: the part's face side (length across, width down), its face edge below it
-## (length, thickness) and its end beside it (thickness, width), in third-angle projection;
-## each face's lines, the far face's dashed; the sizes.
-func _draw_sheet() -> void:
-	var p: Dictionary = workshop.plans.part(plan_id, part_id)
-	if p.is_empty():
-		return
-	var font := get_theme_default_font()
-	var plan: Dictionary = workshop.plans.plans.get(plan_id, {})
-	var s: Vector3 = workshop.plans.size_of(p)
-	_sheet.draw_string(font, Vector2(0, 20), "%s: %s, %s, %s x %s x %s mm" % [plan.get("name", plan_id), p.get("name", p.id),
-			p.get("wood", "wood"), _mm(s.x), _mm(s.y), _mm(s.z)], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, INK)
-	var area := _sheet.size - Vector2(2.0 * MARGIN + GAP, 2.0 * MARGIN + GAP + 30.0)
-	if area.x <= 0.0 or area.y <= 0.0:
-		return
-	var k := minf(area.x / (s.x + s.z), area.y / (s.y + s.z)) # px a mm
-	var face := Vector2(MARGIN, MARGIN + 30.0) # the face side view's corner
-	var edge := face + Vector2(0.0, s.y * k + GAP)
-	var end := face + Vector2(s.x * k + GAP, 0.0)
-	# Each view: where a part-space point lands, and which faces it shows (near, far).
-	var views := [
-		[face, func(q: Vector3): return face + Vector2(q.x, q.y) * k, Vector3(0, 0, -1), Vector2(s.x, s.y), "face side"],
-		[edge, func(q: Vector3): return edge + Vector2(q.x, q.z) * k, Vector3(0, -1, 0), Vector2(s.x, s.z), "face edge"],
-		[end, func(q: Vector3): return end + Vector2(q.z, q.y) * k, Vector3(-1, 0, 0), Vector2(s.z, s.y), "end"],
-	]
-	if not _lines.has(part_id):
-		_lines[part_id] = workshop.tools["layout"].part_lines(p, s).lines
-	var hidden := _removed(p)
-	for view in views:
-		var corner: Vector2 = view[0]
-		var at: Callable = view[1]
-		var near: Vector3 = view[2]
-		var extent: Vector2 = view[3] * k
-		_sheet.draw_rect(Rect2(corner, extent), INK, false, 1.5)
-		_sheet.draw_string(font, corner + Vector2(0, extent.y + 16), view[4], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, FAINT)
-		# What the features take out, seen through the part (hidden: dashed), then the lines
-		# on this face (the far face's dashed).
-		for box in hidden:
-			var lo: Vector2 = at.call(box.position.clamp(Vector3.ZERO, s))
-			var hi: Vector2 = at.call(box.end.clamp(Vector3.ZERO, s))
-			var r := Rect2(lo, hi - lo).abs()
-			for c in 4:
-				var a := r.position + Vector2(r.size.x if c == 1 or c == 2 else 0.0, r.size.y if c >= 2 else 0.0)
-				var b := r.position + Vector2(r.size.x if c == 0 or c == 1 else 0.0, r.size.y if c == 1 or c == 2 else 0.0)
-				_sheet.draw_dashed_line(a, b, FAINT, 1.0, 4.0)
-		for line in _lines[part_id]:
-			var a: Vector2 = at.call(line.origin)
-			var b: Vector2 = at.call(line.origin + line.dir * line.length)
-			if line.face.dot(near) > 0.9:
-				_sheet.draw_line(a, b, INK, 1.2)
-			elif line.face.dot(near) < -0.9:
-				_sheet.draw_dashed_line(a, b, FAINT, 1.0, 5.0)
-	# The sizes: its length under the edge view, its width left of the face side, its
-	# thickness left of the edge view.
-	_size_line(font, edge + Vector2(0, s.z * k + 26), edge + Vector2(s.x * k, s.z * k + 26), _mm(s.x))
-	_size_line(font, face - Vector2(22, 0), face + Vector2(-22, s.y * k), _mm(s.y))
-	_size_line(font, edge - Vector2(22, 0), edge + Vector2(-22, s.z * k), _mm(s.z))
-
-
-## What a part's features take out of its blank, as boxes (part space): a hole's, a tenon's
-## four cheeks', a kerf's, a rebate's. (A chamfer's and a taper's show in their lines.)
-static func _removed(p: Dictionary) -> Array:
-	var s: Vector3 = Vector3(p.size[0], p.size[1], p.size[2])
-	var boxes := []
-	for f in p.get("features", []):
-		var along: Array = f.get("along", [0, s.x])
-		match f.get("kind", ""):
-			"hole":
-				var across: Array = f.get("across", [0, 0])
-				var face: String = f.get("face", "side")
-				var through: bool = f.get("through", false)
-				var depth: float = f.get("depth", 0.0)
-				if face in ["side", "back"]:
-					var z0 := 0.0 if face == "side" or through else s.z - depth
-					var z1 := s.z if face == "back" or through else depth
-					boxes.append(AABB(Vector3(along[0], across[0], z0), Vector3(along[1] - along[0], across[1] - across[0], z1 - z0)))
-				elif face in ["edge", "other_edge"]:
-					var y0 := 0.0 if face == "edge" or through else s.y - depth
-					var y1 := s.y if face == "other_edge" or through else depth
-					boxes.append(AABB(Vector3(along[0], y0, across[0]), Vector3(along[1] - along[0], y1 - y0, across[1] - across[0])))
-			"tenon":
-				var l: float = f.get("length", 0.0)
-				var x0 := s.x - l if f.get("end", "end") == "far_end" else 0.0
-				var y: Array = f.get("y", [0, s.y])
-				var z: Array = f.get("z", [0, s.z])
-				for b in [AABB(Vector3(x0, 0, 0), Vector3(l, y[0], s.z)), AABB(Vector3(x0, y[1], 0), Vector3(l, s.y - y[1], s.z)),
-						AABB(Vector3(x0, 0, 0), Vector3(l, s.y, z[0])), AABB(Vector3(x0, 0, z[1]), Vector3(l, s.y, s.z - z[1]))]:
-					if b.size.x > 0.0 and b.size.y > 0.0 and b.size.z > 0.0:
-						boxes.append(b)
-			"kerf":
-				var d: float = f.get("depth", 0.0)
-				var x0 := s.x - d if f.get("end", "end") == "far_end" else 0.0
-				var half: float = 0.5 * f.get("width", 0.8)
-				var at: float = f.get("at", 0.0)
-				if f.get("axis", "y") == "z":
-					boxes.append(AABB(Vector3(x0, 0, at - half), Vector3(d, s.y, 2.0 * half)))
-				else:
-					boxes.append(AABB(Vector3(x0, at - half, 0), Vector3(d, 2.0 * half, s.z)))
-	return boxes
-
-
-func _size_line(font: Font, a: Vector2, b: Vector2, text: String) -> void:
-	_sheet.draw_line(a, b, SIZES, 1.0)
-	var across := (b - a).normalized().orthogonal() * 5.0
-	_sheet.draw_line(a - across, a + across, SIZES, 1.0)
-	_sheet.draw_line(b - across, b + across, SIZES, 1.0)
-	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-	var mid := 0.5 * (a + b)
-	var at := mid + Vector2(-0.5 * width, -4.0) if absf(b.y - a.y) < 1.0 else mid + Vector2(-width - 6.0, 4.0)
-	_sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, SIZES)

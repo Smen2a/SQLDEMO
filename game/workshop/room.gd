@@ -53,6 +53,7 @@ const WOOD_COLOUR := {"ash": Color(0.78, 0.67, 0.5), "oak": Color(0.68, 0.53, 0.
 var bench: StaticBody3D
 var table: StaticBody3D
 var book: StaticBody3D # the plan book on the side table (meta "plans": E opens it)
+var pad: StaticBody3D # a pad of paper beside it, a pencil on it (meta "pad": E draws a plan)
 var stacks := {} # stock kind -> its stack's static body (meta "stock": the kind; "top": where the next piece lies)
 var jaws: Array[MeshInstance3D] = []
 
@@ -185,7 +186,7 @@ func _bench() -> void:
 	add_child(screw)
 
 
-## A side table, to set pieces down on, the plan book lying on it.
+## A side table, to set pieces down on, the plan book and a pad of paper lying on it.
 func _table() -> void:
 	table = _box(TABLE_TOP, TABLE_AT, _oak, true)
 	table.set_meta("ground", true)
@@ -204,6 +205,21 @@ func _table() -> void:
 	title.position = at + Vector3(0.0, 0.0126, 0.0)
 	title.rotation = Vector3(-PI / 2, 0.0, 0.0)
 	add_child(title)
+	# The pad: a block of paper to its right, a pencil lying across it.
+	var pad_at := Vector3(TABLE_AT.x + 0.08, top + 0.006, TABLE_AT.z - 0.12)
+	pad = _box(Vector3(0.15, 0.012, 0.21), pad_at, _material(Color(0.96, 0.95, 0.9), 0.95), true)
+	pad.set_meta("pad", true)
+	var pencil := MeshInstance3D.new()
+	var rod := CylinderMesh.new()
+	rod.top_radius = 0.0035
+	rod.bottom_radius = 0.0035
+	rod.height = 0.17
+	rod.radial_segments = 6
+	pencil.mesh = rod
+	pencil.material_override = _material(Color(0.85, 0.62, 0.2), 0.6)
+	pencil.position = pad_at + Vector3(0.0, 0.01, 0.03)
+	pencil.rotation = Vector3(0.0, 0.5, PI / 2)
+	add_child(pencil)
 	var leg_height := TABLE_AT.y - 0.5 * TABLE_TOP.y - FLOOR
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:
