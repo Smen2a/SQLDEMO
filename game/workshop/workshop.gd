@@ -97,6 +97,7 @@ const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 const Debris := preload("res://workshop/debris.gd")
 const Layout := preload("res://workshop/layout.gd")
 const Plans := preload("res://workshop/plans.gd")
+const Checking := preload("res://workshop/checking.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
@@ -266,6 +267,7 @@ var _plan := {}           # what SdfBody.plan_stroke made of it
 var variants := {}
 var layout # layout.gd: the marking gauge and knife, the pencil and the plan sheet, and the lines they leave
 var plans # plans.gd: the plans (game/plans), the sheet in hand, laying a part out on the wood
+var checking # checking.gd: the piece in the vise checked against its drawing (K)
 var _progress := 0.0      # mm a push tool has gone along its path
 var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
@@ -317,6 +319,9 @@ func _ready() -> void:
 	plans = Plans.new()
 	plans.workshop = self
 	add_child(plans)
+	checking = Checking.new()
+	checking.workshop = self
+	add_child(checking)
 	# An ash board in the vise.
 	_clamp(_new_piece(wood))
 
@@ -1768,6 +1773,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				lock(_pointer, key.alt_pressed)
 			KEY_TAB:
 				next_variant()
+			KEY_K:
+				checking.toggle()
 			KEY_C:
 				if current == "chisel" or current == "gouge":
 					set_setting(current, "angle", 30.0 if is_chopping() else 90.0)

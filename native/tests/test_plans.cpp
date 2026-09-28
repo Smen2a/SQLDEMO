@@ -1,6 +1,7 @@
 #include "test.h"
 
 #include "body/materials.h"
+#include "plans/check.h"
 #include "plans/part.h"
 
 #include <cmath>
@@ -254,4 +255,107 @@ TEST(a_rebate_and_a_stopped_chamfer) {
 	std::printf("    rebate %.0f mm^3 (6000), chamfer %.0f mm^3 (480, less its eased arris)\n", r, c);
 	CHECK(std::fabs(r - 6000.0) < 0.01 * 6000.0);
 	CHECK(std::fabs(c - 480.0) < 0.05 * 480.0);
+}
+
+namespace {
+
+// A blank of `size` mm at the part's corner, eased as stock is or square, less boxes.
+Body wood(vec3 size, bool eased, const std::vector<std::pair<vec3, vec3>> &cuts = {}) {
+	Body b;
+	b.base = Primitive::box(size * 0.5f, size * 0.5f, eased ? 1.0f : 0.0f);
+	b.base_material = mat::Oak;
+	for (const auto &[lo, hi] : cuts) {
+		Edit e;
+		e.prim = Primitive::box((lo + hi) * 0.5f, (hi - lo) * 0.5f);
+		e.op = Op::Subtract;
+		b.add(e);
+	}
+	return b;
+}
+
+Check check(const Part &p, const Body &b) {
+	const Check c = check_part(p, [&](vec3 q) { return b.distance(q); }, b.bounds());
+	std::printf("    %zu spot(s), %d samples, %.0f ms:", c.spots.size(), c.samples, c.ms);
+	for (const Spot &s : c.spots) {
+		std::printf(" [%s %.2f mm, %.0f mm^2, %.0f mm^3, feature %d, normal (%.2f %.2f %.2f) at (%.1f %.1f %.1f)]",
+				s.kind == Spot::Kind::Proud ? "proud" : "short", s.most, s.area, s.volume, s.feature, s.normal.x, s.normal.y,
+				s.normal.z, s.at.x, s.at.y, s.at.z);
+	}
+	std::printf("\n");
+	return c;
+}
+
+} // namespace
+
+// The part as drawn is as drawn; a square blank's arrises are within the allowance for the
+// drawing's eased ones.
+TEST(a_part_as_drawn_checks_clean) {
+	CHECK(check(head(), part_solid(head(), mat::Oak)).spots.empty());
+	CHECK(check(handle(), part_solid(handle(), mat::Oak)).spots.empty());
+	CHECK(check(wedge(), part_solid(wedge(), mat::Oak)).spots.empty());
+	const Body square = wood({110, 70, 55}, false, {{{40, 29, -1}, {70, 41, 56}}});
+	CHECK(check(head(), square).spots.empty());
+}
+
+// The head on its 120 mm blank, mortised but not yet cut to length: the far end is 10 mm
+// proud, the blank's end beyond it, and nothing else. (Volumes are of the wood beyond the
+// tolerance.)
+TEST(a_blank_not_cut_to_length_is_proud_at_its_far_end) {
+	const Body b = wood({120, 70, 55}, true, {{{40, 29, -1}, {70, 41, 56}}});
+	const Check c = check(head(), b);
+	CHECK(c.spots.size() == 1);
+	if (!c.spots.empty()) {
+		const Spot &s = c.spots[0];
+		CHECK(s.kind == Spot::Kind::Proud && std::fabs(s.most - 10.0f) < 0.15f);
+		CHECK(s.feature == -1 && s.normal.x > 0.95f && std::fabs(s.at.x - 110.0f) < 0.5f);
+		// (The wood beyond the tolerance: 9.5 mm of it, less the eased arrises.)
+		CHECK(std::fabs(s.volume - 9.5f * 70.0f * 55.0f) < 0.03f * 9.5f * 70.0f * 55.0f);
+		CHECK(!s.dots.empty() && s.dots.size() == s.by.size() && int(s.dots.size()) <= Spot::kDots);
+	}
+}
+
+// A mortise chopped a millimetre short of its line (proud), or past it (short): the spot on
+// the mortise's side 29 mm from the face edge, a millimetre off.
+TEST(a_mortise_a_millimetre_off_its_line) {
+	const Check narrow = check(head(), wood({110, 70, 55}, true, {{{40, 30, -1}, {70, 41, 56}}}));
+	CHECK(narrow.spots.size() == 1);
+	if (!narrow.spots.empty()) {
+		const Spot &s = narrow.spots[0];
+		CHECK(s.kind == Spot::Kind::Proud && std::fabs(s.most - 1.0f) < 0.1f && s.feature == 0);
+		CHECK(s.normal.y > 0.95f && std::fabs(s.at.y - 29.0f) < 0.2f);
+		CHECK(std::fabs(s.volume - 0.5f * 30.0f * 55.0f) < 0.2f * 0.5f * 30.0f * 55.0f);
+		CHECK(std::fabs(s.area - 30.0f * 55.0f) < 0.1f * 30.0f * 55.0f); // the mortise's side
+	}
+	const Check wide = check(head(), wood({110, 70, 55}, true, {{{40, 28, -1}, {70, 41, 56}}}));
+	CHECK(wide.spots.size() == 1);
+	if (!wide.spots.empty()) {
+		const Spot &s = wide.spots[0];
+		CHECK(s.kind == Spot::Kind::Short && std::fabs(s.most - 1.0f) < 0.1f && s.feature == 0);
+		CHECK(s.normal.y > 0.95f && std::fabs(s.at.y - 29.0f) < 0.2f);
+	}
+}
+
+// A tenon's cheek pared 0.8 mm past its line: short, on the tenon.
+TEST(a_tenon_pared_too_thin_is_short) {
+	Part thin = handle();
+	thin.features[0].z = {8.8f, 20.0f};
+	const Check c = check(handle(), part_solid(thin, mat::Ash));
+	CHECK(c.spots.size() == 1);
+	if (!c.spots.empty()) {
+		const Spot &s = c.spots[0];
+		CHECK(s.kind == Spot::Kind::Short && std::fabs(s.most - 0.8f) < 0.1f && s.feature == 0);
+		CHECK(s.normal.z < -0.95f && std::fabs(s.at.z - 8.0f) < 0.2f);
+	}
+}
+
+// The head's blank with nothing cut: its far end, and the mortise (wood all through it, up
+// to 6 mm from its sides: half its width), proud.
+TEST(an_uncut_mortise_is_proud_by_half_its_width) {
+	const Check c = check(head(), wood({120, 70, 55}, true));
+	CHECK(c.spots.size() == 2);
+	if (c.spots.size() == 2) {
+		CHECK(c.spots[0].feature == -1 && std::fabs(c.spots[0].most - 10.0f) < 0.15f);
+		CHECK(c.spots[1].feature == 0 && std::fabs(c.spots[1].most - 6.0f) < 0.15f);
+		CHECK(std::fabs(c.spots[1].volume - 29.0f * 11.0f * 55.0f) < 0.05f * 29.0f * 11.0f * 55.0f);
+	}
 }

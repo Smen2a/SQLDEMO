@@ -76,6 +76,12 @@ public:
 	// from, to (mm along it)}], `depth` mm deep. False with nothing to scribe (or a tool
 	// engaged).
 	bool scribe_lines(const godot::Array &lines, double depth);
+	// The work checked against a part as drawn (plans::check_part), laid on it at
+	// `placement` (part space to body space): {"spots": [{kind ("proud" or "short"), most
+	// (mm), area (mm^2), volume (mm^3), at (body space), at_part, normal (part space),
+	// feature (its index, -1 the blank's), dots (body space), by (mm each)}], the worst first;
+	// "proud", "short" (mm^3 in all), "ms"}. Waits for queued work first.
+	godot::Dictionary check_part(const godot::Dictionary &part, const godot::Transform3D &placement, double tolerance);
 	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
 	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
 	// cast shadows.

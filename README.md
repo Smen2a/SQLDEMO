@@ -1028,6 +1028,34 @@ book) is for drawing plans of your own (`game/workshop/plan_editor.gd`):
   lines; edited and put down, the file unchanged; a copy of the preset saved and deleted,
   the preset untouched.
 
+### Checking a part
+
+At the bench, a piece laid out from a plan can be checked against its drawing: **K** (or
+*Check against the drawing* in the part's panel, top right, under the work's). A guide, not
+a score:
+- **Where it is off** (core `plans/check.h`, `SdfBody.check_part`): the wood in the vise is
+  compared with the part as drawn (`part_solid`), both sampled on a millimetre grid round
+  them. Near each surface a point is moved onto it and measured against the other: the
+  wood's surface beyond the drawing is **proud** (wood still to take off), the drawing's
+  surface beyond the wood is **short** (wood gone past the drawing). More than 0.5 mm off
+  counts (along the blank's arrises, which the drawing eases by a millimetre as stock is, a
+  square one is allowed 0.75 mm more). Places off are joined with their neighbours into
+  spots, each with how far off at worst, its area and about how much wood.
+- **Named:** each spot by the feature whose face it is on ("the mortise, 29 mm from the
+  face edge") or the blank's face ("the far end"), the worst first.
+- **Dots on the wood:** orange where it is proud, blue where it is short (floating where
+  the surface should be), bigger the further off.
+- **Unfinished work shows as proud:** a blank not yet cut to length, a mortise not yet
+  chopped (up to half its width). The check is also what is left to do.
+- It stands until the wood changes (then it says so: K checks again), the piece leaves the
+  vise, or K clears it. About 50–100 ms for the head.
+- **Measured** (`native/tests/test_plans.cpp`, `game/tests/check_part`): each part as drawn
+  checks clean, and so does a square-edged head; the head on its 120 mm blank, 10 mm proud
+  at the far end (36,300 mm³ beyond the tolerance, as it should be); a mortise a millimetre
+  off its line, proud or short by 1.0 mm on the right side of it; a tenon pared 0.8 mm too
+  thin, short by 0.8; an uncut mortise 6 mm proud. In the workshop, the head's blank laid
+  out and checked, then sawn to length: only the mortise left.
+
 ## Layout
 
 | Path | What it is |
@@ -1039,7 +1067,7 @@ book) is for drawing plans of your own (`game/workshop/plan_editor.gd`):
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
 | `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
-| `native/src/core/plans/` | Plans: a part as a blank with features; the lines that lay it out on a piece of stock, and its intended solid. |
+| `native/src/core/plans/` | Plans: a part as a blank with features; the lines that lay it out on a piece of stock, and its intended solid; checking a piece against it (`check.h`). |
 | `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), islands and crumbs cut out by a region (`parts.h`), each piece's bounds, volume, centre of mass and hull points, and convex hulls (`hull.h`). |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
@@ -1306,7 +1334,9 @@ The Godot tests come in two tiers:
   - a plan laid on the wood (`plan_transfer`): the plan book, the sheet in pencil, undo,
     the knife taking a pencil line, the pencil, scribing a sheet on at once;
   - a plan drawn on the pad (`plan_editor`): the mallet's parts and features drawn as the
-    drags would, joined, saved, laid on the wood; put down, thrown away, a preset copied.
+    drags would, joined, saved, laid on the wood; put down, thrown away, a preset copied;
+  - a part checked against its drawing (`check_part`): the head's blank proud at the far
+    end and the mortise, then sawn to length: the mortise only.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

@@ -37,7 +37,6 @@ float position(Face f, vec3 size) {
 namespace {
 
 constexpr float kSame = 0.05f; // mm: a stock face this near the part's is the part's face
-constexpr float kPast = 1.0f;  // mm a cut runs past the blank's faces
 
 float get(vec3 v, int axis) {
 	return axis == 0 ? v.x : axis == 1 ? v.y : v.z;
@@ -309,7 +308,7 @@ PartLines part_lines(const Part &part, vec3 stock) {
 	return std::move(l.out);
 }
 
-Body part_solid(const Part &part, std::uint16_t material) {
+Body part_solid(const Part &part, std::uint16_t material, std::vector<int> *owners, float past) {
 	const vec3 s = part.size;
 	// The blank, as demo::stock makes it (flat-sawn, eased by a millimetre), placed at its
 	// middle.
@@ -319,24 +318,31 @@ Body part_solid(const Part &part, std::uint16_t material) {
 	b.base_material = material;
 	b.grain_origin = s * 0.5f + vec3(0.0f, 0.1f * s.y, -(0.5f * s.z + 47.5f));
 	b.grain_axis = gl::normalize(vec3(1, 0.04f, 0.08f));
+	int owner = -1; // the feature being cut
+	auto add = [&](const Edit &e) {
+		if (b.add(e) && owners != nullptr) {
+			owners->push_back(owner);
+		}
+	};
 	auto cut = [&](vec3 lo, vec3 hi) {
 		Edit e;
 		e.prim = Primitive::box((lo + hi) * 0.5f, (hi - lo) * 0.5f);
 		e.op = Op::Subtract;
-		b.add(e);
+		add(e);
 	};
 	// An x range, run past the ends it reaches.
-	auto past = [&](vec2 x) {
-		return vec2(x.x <= kSame ? -kPast : x.x, x.y >= s.x - kSame ? s.x + kPast : x.y);
+	auto run_past = [&](vec2 x) {
+		return vec2(x.x <= kSame ? -past : x.x, x.y >= s.x - kSame ? s.x + past : x.y);
 	};
-	const float m = kPast;
+	const float m = past;
 	for (const Feature &f : part.features) {
+		owner = int(&f - part.features.data());
 		switch (f.kind) {
 			case Feature::Kind::Hole: {
 				if (axis_of(f.face) == 0) {
 					break;
 				}
-				const vec2 x = past(span(f, s.x));
+				const vec2 x = run_past(span(f, s.x));
 				const int axis = axis_of(f.face), across = axis == 2 ? 1 : 2;
 				const float size = get(s, axis);
 				const bool low = position(f.face, s) == 0.0f; // the side or the face edge
@@ -378,7 +384,7 @@ Body part_solid(const Part &part, std::uint16_t material) {
 				if (axis_of(f.face) == 0 || axis_of(f.other) == 0 || axis_of(f.face) == axis_of(f.other)) {
 					break;
 				}
-				const vec2 x = past(span(f, s.x));
+				const vec2 x = run_past(span(f, s.x));
 				vec3 lo(x.x, 0.0f, 0.0f), hi(x.y, 0.0f, 0.0f);
 				// Within `depth` of the face, `width` of the other.
 				for (const auto &[face, reach] : {std::pair{f.face, f.depth}, std::pair{f.other, f.width}}) {
@@ -395,7 +401,7 @@ Body part_solid(const Part &part, std::uint16_t material) {
 				if (axis_of(f.face) == 0 || axis_of(f.other) == 0 || axis_of(f.face) == axis_of(f.other)) {
 					break;
 				}
-				const vec2 x = past(span(f, s.x));
+				const vec2 x = run_past(span(f, s.x));
 				vec3 centre(0.5f * (x.x + x.y), 0.0f, 0.0f);
 				set(centre, axis_of(f.face), position(f.face, s));
 				set(centre, axis_of(f.other), position(f.other, s));
@@ -406,7 +412,7 @@ Body part_solid(const Part &part, std::uint16_t material) {
 				e.prim = Primitive::box(centre, {0.5f * (x.y - x.x), h, h}, 0.0f,
 						{q, 0.0f, 0.0f, std::cos(0.25f * 3.14159265f * 0.5f)});
 				e.op = Op::Subtract;
-				b.add(e);
+				add(e);
 				break;
 			}
 			case Feature::Kind::Taper: {
@@ -414,7 +420,7 @@ Body part_solid(const Part &part, std::uint16_t material) {
 				const float slope = (f.to - f.from) / s.x;
 				const vec3 point(0.0f, 0.0f, back ? f.from : s.z - f.from);
 				const vec3 normal = gl::normalize(vec3(-slope, 0.0f, back ? 1.0f : -1.0f));
-				b.add(Plane{point, normal}.keep_behind());
+				add(Plane{point, normal}.keep_behind());
 				break;
 			}
 		}

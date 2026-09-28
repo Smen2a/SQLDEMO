@@ -20,8 +20,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Debris** (2) is done: D1 (shavings and chips), D2 (dust) and D3 (small pieces).
 - **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
   paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
-  sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil) and G1b
-  (drawing plans on paper) are done; G2 (checking a part against its drawing) is next.
+  sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
+  (drawing plans on paper) and G2 (checking a part against its drawing) are done; G3
+  (assembly) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -73,6 +74,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G2 | Checking a part (`plans/check`, `SdfBody.check_part`, `checking.gd`; K): proud and short places against the part as drawn, joined into spots, named, dotted on the wood. `check_part` |
 | G1b | Drawing a plan on the pad (`plan_editor.gd`, the sheet's drawing shared with the book in `sheet_view.gd`): parts, blanks, features dragged on the views, picked and sized exactly, joints; saved to `user://plans` and laid out as presets are. `plan_editor` |
 | G1a | Plans: a part is a blank with features (`plans/part`: its lines on a piece of stock, its intended solid); the mallet's plan (`game/plans/mallet.json`); the plan book on the side table (P), each part's sheet drawn in three views; a sheet laid on the piece in the vise draws the part on in pencil and makes the piece that part; pencil only guides, the knife and gauge take it; a pencil for drawing on the wood; pencil undone straight after; or scribed on at once, one step. `plan_transfer` |
 | G0 | Stock in sizes (`demo::stock`, `SdfBody.load_stock`): the rack's stacks are kinds of stock, boards and the mallet's blanks (ash handles, oak heads, oak strips); the vise's jaws close down to 2 mm; stepping up to the bench, the view takes in a long piece. `stock` |
@@ -812,7 +814,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0, G1a and G1b done)
+## G. Making an object (current: G0, G1a, G1b and G2 done)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -974,6 +976,42 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   reset the first's feature.
 - **Left for later:** drawing with the real mouse is not in a test (headless has no room
   for the pad's layout); features only along the blank's axes; no undo on the pad.
+
+### G2 — checking a part against its drawing (done)
+- **The check** (core `plans/check.{h,cpp}`, `check_part(part, wood, bounds, tolerance,
+  spacing)`): the wood (its distance in part space) against the part as drawn
+  (`part_solid`, its cuts run well past the blank so that from inside a cut the nearest
+  face is its own), on a grid (1 mm) over both. Every grid point within a spacing of the
+  wood's surface is moved onto it (the gradient) and measured against the drawing; every
+  one within a spacing of the drawing's surface, onto that and measured against the wood.
+  Off by more than the tolerance (0.5 mm; 1.25 along the blank's arrises, eased by a
+  millimetre in the drawing): proud (wood beyond the drawing) or short (the drawing
+  beyond the wood). The grid's cells of wood beyond the drawing, or of the drawing with no
+  wood, deeper than the tolerance, give the volumes (each cell weighted by how much of it
+  is beyond). Proud cells and places joined with their 26 neighbours into spots, and short
+  ones: the worst, the area (each place weighted by its grid point's nearness to the
+  surface), the volume, the worst place (the one nearest the middle of those near the
+  worst, where the drawing's nearest face is not ambiguous), the drawing's normal there,
+  the feature it is on (`part_solid` records each cut's feature), up to 150 dots. 40–60 ms
+  for the head.
+- **In the workshop** (`checking.gd`, `SdfBody.check_part`: the working body read through
+  its octree, exactly, part space to body space by the piece's `placement`): K at the
+  bench, or the part's panel (top right, under the work's). The spots named ("The far end:
+  10 mm proud, wood to take off (about 36,340 mm³)"; "The mortise, 29 mm from the face
+  edge"), dots on the wood (a MultiMesh under the work's SdfBody: orange proud, blue short,
+  sized by how far off). It stands until the wood changes, the piece leaves the vise, or K.
+- **Found on the way:** `Body::sample` skipped an edit whose box was exactly `|d|` away,
+  so at a point on the surface (d = 0) inside a cut's box the cut was skipped. Strictly
+  beyond now.
+- **Measured** (`native/tests/test_plans.cpp`, `game/tests/check_part`): as drawn, no spots
+  (nor on a square-edged head); the head on its 120 mm blank: 10.00 mm proud at the far end,
+  36,343 mm³ beyond the tolerance (9.5 × 70 × 55 less the arrises); a mortise a millimetre
+  narrow or wide: 1.00 mm proud or short, on the mortise's side 29 mm from the face edge; a
+  tenon pared 0.8 mm thin: 0.80 short on the tenon; an uncut mortise: 6.00 proud, 17,545
+  mm³. In the workshop, 50–100 ms: the head's blank laid out, proud at the far end and the
+  mortise; sawn to length on the waste side of the line: the mortise only.
+- **Left for later:** a part checked only where it is laid out (one placement); the
+  check on the main thread (a tenth of a second); dots thinned by grid order.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

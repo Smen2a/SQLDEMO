@@ -449,7 +449,9 @@ Sample Body::sample(vec3 p) const {
 	float d = base.eval(p);
 	vec3 mat(float(base_material), float(base_material), 0.0f);
 	for (std::size_t i = 0; i < edits_.size(); ++i) {
-		if (box_distance(culls_[i].box, p) >= std::fabs(d) + culls_[i].influence) {
+		// (Strictly beyond: at a point on the surface, d = 0, inside an edit's box, the edit
+		// can still move the value.)
+		if (box_distance(culls_[i].box, p) > std::fabs(d) + culls_[i].influence) {
 			continue;
 		}
 		const vec4 r = apply(edits_[i], d, mat, p);

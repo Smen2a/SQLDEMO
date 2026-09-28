@@ -46,7 +46,7 @@ const DIAL := 25.0 # its dials' radius
 ## How a chisel's or gouge's bevel meets the work (workshop.attitude()): words and colour.
 const BITES := {"rides": ["rides its bevel", Color(0.55, 0.8, 1.0)], "bites": ["bites", Color(0.5, 1.0, 0.5)],
 		"digs in": ["digs in", Color(1.0, 0.5, 0.3)], "chops": ["chops", Color(1.0, 0.85, 0.35)]}
-const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane follows a curving drag)   C: chop   Tab: variant   Q / E: skew or turn by 15°   P: plans\n" + \
+const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane follows a curving drag)   C: chop   Tab: variant   Q / E: skew or turn by 15°   P: plans   K: check a part\n" + \
 		"Right-drag, the guiding hand (also mid-stroke): up / down the angle, left / right skew or turn, wheel the lean (Ctrl: finely)\n" + \
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
@@ -71,6 +71,10 @@ var _right: Control  # the wood, undo, pace... (at the bench)
 var _crosshair: Label
 var _prompt: Label   # under the crosshair: what E would do
 var _viewer: Control # the plan book or the pad, while it is open (plan_viewer.gd, plan_editor.gd)
+var _part_box: VBoxContainer # the part in the vise (if it is one): checking it against its drawing
+var _part_title: Label
+var _check_button: Button
+var _check_text: Label
 
 
 func _ready() -> void:
@@ -180,6 +184,17 @@ func _ready() -> void:
 	preview.focus_mode = Control.FOCUS_NONE
 	preview.toggled.connect(func(on): workshop.board.stroke_preview = on)
 	right.add_child(preview)
+	# The part in the vise, if it is one: checked against its drawing (K).
+	_part_box = VBoxContainer.new()
+	right.add_child(_part_box)
+	_part_box.add_child(HSeparator.new())
+	_part_title = Label.new()
+	_part_box.add_child(_part_title)
+	_check_button = _button(_part_box, "Check against the drawing (K)", func(): workshop.checking.toggle())
+	_check_text = Label.new()
+	_check_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_check_text.custom_minimum_size.x = 360
+	_part_box.add_child(_check_text)
 	_pin(right, Control.PRESET_TOP_RIGHT)
 
 	# Status and hints, bottom left, over the hotbar.
@@ -395,6 +410,32 @@ func refresh() -> void:
 	var stats: Dictionary = workshop.board.get_stats() if workshop.board != null else {}
 	_undo.disabled = not stats.get("can_undo", false)
 	_redo.disabled = not stats.get("can_redo", false)
+	_refresh_part()
+
+
+## The part in the vise: its name, and its check (checking.gd) in words.
+func _refresh_part() -> void:
+	var piece: RigidBody3D = workshop.clamped
+	var tag: Dictionary = piece.get_meta("part", {}) if piece != null else {}
+	var checking = workshop.checking
+	var said: Array[String] = checking.lines() if checking != null else []
+	_part_box.visible = not tag.is_empty() or not said.is_empty()
+	if not tag.is_empty():
+		var plan: Dictionary = workshop.plans.plans.get(tag.plan, {})
+		var part: Dictionary = workshop.plans.part(tag.plan, tag.part)
+		var s: Vector3 = workshop.plans.size_of(part)
+		_part_title.text = "%s: %s (%s, %s x %s x %s mm)" % [plan.get("name", tag.plan), part.get("name", tag.part),
+				part.get("wood", "wood"), _mm(s.x), _mm(s.y), _mm(s.z)]
+	else:
+		_part_title.text = "Not a part"
+	var showing: bool = checking != null and checking.result.has("spots") and not checking.stale
+	_check_button.text = "Clear the check (K)" if showing else "Check against the drawing (K)"
+	_check_button.disabled = tag.is_empty()
+	_check_text.text = "\n".join(said)
+
+
+static func _mm(v: float) -> String:
+	return ("%.0f" % v) if absf(v - roundf(v)) < 0.05 else ("%.1f" % v)
 
 
 func update_status() -> void:

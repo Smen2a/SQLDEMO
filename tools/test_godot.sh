@@ -29,7 +29,8 @@
 #   - laying out: the marking gauge's and knife's lines, scribed where they should be, and
 #     undone and redone
 #   - plans: the rack's stock to size; a plan's sheet laid on the wood in pencil, the knife
-#     taking it; a plan drawn on the pad, saved, and laid out as the preset is
+#     taking it; a plan drawn on the pad, saved, and laid out as the preset is; a part checked
+#     against its drawing, before and after it is sawn to length
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -96,6 +97,7 @@ if [[ "$GPU" == 0 ]]; then
 	check stock "stock: the stock is as the rack says" res://tests/stock.tscn
 	check plan_transfer "plan transfer: the plan is laid on the wood" res://tests/plan_transfer.tscn
 	check plan_editor "plan editor: the mallet drawn on the pad, saved, laid out" res://tests/plan_editor.tscn
+	check check_part "check part: the part checked against its drawing" res://tests/check_part.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
@@ -119,6 +121,7 @@ check debris_render "debris: shavings and chips come away" --render res://tests/
 check dust_render "dust: the dust comes away and settles" --render res://tests/dust.tscn -- --out="$OUT"
 check crumbs_render "crumbs: the crumb came away" --render res://tests/crumbs.tscn -- --out="$OUT"
 check plan_transfer_render "plan transfer: the plan is laid on the wood" --render res://tests/plan_transfer.tscn -- --out="$OUT"
+check check_part_render "check part: the part checked against its drawing" --render res://tests/check_part.tscn -- --out="$OUT"
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

@@ -38,6 +38,7 @@ add_library(sdf_core STATIC
 	src/core/pieces/hull.cpp
 	src/core/pieces/parts.cpp
 	src/core/pieces/pieces.cpp
+	src/core/plans/check.cpp
 	src/core/plans/part.cpp
 	src/core/tools/catalog.cpp
 	src/core/tools/cutting.cpp

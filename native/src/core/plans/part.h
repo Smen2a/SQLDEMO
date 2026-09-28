@@ -89,7 +89,10 @@ struct PartLines {
 PartLines part_lines(const Part &part, vec3 stock);
 
 // The part as it is meant to be (part space): the blank, its arrises eased by a millimetre
-// as stock is, less its features.
-Body part_solid(const Part &part, std::uint16_t material);
+// as stock is, less its features. `owners`, if given, gets each edit's feature (its index).
+// Cuts run `past` mm beyond the blank's faces: a millimetre is enough to cut, while a
+// distance to the drawing's surface from inside a cut is exact only where the cut's box runs
+// well past it (checking).
+Body part_solid(const Part &part, std::uint16_t material, std::vector<int> *owners = nullptr, float past = 1.0f);
 
 } // namespace sdf::plans

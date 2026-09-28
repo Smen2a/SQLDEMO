@@ -8,6 +8,7 @@
 #include "demo/gallery.h"
 #include "eval/query.h"
 #include "pieces/hull.h"
+#include "plans/check.h"
 #include "plans/part.h"
 
 #include <godot_cpp/classes/array_mesh.hpp>
@@ -398,6 +399,58 @@ bool SdfBody::load_part(const Dictionary &part, const String &wood) {
 	camera.fov_deg = 38;
 	load_body(plans::part_solid(p, material), camera);
 	return true;
+}
+
+Dictionary SdfBody::check_part(const Dictionary &part, const Transform3D &placement, double tolerance) {
+	Dictionary out;
+	const plans::Part p = part_of(part);
+	if (!session_.has_adf() || p.size.x <= 0.0f || p.size.y <= 0.0f || p.size.z <= 0.0f) {
+		UtilityFunctions::push_error("SdfBody.check_part: needs a body and a part with a size");
+		return out;
+	}
+	flush();
+	// Part space to body space, and back for the work's bounds.
+	const vec3 o = to_vec(placement.origin), ax = to_vec(placement.basis.get_column(0)),
+			   ay = to_vec(placement.basis.get_column(1)), az = to_vec(placement.basis.get_column(2));
+	auto to_body = [&](vec3 q) { return o + ax * q.x + ay * q.y + az * q.z; };
+	const Transform3D back = placement.affine_inverse();
+	Aabb bounds;
+	for (int c = 0; c < 8; ++c) {
+		const vec3 corner(c & 1 ? bounds_.hi.x : bounds_.lo.x, c & 2 ? bounds_.hi.y : bounds_.lo.y,
+				c & 4 ? bounds_.hi.z : bounds_.lo.z);
+		bounds.include(to_vec(back.xform(to_godot(corner))));
+	}
+	const Body &body = session_.body();
+	const Octree &octree = session_.octree();
+	const plans::Check check = plans::check_part(
+			p, [&](vec3 q) { return octree.sample(body, to_body(q)).d; }, bounds, float(tolerance));
+	Array spots;
+	for (const plans::Spot &spot : check.spots) {
+		Dictionary d;
+		d["kind"] = spot.kind == plans::Spot::Kind::Proud ? "proud" : "short";
+		d["most"] = double(spot.most);
+		d["area"] = double(spot.area);
+		d["volume"] = double(spot.volume);
+		d["at"] = to_godot(to_body(spot.at));
+		d["at_part"] = to_godot(spot.at);
+		d["normal"] = to_godot(spot.normal);
+		d["feature"] = spot.feature;
+		PackedVector3Array dots;
+		PackedFloat32Array by;
+		for (std::size_t i = 0; i < spot.dots.size(); ++i) {
+			dots.push_back(to_godot(to_body(spot.dots[i])));
+			by.push_back(spot.by[i]);
+		}
+		d["dots"] = dots;
+		d["by"] = by;
+		spots.push_back(d);
+	}
+	out["spots"] = spots;
+	out["proud"] = double(check.proud);
+	out["short"] = double(check.short_);
+	out["samples"] = check.samples;
+	out["ms"] = check.ms;
+	return out;
 }
 
 bool SdfBody::scribe_lines(const Array &lines, double depth) {
@@ -2303,6 +2356,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_static_method("SdfBody", D_METHOD("part_lines", "part", "stock"), &SdfBody::part_lines);
 	ClassDB::bind_method(D_METHOD("load_part", "part", "wood"), &SdfBody::load_part);
 	ClassDB::bind_method(D_METHOD("scribe_lines", "lines", "depth"), &SdfBody::scribe_lines);
+	ClassDB::bind_method(D_METHOD("check_part", "part", "placement", "tolerance"), &SdfBody::check_part, DEFVAL(0.5));
 	ClassDB::bind_method(D_METHOD("load_tool", "name", "settings"), &SdfBody::load_tool, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);

@@ -174,6 +174,7 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| G2 | Checking a part against its drawing (K at the bench): the wood compared with the part as drawn on a millimetre grid, each surface measured against the other; proud (wood to take off) and short (wood gone) places over 0.5 mm joined into spots, named by feature or face, with dots on the wood. Unfinished work shows as proud: what is left to do. On the way, `Body::sample` stopped skipping an edit at a point on the surface inside its box |
 | G1b | Drawing a plan: a pad of paper on the side table (and New / Edit / Edit a copy in the plan book); a plan's parts (wood, count, blank size, the stock it comes from) and joints; features drawn with the mouse on the part's three views (hole, tenon, kerf, rebate, chamfer, taper), shown as the drag goes, picked to set their sizes exactly; saved to `user://plans`, in the book as the player's, laid out as a preset is |
 | G1a | Plans: a part is a blank with features; the mallet's plan (head, handle, wedge); the plan book on the side table (P), each part's sheet drawn in three views; a sheet laid on the piece in the vise draws the part on in pencil and makes the piece that part; the knife and gauge take pencil lines; a pencil to draw on the wood; undo takes pencil off straight after; or a sheet scribed on at once |
 | G0 | Stock in sizes: the rack holds kinds of stock (ash, oak and walnut boards; the mallet's blanks: ash handles, oak heads, oak strips), each a blank of its wood made to its size (`SdfBody.load_stock`). The vise's jaws close on thin pieces, and the view at the bench takes in a long one stood on end |
@@ -192,7 +193,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 141 native tests (GCC and Clang, including golden images) and 19
+Test counts today: 146 native tests (GCC and Clang, including golden images) and 20
 headless Godot checks.
 
 ## 5. Where things stand
@@ -291,7 +292,7 @@ Shavings and chips (D1), dust (D2), and small pieces (D3): parts under 30 mm³ t
 free are taken out of the work and come away as chunks of debris, not pieces
 (docs/PLAN.md, D3).
 
-### G. Making an object (under way: G0, G1a and G1b done)
+### G. Making an object (under way: G0, G1a, G1b and G2 done)
 
 The engine cuts like the real tools, but a player can't make anything yet: no goal, no
 idea what a piece is meant to become, no joining. The user chose (docs/PLAN.md, G):
@@ -307,7 +308,7 @@ idea what a piece is meant to become, no joining. The user chose (docs/PLAN.md, 
   the mallet, glue, wedge; one rigid body that can still be worked.
 
 Steps: G0 stock in sizes (done), G1a plans and laying a part on the wood (done), G1b the
-sheet editor (done), G2 checking (next), G3 assembly, G4 the mallet end to end. They go ahead of
+sheet editor (done), G2 checking (done), G3 assembly (next), G4 the mallet end to end. They go ahead of
 Surface finish and Bake.
 
 ### 3. Surface finish
@@ -384,7 +385,7 @@ materials. Every detail knob is already a parameter, so it is a settings change.
 ```sh
 git submodule update --init
 cmake -S native -B native/build -G Ninja && cmake --build native/build   # also builds game/bin/sdf_godot.*
-native/build/sdf_tests                                                   # 141 tests, golden images
+native/build/sdf_tests                                                   # 146 tests, golden images
 GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about a minute)
 GODOT=/path/to/godot tools/test_godot.sh --gpu                           # GPU tier: renders, images, parity
 ```
