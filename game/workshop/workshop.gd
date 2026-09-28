@@ -1431,6 +1431,13 @@ func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D) -> void:
 	_ui.refresh()
 
 
+## Crumbs came away from a piece (bits too small to be pieces of work) and it took them out,
+## in its undo step `step`: debris chunks, which undoing that step takes back.
+func _on_crumbled(chunks: Array, step: int, sdf) -> void:
+	if is_instance_valid(sdf):
+		debris.add_chunks(chunks, sdf.get_meta("piece_id", 0) * STEPS_PER_PIECE + step)
+
+
 ## Lowers a piece about to be let go onto what it rests on (within 3 mm below), and says
 ## whether there was anything: just into it, within the solver's slop. Let go a kerf's
 ## width above a surface, a body's first physics step has no contact yet and it falls
@@ -1585,6 +1592,7 @@ func _as_piece(sdf, at: Transform3D, placed: Transform3D, wood_name: String, kin
 		_refresh_collider(body)
 		_ui.refresh())
 	sdf.separated.connect(_on_separated.bind(body), CONNECT_DEFERRED)
+	sdf.crumbled.connect(_on_crumbled.bind(sdf), CONNECT_DEFERRED)
 	pieces.append(body)
 	return body
 

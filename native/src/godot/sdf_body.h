@@ -18,6 +18,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_vector4_array.hpp>
 
+#include <array>
 #include <deque>
 #include <future>
 #include <memory>
@@ -212,6 +213,16 @@ public:
 	// its region into its edit list (an undo step), and the island's body stays hidden until
 	// its own lands (the shader cannot draw a region before), while this one shows the island
 	// until then.
+	// Crumbs: a part under 30 mm^3 that came away (a corner a few cuts meet round, a sliver a
+	// saw took off, a speck) is debris, not a piece of work. The same look cuts out every
+	// crumb it finds, all at once and before any island, and the body takes them out as an
+	// undo step of its own (queued once the look is done, if nothing else is by then: else
+	// they are looked for again once the body is idle). When that step lands,
+	// crumbled(chunks, step) reports them (`step`: the body's step count with it): each chunk
+	// {points (world: the corners of its convex hull), triangles (PackedInt32Array, three
+	// corners each, clockwise seen from outside, as Godot's front faces), colours (per
+	// corner: the wood just inside it), centre (world: of volume), volume (mm^3), mass (kg)}.
+	// Crumbs under 0.2 mm^3 are taken out without a chunk.
 	SdfBody *split(const godot::Vector3 &point, const godot::Vector3 &normal);
 	// Undoes a split's half-space here (the other piece is the caller's to free), leaving
 	// nothing to redo.
@@ -269,6 +280,7 @@ private:
 		std::optional<Separation> separation = std::nullopt; // COMMIT: where the stroke cut clean through
 		bool clip = false; // a split's half-space (which leaves the piece's measures standing)
 		sdf::Aabb region = {}; // CHECK: where to look for an island
+		bool crumbs = false;   // COMMIT: takes crumbs out (crumbling_)
 	};
 
 	void rebuild();                                // proxy mesh, textures and stats for a new body
@@ -356,6 +368,31 @@ private:
 	double island_ms_ = 0;              // the last CHECK's
 	godot::String island_failed_;       // why its island could not be cut out, if it could not
 	const char *job_island_failed_ = nullptr;
+	// Crumbs a CHECK cut out: the edits taking them out of the body (a Keep of the rest per
+	// region), what comes away (a chunk each, body space), and where they were.
+	struct Chunk {
+		std::vector<vec3> points; // the corners of its hull
+		std::vector<std::array<int, 3>> triangles; // wound outwards (counter-clockwise seen from outside)
+		std::vector<vec3> colours;
+		vec3 centre{0.0f};
+		double volume = 0.0; // mm^3
+	};
+	struct Crumbling {
+		std::vector<Edit> keep;
+		std::vector<Chunk> chunks;
+		sdf::Aabb region;
+	};
+	std::optional<Crumbling> job_crumbs_; // found by the running batch
+	std::optional<Crumbling> crumbling_;  // being taken out, until the batch that does lands
+	bool job_crumbles_ = false;           // the running batch takes them out
+	int job_crumbled_ = -1;               // the step it made them out in (-1: undone again in the batch)
+	int crumbs_ = 0;                      // how many the last CHECK cut out
+	double crumb_ms_ = 0;                 // what cutting them out and measuring them took
+	// On the worker: `found`'s crumbs cut out (all at once, else each alone) and measured.
+	std::optional<Crumbling> cut_crumbs(const Island &found);
+	Chunk chunk_of(const std::vector<vec3> &points, vec3 centre, double volume, const sdf::Aabb &bounds) const;
+	void crumble();                                        // queues taking out what the batch found
+	void report_crumbs(const Crumbling &crumbs, int step); // emits crumbled()
 	bool reveal_ = false;               // hidden until the batch taking in its region lands
 	// The parts separated() last reported, for split(), until the body changes. Refining
 	// waits a frame after the signal, so that split() (deferred to the frame's end) finds

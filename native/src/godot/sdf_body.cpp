@@ -7,6 +7,7 @@
 
 #include "demo/gallery.h"
 #include "eval/query.h"
+#include "pieces/hull.h"
 
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -43,10 +44,14 @@ constexpr int kOverlayPlanned = 2048; // SDF_OVERLAY_PLANNED: bit 11 of an overl
 // value (never its sign) inside the body there, which settling and normal taps within a
 // millimetre of the surface read.
 constexpr float kOverlayMargin = 1.0f;
-// Islands: the least that counts as a piece (mm^3; smaller crumbs stay), and how far round
-// a cut to look for one first (mm).
-constexpr double kLeastIsland = 1.0;
+// Islands: how far round a cut to look for one first (mm).
 constexpr float kIslandMargin = 2.0f;
+// Crumbs: parts smaller than this (mm^3) come away as debris; islands, pieces of work, are
+// the parts at least this big. Under kLeastChunk crumbs are taken out with nothing to show;
+// at most kMostCrumbs are cut out one by one when they cannot be all at once.
+constexpr double kCrumb = 30.0;
+constexpr double kLeastChunk = 0.2;
+constexpr std::size_t kMostCrumbs = 16;
 
 Vector3 to_godot(vec3 v) {
 	return Vector3(v.x, v.y, v.z);
@@ -1162,10 +1167,14 @@ void SdfBody::start_job() {
 	job_clips_ = true;
 	job_separated_.reset();
 	job_check_ = Aabb();
+	job_crumbs_.reset();
+	job_crumbles_ = false;
+	job_crumbled_ = -1;
 	for (const Command &c : batch) {
 		job_previews_ += c.previewed;
 		job_refines_ = job_refines_ && (c.kind == Command::REFINE || c.kind == Command::CHECK);
 		job_clips_ = job_clips_ && c.clip;
+		job_crumbles_ = job_crumbles_ || c.crumbs;
 	}
 	job_ = std::async(std::launch::async, [this, batch = std::move(batch)]() {
 		const auto start = std::chrono::steady_clock::now();
@@ -1191,14 +1200,21 @@ void SdfBody::start_job() {
 					const Aabb within = body.bounds().expanded(1.0f);
 					cut = {gl::max(cut.lo, within.lo), gl::min(cut.hi, within.hi)};
 					session_.commit();
+					if (c.crumbs) {
+						job_crumbled_ = int(session_.steps());
+					}
 					bool through = false;
 					if (c.separation) {
 						// Cut clean through: are the parts on either side still joined anywhere?
-						// If not, measure both here, so that split() has nothing to read.
+						// If not, measure both here, so that split() has nothing to read. (A sliver
+						// under a crumb is left for the look for islands, which takes crumbs out.)
 						const auto t0 = std::chrono::steady_clock::now();
 						if (plane_clear(body, session_.octree(), c.separation->plane, body.bounds())) {
-							job_separated_ = measure_sides(session_.adf(), *c.separation, true);
-							through = true;
+							PieceSides sides = measure_sides(session_.adf(), *c.separation, true);
+							if (sides.volume[1] >= kCrumb) {
+								job_separated_ = std::move(sides);
+								through = true;
+							}
 						}
 						separation_ms_ = ms_since(t0);
 					}
@@ -1208,11 +1224,21 @@ void SdfBody::start_job() {
 					break;
 				}
 				case Command::CHECK: {
-					// Did the cuts leave an island? If so, cut it out and measure both sides.
+					// Did the cuts leave crumbs? If so, cut them out (the batch after this one takes
+					// them out of the body, and the look after that finds any island left too). If
+					// not, an island? Then cut it out and measure both sides. Refined first: a coarse
+					// cell's samples, up to a millimetre apart, can miss a crumb altogether.
+					if (session_.needs_refine()) {
+						session_.refine();
+					}
 					const auto t0 = std::chrono::steady_clock::now();
-					const Island found = find_island(session_.body(), session_.octree(), session_.adf(), c.region, kLeastIsland);
+					const Island found = find_island(session_.body(), session_.octree(), session_.adf(), c.region, kCrumb,
+							kIslandMargin, 0.05f, kCrumb);
 					job_island_failed_ = nullptr;
-					if (found.island >= 0) {
+					crumbs_ = 0;
+					if (!found.crumbs.empty()) {
+						job_crumbs_ = cut_crumbs(found);
+					} else if (found.island >= 0) {
 						const CutOut out = cut_out(session_.body(), session_.octree(), session_.adf(), found.parts, found.island);
 						if (out.region) {
 							job_separated_ = measure_island(session_.adf(), found.parts, found.island, out.region);
@@ -1225,15 +1251,18 @@ void SdfBody::start_job() {
 				}
 				case Command::DROP:
 					session_.drop_last_step();
+					job_crumbled_ = -1;
 					break;
 				case Command::CANCEL:
 					session_.cancel();
 					break;
 				case Command::UNDO:
 					session_.undo();
+					job_crumbled_ = -1;
 					break;
 				case Command::REDO:
 					session_.redo();
+					job_crumbled_ = -1;
 					break;
 				case Command::REFINE:
 					session_.refine();
@@ -1274,6 +1303,7 @@ void SdfBody::finish_job() {
 			compute_plan();
 		}
 		report_separation();
+		crumble();
 		return;
 	}
 	if (!job_clips_) {
@@ -1286,10 +1316,136 @@ void SdfBody::finish_job() {
 	}
 	refresh_stats();
 	emit_signal("edited", stats_);
+	if (job_crumbles_) {
+		const std::optional<Crumbling> crumbs = std::move(crumbling_);
+		crumbling_.reset();
+		if (crumbs && job_crumbled_ >= 0) {
+			report_crumbs(*crumbs, job_crumbled_);
+		}
+	}
 	if (plan_stale_) {
 		compute_plan(); // against the body as it is now
 	}
 	report_separation();
+	crumble();
+}
+
+// --- crumbs ------------------------------------------------------------------------------
+
+std::optional<SdfBody::Crumbling> SdfBody::cut_crumbs(const Island &found) {
+	const auto t0 = std::chrono::steady_clock::now();
+	const Body &body = session_.body();
+	// All at once, in one region; failing that (one still touching the rest at the finest, or
+	// two too close to part), each on its own.
+	std::vector<std::pair<std::shared_ptr<const Region>, std::vector<int>>> cuts;
+	const CutOut all = cut_out(body, session_.octree(), session_.adf(), found.parts, found.crumbs, kIslandMargin);
+	if (all.region) {
+		cuts.push_back({all.region, found.crumbs});
+	} else {
+		job_island_failed_ = all.failed;
+		for (std::size_t i = 0; i < found.crumbs.size() && i < kMostCrumbs; ++i) {
+			const CutOut one = cut_out(body, session_.octree(), session_.adf(), found.parts, found.crumbs[i], kIslandMargin);
+			if (one.region) {
+				cuts.push_back({one.region, {found.crumbs[i]}});
+			}
+		}
+	}
+	std::optional<Crumbling> out;
+	if (!cuts.empty()) {
+		out.emplace();
+		for (const auto &[region, parts] : cuts) {
+			out->keep.push_back(Edit::keep(region, Region::Rest));
+			out->region.include(region->box());
+			for (const Crumb &crumb : measure_crumbs(session_.adf(), found.parts, parts, *region)) {
+				++crumbs_;
+				if (crumb.volume >= kLeastChunk) {
+					out->chunks.push_back(chunk_of(crumb.hull, crumb.centre, crumb.volume, crumb.bounds));
+				}
+			}
+		}
+	}
+	crumb_ms_ = ms_since(t0);
+	return out;
+}
+
+SdfBody::Chunk SdfBody::chunk_of(const std::vector<vec3> &points, vec3 centre, double volume, const Aabb &bounds) const {
+	ConvexHull hull = convex_hull(points, 1e-3f);
+	if (hull.empty()) {
+		// Too few points, or all in a plane (a flake): the box round them, at least 0.2 mm
+		// thick each way.
+		Aabb box = bounds;
+		for (const vec3 &p : points) {
+			box.include(p);
+		}
+		const vec3 half = gl::max(box.size() * 0.5f, vec3(0.1f));
+		std::vector<vec3> corners;
+		for (int c = 0; c < 8; ++c) {
+			corners.push_back(box.centre() + vec3(c & 1 ? half.x : -half.x, c & 2 ? half.y : -half.y, c & 4 ? half.z : -half.z));
+		}
+		hull = convex_hull(corners);
+	}
+	Chunk chunk;
+	chunk.centre = centre;
+	chunk.volume = volume;
+	chunk.triangles = hull.triangles;
+	for (const vec3 &p : hull.points) {
+		// The wood just inside the corner (its surface's colour: a cut face's, or the board's).
+		const vec3 in = centre - p;
+		const float d = gl::length(in);
+		chunk.colours.push_back(albedo_body(d > 1e-4f ? p + in * (std::min(0.2f, d) / d) : p));
+	}
+	chunk.points = std::move(hull.points);
+	return chunk;
+}
+
+void SdfBody::crumble() {
+	if (!job_crumbs_) {
+		return;
+	}
+	Crumbling crumbs = std::move(*job_crumbs_);
+	job_crumbs_.reset();
+	if (stroke_ || !queue_.empty() || crumbling_) {
+		// The body is being worked again: looked for once it is idle (what the work does next
+		// may change them).
+		check_region_.include(crumbs.region);
+		return;
+	}
+	std::vector<Command> commands;
+	commands.push_back({Command::STROKE, 0, crumbs.keep});
+	commands.push_back({Command::COMMIT, 0, {}});
+	commands.back().crumbs = true;
+	crumbling_ = std::move(crumbs);
+	queue_all(std::move(commands));
+}
+
+void SdfBody::report_crumbs(const Crumbling &crumbs, int step) {
+	const Transform3D xf = get_global_transform();
+	const double density = double(materials_[session_.body().base_material].density) * 1e-6; // kg per mm^3
+	Array chunks;
+	for (const Chunk &c : crumbs.chunks) {
+		PackedVector3Array points;
+		PackedColorArray colours;
+		for (std::size_t i = 0; i < c.points.size(); ++i) {
+			points.push_back(xf.xform(to_godot(c.points[i])));
+			colours.push_back(Color(c.colours[i].x, c.colours[i].y, c.colours[i].z));
+		}
+		PackedInt32Array triangles;
+		for (const std::array<int, 3> &t : c.triangles) {
+			// Godot's front faces are clockwise.
+			triangles.push_back(t[0]);
+			triangles.push_back(t[2]);
+			triangles.push_back(t[1]);
+		}
+		Dictionary d;
+		d["points"] = points;
+		d["triangles"] = triangles;
+		d["colours"] = colours;
+		d["centre"] = xf.xform(to_godot(c.centre));
+		d["volume"] = c.volume;
+		d["mass"] = c.volume * density;
+		chunks.push_back(d);
+	}
+	emit_signal("crumbled", chunks, step);
 }
 
 void SdfBody::report_separation() {
@@ -1689,7 +1845,7 @@ void SdfBody::_process(double) {
 		start_job();
 	}
 	if (!job_.valid() && queue_.empty() && !stroke_ && !hold_refine_ && session_.has_adf() && !check_region_.empty()) {
-		// Idle after cutting: did the cuts leave an island? (Before refining: sooner.)
+		// Idle after cutting: did the cuts leave crumbs or an island? (It refines first.)
 		Command c{Command::CHECK, 0, {}};
 		c.region = check_region_.expanded(kIslandMargin);
 		check_region_ = Aabb();
@@ -1946,6 +2102,8 @@ void SdfBody::refresh_stats() {
 	d["pieces_split"] = int64_t(clips_.size());
 	d["island_ms"] = island_ms_;         // the worker's last look for an island left by cuts (and cutting it out)
 	d["island_failed"] = island_failed_; // why the island it found could not be cut out, if so
+	d["crumbs"] = int64_t(crumbs_);      // how many crumbs its last look cut out
+	d["crumb_ms"] = crumb_ms_;           // what cutting them out and measuring them took
 	d["sampler"] = gpu_ ? "gpu" : "cpu"; // where ADF bricks are sampled
 	d["gpu_ms"] = job_gpu_ms_;           // the last batch's time on the GPU sampler (with transfers)
 	d["gpu_bricks"] = int64_t(job_gpu_jobs_);
@@ -2027,6 +2185,7 @@ void SdfBody::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gpu_bricks"), "set_gpu_bricks", "get_gpu_bricks");
 	ADD_SIGNAL(MethodInfo("edited", PropertyInfo(Variant::DICTIONARY, "stats")));
 	ADD_SIGNAL(MethodInfo("separated", PropertyInfo(Variant::VECTOR3, "point"), PropertyInfo(Variant::VECTOR3, "normal")));
+	ADD_SIGNAL(MethodInfo("crumbled", PropertyInfo(Variant::ARRAY, "chunks"), PropertyInfo(Variant::INT, "step")));
 	BIND_ENUM_CONSTANT(LIVE_ADF);
 	BIND_ENUM_CONSTANT(LIVE_EXACT);
 	BIND_ENUM_CONSTANT(SHADED);

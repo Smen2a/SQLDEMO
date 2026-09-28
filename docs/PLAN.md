@@ -13,12 +13,12 @@ This revision merges those into shared capabilities and keeps finished work to o
   verbatim in [archive/plan-v1.md](archive/plan-v1.md).
 - As-built details stay in the [README](../README.md) and the commit messages.
 - **Tools** (below): the tools behave like their real selves, and a stroke can be planned
-  before it is made (T1 to T3). T4 holds them to the rules of the real tools, one tool at a
-  time, each tried before the next: T4-1 (chisels and gouges) is done, T4-2 (the sanding
-  block) is next.
+  before it is made (T1 to T3). T4 held them to the rules of the real tools, and T5 gave
+  them lines to obey, a guiding hand, planes and steering: all done, to be tried together
+  in play.
 - **Pieces** (1) is done: P1 (saw through) and P2 (islands left by any cut).
-- **Debris** (2) is under way: D1 (shavings and chips) and D2 (dust) are done; D3 (small
-  pieces) is next.
+- **Debris** (2) is done: D1 (shavings and chips), D2 (dust) and D3 (small pieces). Next:
+  Surface finish (3).
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -70,6 +70,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| D3 | Small pieces: a part under 30 mm³ that came away (crumbs, down to specks) is taken out of the work, not split off. The look for islands refines first, collects every crumb it holds and cuts them out together (`cut_out` over a set of parts), and the work keeps the rest with one `Op::Keep` step; each crumb comes away as a chunk of debris, its convex hull (`pieces/hull.h`) coloured by the wood, with that hull for its collider (`crumbled`). A saw's sliver under 30 mm³ goes the same way. Undo straight after puts it back. On the way: `cut_out` proves air clear beyond the octree's root cube (a crumb at the work's edge). `crumbs` |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
 | T3 | Shaping and finishing (`tools/shaping`): rasps coarse to fine (never tearing, tilted to chamfer, the round face hollowing), a card scraper taking a whisper, a spokeshave whose 40 mm sole follows convex curves and bridges hollows while its blade takes an even shaving |
 | T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths. After play: an edge lock (along any edge, flush, level with an earlier cut's floor) and shavings the size of the chip |
@@ -95,7 +96,7 @@ path needs compute passes.
 | T | **Tools**: plan, lock, act; cutting by the wood; the real tools' rules (T4, under way) | the fixed-depth tools of W1 | the overlay (W2a) |
 | W5 | **A workshop to work in**: walk, carry, clamp, take stock; pieces that lie still (done) | the fixed bench view, tools on the table | Pieces (rigid bodies) |
 | 1 | **Pieces**: bodies that come apart | W3a; E5's and E6's splitting | Live clip, EditSession |
-| 2 | **Debris**: removed material made visible | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
+| 2 | **Debris**: removed material made visible (done) | W3b; E6/E8 chip particles | Pieces (small pieces become debris) |
 | 3 | **Surface finish**: marks, scratches, sanded edges as shading first | W2b, W3c | the smoothing layer |
 | 4 | **Bake**: meshes for distance display, physics and export | E4 | Pieces (shapes), finish (maps) |
 | 5 | **Assemblies**: joints, fit and strength, one rigid body | E5 | Pieces, Bake |
@@ -649,8 +650,8 @@ The details are in the README ("Pieces").
   it rocks). A surface mesh was tried and dropped: the engine discards 1–2 mm triangles as
   degenerate. Meshes come with the Bake (4).
 - **Left for later:** cheaper regions for long interfaces (anisotropic cubes, or a plane
-  where one fits the gap), several islands at once (one per check today), and debris for
-  crumbs under 1 mm³ (they stay in the body).
+  where one fits the gap) and several islands at once (one per check today). Crumbs under
+  1 mm³ stayed in the body until D3, which takes every part under 30 mm³ out as debris.
 
 ### Verification
 - **Native** (new `tests/test_pieces.cpp`):
@@ -665,7 +666,7 @@ The details are in the README ("Pieces").
   - A clip-drawn piece matches its own rebuilt ADF (image diff at the parity thresholds).
 - The existing suites stay green; `sdf_bench tools` reports the separation check's time.
 
-## 2. Debris (current: D1 and D2 done)
+## 2. Debris (done)
 Built in three steps:
 - **D1:** shavings and chips.
 - **D2:** dust.
@@ -751,14 +752,57 @@ gone.
     at most 0.4 ms (headless).
 - **Left for later:** tools pass over piles without pushing them.
 
-### D3 — small pieces (next)
-- One check collects every part that came away. Parts under about 30 mm³ (crumbs under
-  1 mm³ included) are cut out together: one region labels them all Island, and the board
-  keeps the Rest with one `Op::Keep` step. Bigger islands still split into bodies.
-- Each becomes a debris chunk: a hull mesh from a small quickhull
-  (`native/src/core/pieces/hull.{h,cpp}`), coloured per vertex, with a convex collider,
-  reported by a `crumbled` signal. P1 offcuts under the threshold go the same way.
-- Undo straight after drops the Keep.
+### D3 — small pieces (done)
+Cuts meeting round a corner or an arris, or a V's crossing, can free bits too small to be
+pieces of work. They used to split off as offcuts (a saw's sliver of any size, an island
+of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
+- **One look collects them** (`find_island`'s `crumb`, 30 mm³). The same look round a cut
+  as P2's; every part under 30 mm³ the region holds whole, however small, is a crumb, and
+  all of them are returned at once, before any island. Islands are now 30 mm³ or more. The
+  Keep's commit brings the next look to the same place, which finds any island left
+  alongside them.
+- **It refines first.** A coarse crease cell's samples, up to a millimetre apart, can miss
+  a crumb altogether (a 1 mm sliver along an arris was not a part until refined). The
+  look runs on a refine batch anyway, so it refines, then looks.
+- **Cut out together** (`cut_out` over a set of parts): one region whose island cubes hold
+  every crumb, its box the union of theirs plus the margin. If it cannot be proved, each
+  crumb on its own (at most 16), keeping the ones that can.
+  - **Fixed on the way:** beyond the octree's root cube (a millimetre round the work)
+    `Octree::sample` gives only the distance to the cube, so cubes of the margin round a
+    crumb at the work's edge were never clear and the cut failed ("material the samples
+    do not show"). `cut_out` takes the body's own field there
+    (`a_crumb_at_the_edge_is_cut_out`).
+- **Taken out as a step.** The look only reads; when it is done, `SdfBody` queues the
+  Keep (the rest of each region) as a stroke and commit of its own, if nothing else is
+  queued and no tool is engaged (else the crumbs are looked for again once idle). When
+  that step lands, `crumbled(chunks, step)` reports them.
+- **A chunk each** (`measure_crumbs`): volume and centre from the part; points on its
+  surface from the ADF (the island side's, within its bounds: at most 64, merged within
+  0.2 mm); their convex hull (`pieces/hull.{h,cpp}`: incremental, triangles wound
+  outwards; a flake too flat for one gets the box round its points). Each corner is
+  coloured by the wood 0.2 mm inside it, read before the Keep. Crumbs under 0.2 mm³ are
+  taken out with no chunk.
+- **Saw slivers** (P1): a cut through whose smaller side is under 30 mm³ is not split;
+  the look takes the sliver out as a crumb.
+- **In the workshop** (`debris.gd`, `add_chunks`): the hull drawn faceted with its
+  corners' colours, a `ConvexPolygonShape3D` of it for its collider, dropped from where it
+  was like a chip; it rests and fades like one. It belongs to the Keep's undo step, so
+  undo straight after takes the chunk back and puts the crumb back in the work.
+- **Measured** (`native/tests/test_crumbs.cpp`, `game/tests/crumbs`):
+  - 2 and 3 mm blocks cut free next to a 6 mm one: both crumbs found in one look (13 ms)
+    and cut out together (22 ms), their volumes within 2% and their hulls within 10%; the
+    board lost 25.5 mm³ (the crumbs 25.6); the next look finds the 6 mm block (162 mm³)
+    as the island;
+  - in the workshop, three scribed V grooves 2.7 mm deep round the board's front right
+    arris free a 2.3 mm³ sliver (and a 0.05 mm³ speck where two grooves cross): looked
+    for and cut out in 16 ms on the worker (9 ms of it cutting out and measuring), a
+    chunk with a hull of 12 corners.
+- **Left for later:**
+  - a crumb is looked for only round a cut: undone, it stays in the work until a cut near
+    it;
+  - where the work's collider is still a box, a chunk born in the hollow it left is set
+    down on top of the box;
+  - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
 ## 3. Surface finish

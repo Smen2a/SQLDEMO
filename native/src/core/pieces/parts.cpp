@@ -507,11 +507,13 @@ Parts find_parts(const Body &body, const Octree &octree, const Adf &adf, const A
 }
 
 Island find_island(const Body &body, const Octree &octree, const Adf &adf, const Aabb &near, double least, float margin,
-		float finest) {
+		float finest, double crumb) {
 	Island out;
 	if (adf.nodes().empty() || near.empty()) {
 		return out;
 	}
+	// (With crumbs every part counts: one smaller than `crumb` is a crumb.)
+	const double counts = crumb > 0.0 ? 0.0 : least, big = std::max(least, crumb);
 	// Round the cut; then, if parts there reach beyond it, grown to hold them (a chip cut free
 	// is usually a little larger than the last cut round it); then the whole body.
 	Aabb looking = near;
@@ -521,18 +523,32 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 		out.region = whole ? Aabb::infinite() : looking;
 		++out.passes;
 		out.ms += out.parts.ms;
-		if (out.parts.count(least) <= 1) {
-			return out; // one piece (and perhaps crumbs)
+		if (out.parts.count(counts) <= 1) {
+			return out; // one piece (and perhaps crumbs too small to count)
+		}
+		// Whether the region holds a part whole (with the whole body looked at, every part).
+		auto held = [&](const Parts::Part &part) {
+			const Aabb room = part.bounds.expanded(margin);
+			return whole || (!part.touches_region && room.lo.x >= near.lo.x && room.lo.y >= near.lo.y &&
+									room.lo.z >= near.lo.z && room.hi.x <= near.hi.x && room.hi.y <= near.hi.y &&
+									room.hi.z <= near.hi.z);
+		};
+		// Crumbs first: every one it holds whole (the largest part is the body's own).
+		if (crumb > 0.0) {
+			for (std::size_t p = 1; p < out.parts.parts.size(); ++p) {
+				if (out.parts.parts[p].volume < crumb && held(out.parts.parts[p])) {
+					out.crumbs.push_back(int(p));
+				}
+			}
+			if (!out.crumbs.empty()) {
+				return out;
+			}
 		}
 		// The smallest part big enough to count that the region holds whole (with the whole
 		// body looked at, the smallest there is).
 		for (int p = int(out.parts.parts.size()) - 1; p >= 0; --p) {
 			const Parts::Part &part = out.parts.parts[std::size_t(p)];
-			const Aabb room = part.bounds.expanded(margin);
-			const bool held = whole || (!part.touches_region && room.lo.x >= near.lo.x && room.lo.y >= near.lo.y &&
-												 room.lo.z >= near.lo.z && room.hi.x <= near.hi.x &&
-												 room.hi.y <= near.hi.y && room.hi.z <= near.hi.z);
-			if (part.volume >= least && held) {
+			if (part.volume >= big && held(part)) {
 				out.island = p;
 				return out;
 			}
@@ -540,7 +556,7 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 		if (look == 0) {
 			Aabb grown = looking;
 			for (std::size_t p = 1; p < out.parts.parts.size(); ++p) {
-				if (out.parts.parts[p].volume >= least) {
+				if (out.parts.parts[p].volume >= counts) {
 					grown.include(out.parts.parts[p].bounds.expanded(2.0f * margin));
 				}
 			}
@@ -556,15 +572,31 @@ Island find_island(const Body &body, const Octree &octree, const Adf &adf, const
 
 CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts, int island, float margin,
 		float finest) {
+	return cut_out(body, octree, adf, parts, std::vector<int>{island}, margin, finest);
+}
+
+CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts,
+		const std::vector<int> &islands, float margin, float finest) {
 	const auto start = std::chrono::steady_clock::now();
 	CutOut out;
-	if (island < 0 || std::size_t(island) >= parts.parts.size() || adf.nodes().empty()) {
+	// The parts cut out (looked up by part), and the bounds they need.
+	std::vector<char> chosen(parts.parts.size(), 0);
+	Aabb bounds;
+	for (const int island : islands) {
+		if (island < 0 || std::size_t(island) >= parts.parts.size()) {
+			out.failed = "no island";
+			return out;
+		}
+		chosen[std::size_t(island)] = 1;
+		bounds.include(parts.parts[std::size_t(island)].bounds.expanded(margin));
+	}
+	if (islands.empty() || adf.nodes().empty()) {
 		out.failed = "no island";
 		return out;
 	}
+	auto mine = [&](int part) { return part >= 0 && chosen[std::size_t(part)] != 0; };
 	const std::vector<Adf::Node> &adf_nodes = adf.nodes();
 	const std::vector<std::uint16_t> &values = adf.brick_values();
-	const Aabb bounds = parts.parts[std::size_t(island)].bounds.expanded(margin);
 	const float root_size = std::max(bounds.size().x, std::max(bounds.size().y, bounds.size().z));
 	const vec3 root_lo = bounds.centre() - vec3(root_size * 0.5f);
 	const Aabb root{root_lo, root_lo + vec3(root_size)};
@@ -594,12 +626,12 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 				m |= mask[std::size_t(n.child + c)];
 			}
 		} else if (n.brick == Adf::kSolid) {
-			m = parts.of_node(i) == island ? kIsland : kRest;
+			m = mine(parts.of_node(i)) ? kIsland : kRest;
 		} else if (n.brick >= 0) {
 			const std::uint16_t *brick = values.data() + std::size_t(n.brick) * kS;
 			for (int j = 0; j < kS && m != (kIsland | kRest); ++j) {
 				if (half_to_float(brick[j]) < 0.0f) {
-					m |= parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+					m |= mine(parts.of_sample(n.brick, j)) ? kIsland : kRest;
 				}
 			}
 		}
@@ -645,7 +677,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 					for (int x = from[0]; x <= to[0]; ++x) {
 						const int j = index(x, y, z);
 						if (half_to_float(brick[j]) < 0.0f) {
-							bits |= parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+							bits |= mine(parts.of_sample(n.brick, j)) ? kIsland : kRest;
 						}
 					}
 				}
@@ -655,6 +687,10 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 	};
 
 	std::atomic<std::size_t> evaluations{0};
+	// The field, for proving cubes clear of every surface. Beyond the octree's root cube it
+	// gives only the distance to the cube, which never shows a cube there clear (the margin
+	// round an island at the work's edge reaches past it): the body's own field there.
+	auto field = [&](vec3 p) { return octree.leaf_node(p) < 0 ? body.distance(p) : octree.distance(body, p); };
 	// Whose material lies nearest a point (d: the field there): the point itself, if in
 	// material; else just inside the nearest surface, down the field's gradient. There, the
 	// solid leaf's part, or the nearest inside sample's in the brick. 0 if none is found.
@@ -662,8 +698,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 		if (d > 0.0f) {
 			const float h = 0.01f;
 			const vec3 k0(1, -1, -1), k1(-1, -1, 1), k2(-1, 1, -1), k3(1, 1, 1);
-			vec3 g = k0 * octree.distance(body, p + k0 * h) + k1 * octree.distance(body, p + k1 * h) +
-					k2 * octree.distance(body, p + k2 * h) + k3 * octree.distance(body, p + k3 * h);
+			vec3 g = k0 * field(p + k0 * h) + k1 * field(p + k1 * h) + k2 * field(p + k2 * h) + k3 * field(p + k3 * h);
 			evaluations += 4;
 			if (gl::length(g) < 1e-12f) {
 				return 0;
@@ -695,7 +730,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 					const float dist = gl::length(gap);
 					if (dist < best) {
 						best = dist;
-						side = parts.of_node(i) == island ? kIsland : kRest;
+						side = mine(parts.of_node(i)) ? kIsland : kRest;
 					}
 					continue;
 				}
@@ -712,7 +747,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 					const float dist = gl::length(q - p);
 					if (dist < best) {
 						best = dist;
-						side = parts.of_sample(n.brick, j) == island ? kIsland : kRest;
+						side = mine(parts.of_sample(n.brick, j)) ? kIsland : kRest;
 					}
 				}
 			}
@@ -733,7 +768,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 		Region::Node &n = nodes[std::size_t(i)];
 		const vec3 centre = n.lo + vec3(n.size * 0.5f);
 		const float reach = lipschitz * n.size * 0.8660254f;
-		const float d = octree.distance(body, centre);
+		const float d = field(centre);
 		++evaluations;
 		if (d - reach >= clear) {
 			n.label = Region::Free; // air, and clear of every surface
@@ -807,7 +842,7 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 		const vec3 centre = n.lo + vec3(n.size * 0.5f) +
 				vec3(f.axis == 0 ? shift : 0.0f, f.axis == 1 ? shift : 0.0f, f.axis == 2 ? shift : 0.0f);
 		++evaluations;
-		return octree.distance(body, centre) - lipschitz * n.size * 0.7071068f >= clear;
+		return field(centre) - lipschitz * n.size * 0.7071068f >= clear;
 	};
 	const float eps = root_size * 1e-6f;
 	for (;;) {

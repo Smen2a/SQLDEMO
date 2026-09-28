@@ -89,4 +89,16 @@ std::vector<vec3> hull_points(const Adf &adf, const std::function<bool(vec3, flo
 // centres from the parts and the whole body's, hull points from each side's surface.
 PieceSides measure_island(const Adf &adf, const Parts &parts, int island, std::shared_ptr<const Region> region);
 
+// A crumb (a part too small to be a piece of work: find_island()'s `crumbs`), cut out by
+// `region` with the others: what it needs to come away as debris.
+struct Crumb {
+	int part = -1;
+	double volume = 0.0; // mm^3
+	vec3 centre{0.0f};   // centre of volume
+	Aabb bounds;
+	std::vector<vec3> hull; // points on its surface (the island side's, within its bounds) for a hull
+};
+std::vector<Crumb> measure_crumbs(const Adf &adf, const Parts &parts, const std::vector<int> &crumbs,
+		const Region &region);
+
 } // namespace sdf

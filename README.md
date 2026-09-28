@@ -763,8 +763,9 @@ chiselled free. That piece comes away too, and it rests where it lies.
     parts the board.
 
   If the material round the cut is one piece, nothing came away (the body was one piece
-  before, and any path round the cut can go round inside the region). If a part lies
-  wholly inside the region, it is the island: a chip is found this way in about 10 ms.
+  before, and any path round the cut can go round inside the region). If a part of 30 mm³
+  or more lies wholly inside the region, it is the island: a chip is found this way in
+  about 10 ms. (Smaller parts are crumbs, taken out as debris: see *Crumbs* below.)
   Otherwise the region grows once to hold the smaller parts, then the whole board is
   looked at (about 35 ms for its 7,300 bricks).
 - **Cutting it out, proved apart** (`cut_out`, `body/region.h`). The island is cut out by
@@ -906,6 +907,46 @@ included; *Sweep* clears the piles.
   - throwing costs about 0.2 ms a frame while dust comes (0.3 ms at most); the grains up to
     2 ms a frame while a sanding block at many times the real pace throws thousands.
 
+### Crumbs: small pieces come away as debris
+
+Cuts meeting round a corner or an arris, or two V grooves crossing, can free bits too small
+to be pieces of work. A part under 30 mm³ that came away is a crumb: it is taken out of the
+work and comes away as a chunk of debris that drops, lies still and fades like a chip. Undo
+straight after puts it back.
+- **Found with the islands** (`find_island` with `crumb`). The same look round a cut as
+  for an island, once the board is idle; every part under 30 mm³ the region holds whole,
+  however small, is a crumb, and they are all taken at once, before any island. The Keep's
+  commit brings the next look to the same place, which finds any island left too. The
+  look refines the ADF first: a coarse crease cell's samples, up to a millimetre apart,
+  can miss a crumb altogether. A saw cut through whose smaller side is under 30 mm³ is
+  not split: the look takes the sliver out.
+- **Cut out together** (`cut_out` over a set of parts): one region whose island cubes hold
+  every crumb; if that can't be proved, each on its own. Beyond the octree's root cube (a
+  millimetre round the work) `Octree::sample` gives only the distance to the cube, which
+  never shows the air there clear; `cut_out` takes the body's own field there, so a crumb
+  at the work's edge can be cut out.
+- **Taken out as a step.** The look only reads the body. When it is done, the body takes
+  the crumbs out with a Keep of the rest of each region, as an undo step of its own
+  (queued only if nothing else is and no tool is engaged; else they are looked for again
+  once idle). When it lands, `crumbled(chunks, step)` reports them.
+- **The chunk** (`measure_crumbs`, `pieces/hull.h`). Its volume and centre come from its
+  part; points on its surface from the ADF (the island side's, within its bounds: at most
+  64, merged within 0.2 mm); the chunk is their convex hull (an incremental quickhull,
+  wound outwards; a flake too flat for one gets the box round its points). Each corner is
+  coloured by the wood 0.2 mm inside it. Under 0.2 mm³ a crumb goes with no chunk.
+- **In the workshop** (`debris.gd`, `add_chunks`): the hull drawn faceted in its corners'
+  colours, the same hull its collider, dropped from where it was. Where the board's
+  collider is still a box, a chunk born in the hollow it left is set down on top of it. It
+  belongs to the Keep's undo step: undo takes it back.
+- **Measured** (`native/tests/test_crumbs.cpp`, `game/tests/crumbs`):
+  - 2 and 3 mm blocks cut free beside a 6 mm one: both crumbs found in one look (13 ms)
+    and cut out together (22 ms), their volumes within 2% and hulls within 10%; the board
+    lost 25.5 mm³ (the crumbs held 25.6); the next look finds the 6 mm block as the
+    island;
+  - in the workshop, three scribed V grooves 2.7 mm deep round the board's front right
+    arris free a 2.3 mm³ sliver: looked for and cut out in 16 ms on the worker (9 ms of
+    it cutting out and measuring); its chunk, a hull of 12 corners, lies where it was.
+
 ## Layout
 
 | Path | What it is |
@@ -917,7 +958,7 @@ included; *Sweep* clears the piles.
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
 | `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
-| `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), and each piece's bounds, volume, centre of mass and hull points. |
+| `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), islands and crumbs cut out by a region (`parts.h`), each piece's bounds, volume, centre of mass and hull points, and convex hulls (`hull.h`). |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
 | `native/src/godot/` | The GDExtension: `SdfBody`, a node that raymarches a body live, and the GPU brick sampler. |

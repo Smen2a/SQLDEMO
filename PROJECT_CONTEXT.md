@@ -174,6 +174,7 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| D3 | Small pieces become debris: a part under 30 mm³ that came away (down to specks) is taken out of the work rather than split off. The look for islands refines, collects every crumb and cuts them out together; the work keeps the rest as an undo step of its own, and each crumb comes away as a chunk of debris (its convex hull, coloured by the wood, that hull its collider). A saw's sliver under 30 mm³ goes the same way; undo straight after puts it back. On the way, `cut_out` learned to prove air clear beyond the octree's root cube (a crumb at the work's edge) |
 | T5-5 | Steering: pivoted mid-stroke, a chisel's bevel steers its depth (tipped past it, it dives; on it, level; under it, it lifts out); dragged round a curve, a chisel, gouge or plane follows the drag's trail, set afresh to the surface as it goes; the chain of segments swept as a few straight and quadratic sweeps |
 | T5-3 | Planes: the spokeshave's slot holds a block plane (a long sole held flat, started at the work's end), the block plane with a chamfer fence (held across an arris at 45°, or on the plane between two gauge lines: an even chamfer to the lines) and a shoulder plane (its iron flush with its sides: into a rebate's inside corner) |
 | T5-4 | The guiding hand: right-drag pivots the tool on its edge (up / down its angle to the work, left / right its skew or turn, the wheel its lean), hovering or while planned, the pointer held where it was. Space plans. An attitude gauge by the pointer shows the angle (with the bevel riding, biting or digging in), the skew and the lean |
@@ -188,7 +189,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 134 native tests (GCC and Clang, including golden images) and 15
+Test counts today: 137 native tests (GCC and Clang, including golden images) and 16
 headless Godot checks.
 
 ## 5. Where things stand
@@ -221,9 +222,13 @@ so correctness can be checked here, but not speed.
 - **Islands:**
   - one island per check;
   - the region is large for long interfaces (a rebate needs about 160,000 cubes);
-  - crumbs under 1 mm³ stay in the body (D3).
+  - crumbs (parts under 30 mm³) are looked for only round a cut: an undone one stays in
+    the work until a cut near it; one whose region can't be proved (a web to the rest
+    thinner than the samples) stays too.
 - **Physics:**
-  - debris colliders are boxes;
+  - shavings' and chips' colliders are boxes (a chunk's is its hull);
+  - where the work's collider is a box, a chunk born in the hollow it left is set down on
+    top of the box;
   - a piece's collider is a box while it fills its bounds, unless islands have hollowed
     it (then convex pieces). Proper meshes come with the Bake;
   - under Jolt a hull rests less well than a box (a sawn strip as a hull sinks 0.6 mm and
@@ -277,17 +282,11 @@ and gouges), T4-2 (the sanding block), T4-3 (the saw), T4-4 (the rasp), T4-5 (th
 T4-6 (the spokeshave) and T4-7 (the sponge) are done: the user asked for them in one go,
 to try them together and then work on each. Next: what play turns up, tool by tool.
 
-D3 waits until the tools have been tried in play.
+### 2. Debris (done: D1, D2 and D3)
 
-### 2. Debris (under way: D1 and D2 done)
-
-**D3: small pieces become debris.**
-- One check collects every part that came away. Parts under about 30 mm³ (crumbs under
-  1 mm³ included) are cut out together with one region and one `Op::Keep`.
-- Each becomes a debris chunk: a hull mesh from a small quickhull (new:
-  `native/src/core/pieces/hull.{h,cpp}`), coloured per vertex, with a convex collider. It
-  is reported by a new `crumbled` signal. P1 offcuts under the threshold go the same way.
-- Undo straight after drops the Keep.
+Shavings and chips (D1), dust (D2), and small pieces (D3): parts under 30 mm³ that cuts
+free are taken out of the work and come away as chunks of debris, not pieces
+(docs/PLAN.md, D3). Next: Surface finish (3).
 
 ### 3. Surface finish
 
@@ -363,7 +362,7 @@ materials. Every detail knob is already a parameter, so it is a settings change.
 ```sh
 git submodule update --init
 cmake -S native -B native/build -G Ninja && cmake --build native/build   # also builds game/bin/sdf_godot.*
-native/build/sdf_tests                                                   # 93 tests, golden images
+native/build/sdf_tests                                                   # 137 tests, golden images
 GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about a minute)
 GODOT=/path/to/godot tools/test_godot.sh --gpu                           # GPU tier: renders, images, parity
 ```

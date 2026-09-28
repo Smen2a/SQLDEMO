@@ -90,6 +90,7 @@ if [[ "$GPU" == 0 ]]; then
 	check tool_planning "tool planning: every step as planned" res://tests/tool_planning.tscn
 	check offcut_physics "offcut physics:" res://tests/offcut_physics.tscn
 	check island_split "island split: the rebate came away" res://tests/island_split.tscn
+	check crumbs "crumbs: the crumb came away" res://tests/crumbs.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
@@ -111,6 +112,7 @@ check tool_planning_render "tool planning: every step as planned" --render res:/
 	--out="$OUT"
 check debris_render "debris: shavings and chips come away" --render res://tests/debris.tscn -- --out="$OUT"
 check dust_render "dust: the dust comes away and settles" --render res://tests/dust.tscn -- --out="$OUT"
+check crumbs_render "crumbs: the crumb came away" --render res://tests/crumbs.tscn -- --out="$OUT"
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

@@ -72,15 +72,19 @@ Parts find_parts(const Body &body, const Octree &octree, const Adf &adf, const A
 // lies wholly inside `near`, with `margin` mm to spare, that is the island; if not, once
 // more with `near` grown to hold the smaller parts found; otherwise the whole body is
 // looked at, and the island is its smallest part.
+// With `crumb`, parts smaller than that (however small) are crumbs, not islands: every one
+// the region holds whole is found at once (`crumbs`, and then no island), looked for the
+// same way; islands are then at least `crumb`.
 struct Island {
 	Parts parts;      // of the last region looked at
 	Aabb region;
 	int island = -1;  // the island's part, or -1
+	std::vector<int> crumbs; // the crumbs' parts (with `crumb`)
 	int passes = 0;
 	double ms = 0.0;  // all passes
 };
 Island find_island(const Body &body, const Octree &octree, const Adf &adf, const Aabb &near, double least = 1.0,
-		float margin = 2.0f, float finest = 0.05f);
+		float margin = 2.0f, float finest = 0.05f, double crumb = 0.0);
 
 // The island cut out: a Region (body/region.h) whose island cubes hold all of `island`'s
 // material and whose rest cubes hold everything else's near it, over the island's bounds
@@ -99,5 +103,8 @@ struct CutOut {
 };
 CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts, int island,
 		float margin = 2.0f, float finest = 0.05f);
+// Several parts cut out together (crumbs): one region whose island cubes hold all of them.
+CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Parts &parts,
+		const std::vector<int> &islands, float margin = 2.0f, float finest = 0.05f);
 
 } // namespace sdf

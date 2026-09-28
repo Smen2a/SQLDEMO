@@ -399,4 +399,29 @@ PieceSides measure_island(const Adf &adf, const Parts &parts, int island, std::s
 	return s;
 }
 
+std::vector<Crumb> measure_crumbs(const Adf &adf, const Parts &parts, const std::vector<int> &crumbs,
+		const Region &region) {
+	std::vector<Crumb> out;
+	for (const int p : crumbs) {
+		const Parts::Part &part = parts.parts[std::size_t(p)];
+		Crumb c;
+		c.part = p;
+		c.volume = part.volume;
+		c.centre = part.centre;
+		c.bounds = part.bounds;
+		// Its surface's points: the island side's, within its own bounds (and a voxel round
+		// them), not another crumb's; finer than a piece's (it is a few millimetres across).
+		const Aabb box = part.bounds.expanded(0.5f);
+		c.hull = hull_points(
+				adf, [box](vec3 lo, float size) { return Aabb{lo, lo + vec3(size)}.overlaps(box); },
+				[&region, box](vec3 q) {
+					return region.label(q) == Region::Island && q.x >= box.lo.x && q.y >= box.lo.y && q.z >= box.lo.z &&
+							q.x <= box.hi.x && q.y <= box.hi.y && q.z <= box.hi.z;
+				},
+				64, 0.2f);
+		out.push_back(std::move(c));
+	}
+	return out;
+}
+
 } // namespace sdf

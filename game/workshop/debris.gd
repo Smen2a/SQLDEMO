@@ -11,14 +11,18 @@ extends Node3D
 ##             the chip the edge took: as wide and as thick as the wood over it (half the
 ##             chisel's width, pared half off the work), on that side of the edge.
 ##   chips     tear-out, breakout, a chop's pop-off: a block of the wood thrown off the face.
+##   chunks    crumbs: bits under 30 mm^3 that cuts left apart from the work (a corner a few
+##             cuts meet round, a sliver a saw took off), taken out of it (SdfBody's
+##             crumbled(): add_chunks()). Each is its hull, faceted and coloured per corner,
+##             and drops from where it was.
 ##   dust      the saw's, the rasps', the scraper's and the sanding tools': a puff of grains
 ##             that goes as soon as it lands, what reaches the ground heaped into a pile
 ##             there (dust.gd).
-## Shavings and chips are passing things: once one has lain still for REST it fades out over
-## FADE and is gone. Each piece belongs to the board's undo step that made it (undo_step()
-## takes it back). The newest LIVE pieces move under physics; older ones fade out; past MOST
-## the oldest go. World space throughout (metres); the report's
-## volumes are mm^3.
+## Shavings, chips and chunks are passing things: once one has lain still for REST it fades
+## out over FADE and is gone. Each piece belongs to the board's undo step that made it
+## (undo_step() takes it back). The newest LIVE pieces move under physics; older ones fade
+## out; past MOST the oldest go. World space throughout (metres); the report's volumes are
+## mm^3.
 
 const Dust := preload("res://workshop/dust.gd")
 const MM := 0.001
@@ -36,17 +40,18 @@ const LIFT := 0.0005 # m a piece is set clear of where it came from before it fa
 const CLEAR_FROM := 0.03 # m above where it came away that a piece born inside something is set down from
 
 ## Pieces come away as these, oldest first: {"body": RigidBody3D, "view": its MeshInstance3D,
-## "step": the board's step that made it, "kind": "shaving" or "chip", "volume": mm^3, and
-## when (the clock, s) it "came" away, was last "moving", came to "rest" and began to "fade"
-## (-1: not yet)}.
+## "step": the board's step that made it, "kind": "shaving", "chip" or "chunk", "volume":
+## mm^3, and when (the clock, s) it "came" away, was last "moving", came to "rest" and began
+## to "fade" (-1: not yet)}.
 var pieces: Array[Dictionary] = []
-## How many of each kind came away (since the workshop started): {"shaving", "chip"}.
-var made := {"shaving": 0, "chip": 0}
+## How many of each kind came away (since the workshop started): {"shaving", "chip", "chunk"}.
+var made := {"shaving": 0, "chip": 0, "chunk": 0}
 ## The shaving being taken, if any: its samples (world space) and what they came to.
 var _live := {}
 var _live_mesh: MeshInstance3D
 var _edge := Transform3D()
 var _shavings: StandardMaterial3D
+var _chunks: StandardMaterial3D
 var feed_usec := 0 ## what the last feed() cost
 var dust ## dust.gd: the grains and piles
 var _clock := 0.0 # s of game time
@@ -57,6 +62,9 @@ func _ready() -> void:
 	_shavings.vertex_color_use_as_albedo = true
 	_shavings.cull_mode = BaseMaterial3D.CULL_DISABLED # a thin ribbon, seen from both sides
 	_shavings.roughness = 0.75
+	_chunks = StandardMaterial3D.new()
+	_chunks.vertex_color_use_as_albedo = true
+	_chunks.roughness = 0.8
 	_live_mesh = MeshInstance3D.new()
 	_live_mesh.mesh = ArrayMesh.new()
 	_live_mesh.material_override = _shavings
@@ -338,6 +346,60 @@ func _add_chip(chip: Dictionary, step: int, density: float) -> void:
 	body.angular_velocity = xf.basis.y * 4.0
 	body.angular_damp = 3.0
 	pieces.append(_piece(body, view, step, "chip", float(chip.volume)))
+
+
+# --- chunks -----------------------------------------------------------------------------
+
+## Crumbs that came away from a piece of work (SdfBody's crumbled(): world space), for its
+## undo step `step`.
+func add_chunks(chunks: Array, step: int) -> void:
+	for chunk in chunks:
+		_add_chunk(chunk, step)
+	_keep_cheap()
+
+
+## A crumb: its hull, faceted (each face its own corners, with the face's normal) and coloured
+## per corner, round its centre of volume; its collider the same hull.
+func _add_chunk(chunk: Dictionary, step: int) -> void:
+	var centre: Vector3 = chunk.centre
+	var points: PackedVector3Array = chunk.points
+	var triangles: PackedInt32Array = chunk.triangles
+	var colours: PackedColorArray = chunk.colours
+	var corners := PackedVector3Array()
+	for p in points:
+		corners.push_back(p - centre)
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var tints := PackedColorArray()
+	for t in range(0, triangles.size() - 2, 3):
+		var a := corners[triangles[t]]
+		var b := corners[triangles[t + 1]]
+		var c := corners[triangles[t + 2]]
+		var n := (c - a).cross(b - a).normalized() # clockwise from outside: outwards
+		for k in 3:
+			vertices.push_back(corners[triangles[t + k]])
+			normals.push_back(n)
+			tints.push_back(colours[triangles[t + k]])
+	if vertices.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = tints
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var hull := ConvexPolygonShape3D.new()
+	hull.points = corners
+	# Where it was (it came away there): it drops, or where the work's collider still covers
+	# it (a box round a board), is set down on it.
+	var body := _new_body(Transform3D(Basis.IDENTITY, centre), hull, float(chunk.mass))
+	var view := MeshInstance3D.new()
+	view.mesh = mesh
+	view.material_override = _chunks
+	body.add_child(view)
+	body.angular_damp = 3.0
+	pieces.append(_piece(body, view, step, "chunk", float(chunk.volume)))
 
 
 # --- bodies -----------------------------------------------------------------------------
