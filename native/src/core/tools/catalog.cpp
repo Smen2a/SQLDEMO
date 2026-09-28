@@ -108,4 +108,43 @@ const SandingVariant *find_sanding(const std::string &id) {
 	return nullptr;
 }
 
+const std::vector<PlaneVariant> &plane_catalog() {
+	static const std::vector<PlaneVariant> catalog = [] {
+		Spokeshave block;
+		block.kind = Spokeshave::Kind::BlockPlane;
+		block.blade_width = 35.0f;
+		block.sole = 150.0f;
+		block.sole_width = 42.0f;
+		block.bed_deg = 37.0f; // a 12 degree bed, the bevel up at 25
+		block.hand_force = 200.0f; // (one hand, pushing along its length)
+		block.mouth = 0.5f;
+		Spokeshave fenced = block;
+		fenced.fence = true;
+		Spokeshave shoulder;
+		shoulder.kind = Spokeshave::Kind::ShoulderPlane;
+		shoulder.blade_width = 19.0f;
+		shoulder.sole = 160.0f;
+		shoulder.sole_width = 19.0f;
+		shoulder.bed_deg = 40.0f;
+		shoulder.hand_force = 200.0f;
+		shoulder.mouth = 0.5f;
+		return std::vector<PlaneVariant>{
+				{"spokeshave", "Spokeshave", Spokeshave{}},
+				{"block_plane", "Block plane", block},
+				{"block_plane_fence", "Block plane, chamfer fence", fenced},
+				{"shoulder_plane", "Shoulder plane 19 mm", shoulder},
+		};
+	}();
+	return catalog;
+}
+
+const PlaneVariant *find_plane(const std::string &id) {
+	for (const PlaneVariant &v : plane_catalog()) {
+		if (v.id == id) {
+			return &v;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace sdf::tools

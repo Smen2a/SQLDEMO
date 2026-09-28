@@ -231,7 +231,7 @@ func forget_redo(piece: Object) -> void:
 ## waste and its offset), and notes the marks it held to (drawn blue); {} with none near.
 ##   Flat on a face:
 ##     - a gauge line on the face beside, gauged from this face's edge: the floor, this face
-##       cut down to it (a rebate's depth);
+##       cut down to it (a rebate's depth), the tool squared to the face;
 ##     - a gauge line on this face: a wall, the waste between it and its edge (a shoulder);
 ##     - a knife line on this face: a wall, the waste on the side the stroke is on.
 ##     Walls along the way the tool goes are its sides: a chisel's or spokeshave's side is set
@@ -269,6 +269,8 @@ func hold(lock: Dictionary, tool: String) -> Dictionary:
 				if waste.dot(d) < 0.0:
 					continue # (this stroke is on the side it keeps: not its line)
 				walls.append([Stop.new(mark.origin, waste), mark])
+	if not floors.is_empty() and not across:
+		_square(lock, f)
 	var path := dir_to_body(lock.path)
 	var sides := []
 	var ends := []
@@ -396,10 +398,28 @@ func _chamfer(lock: Dictionary, marks: Array, floors: Array, walls: Array) -> bo
 	return true
 
 
-## A chisel's or spokeshave's side set flush on a wall along its way: moved (in the face) just
-## far enough that its edge keeps to the waste side.
+## Held to a floor gauged from the face it is on: the tool square to that face (the normal
+## fitted round the pointer tips several degrees within a few millimetres of an edge, and
+## would tilt the floor it leaves). Within 15 degrees of it; further off, the face under it
+## is sloped, and it is left as it is.
+func _square(lock: Dictionary, face: Vector3) -> void:
+	var normal := dir_to_world(face)
+	if normal.dot(lock.normal) < cos(deg_to_rad(15.0)):
+		return
+	lock.normal = normal
+	lock.plane = Plane(normal, lock.point)
+	for key in ["path", "along"]:
+		var way: Vector3 = lock[key] - normal * normal.dot(lock[key])
+		if way.length() > 1e-3:
+			lock[key] = way.normalized()
+
+
+## A chisel's, spokeshave's or plane's side set flush on a wall along its way: moved (in the
+## face) just far enough that its edge (a plane's sole) keeps to the waste side.
 func _flush(lock: Dictionary, stop: Stop, tool: String) -> void:
-	var width: float = workshop.variant().get("width", 12.0) if tool != "spokeshave" else 50.0
+	# (A plane by its sole, which its iron may not reach the side of: a block plane's leaves a
+	# strip by the wall, a shoulder plane's none.)
+	var width: float = workshop.variant().get("sole_width" if tool == "spokeshave" else "width", 12.0)
 	var p := to_body(lock.point)
 	var n := dir_to_body(lock.normal)
 	var across := n.cross(dir_to_body(lock.path)).normalized()

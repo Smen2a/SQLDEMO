@@ -333,6 +333,12 @@ tools::SandingBlock block_from(const Dictionary &settings) {
 	return b;
 }
 
+// The spokeshave or plane its settings name (core tools/catalog.h).
+tools::Spokeshave plane_from(const Dictionary &settings) {
+	const tools::PlaneVariant *v = tools::find_plane(String(settings.get("variant", "spokeshave")).utf8().get_data());
+	return v != nullptr ? v->plane : tools::Spokeshave{};
+}
+
 // A chisel's or gouge's variant (core tools/catalog.h), held at its settings' angle.
 tools::Chisel chisel_from(const String &tool, const Dictionary &settings) {
 	const String fallback = tool == "gouge" ? "gouge_7_12" : "bench_12";
@@ -356,7 +362,7 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 	} else if (name == "scraper") {
 		model = tools::CardScraper{}.model();
 	} else if (name == "spokeshave") {
-		model = tools::Spokeshave{}.model();
+		model = plane_from(settings).model();
 	} else if (name == "saw") {
 		model = tools::Saw{}.model();
 	} else if (name == "sanding_block") {
@@ -394,7 +400,7 @@ tools::CutPlan SdfBody::plan_for(const String &tool, const tools::Work &work, ve
 	const std::uint32_t seed = std::uint32_t(int64_t(s.get("seed", 1)));
 	tools::CutPlan plan;
 	if (tool == "spokeshave") {
-		plan = tools::plan_spokeshave(tools::Spokeshave{}, work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
+		plan = tools::plan_spokeshave(plane_from(s), work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
 	} else {
 		plan = tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 0.2))),
 				float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))));
@@ -434,6 +440,17 @@ Array SdfBody::tool_catalog() {
 		d["label"] = String::utf8(v.label.c_str());
 		d["length"] = double(v.block.length);
 		d["width"] = double(v.block.breadth);
+		out.push_back(d);
+	}
+	for (const tools::PlaneVariant &v : tools::plane_catalog()) {
+		Dictionary d;
+		d["id"] = String(v.id.c_str());
+		d["family"] = "spokeshave"; // (the Planes slot's)
+		d["label"] = String::utf8(v.label.c_str());
+		d["width"] = double(v.plane.blade_width);
+		d["sole"] = double(v.plane.sole);
+		d["sole_width"] = double(v.plane.sole_width);
+		d["fence"] = v.plane.fence;
 		out.push_back(d);
 	}
 	return out;

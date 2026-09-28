@@ -15,14 +15,16 @@ extends Node3D
 ##         chop strikes a blow at the click). Let go to finish: one undo step. A line by
 ##         the pointer says what the stroke comes to: how deep the wood lets it go, the
 ##         force it takes, the grain, and what goes wrong.
-##   plan  or first hold the right button on the board: the stroke is locked in there and
-##         runs towards the pointer, its cut hatched on the board before it is made. The
-##         wheel sets how hard it works (a chisel's or gouge's depth, the spokeshave's
-##         shaving, the pressure on the others); Shift+wheel a chisel's or
-##         gouge's angle to the work (C: straight up, to chop), or the rasp's tilt about
-##         its line; Q / E skew a chisel's edge, or turn the sanding tools. Then press the
-##         left button and drag: the tool follows the plan as far as you take it. Keep
-##         holding the right to plan the next pass from the same spot.
+##   plan  or first hold Space over the board: the stroke is locked in there and runs
+##         towards the pointer, its cut hatched on the board before it is made. The wheel
+##         sets how hard it works (a chisel's or gouge's depth, a plane's shaving, the
+##         pressure on the others). Then press the left button and drag: the tool follows
+##         the plan as far as you take it. Keep holding Space to plan the next pass from
+##         the same spot.
+##   hand  right-drag: the guiding hand pivots the tool on its edge, hovering or planned
+##         (up / down a chisel's or gouge's angle to the work, C: straight up, to chop;
+##         left / right its skew, or another tool's turn; the wheel its lean, or the
+##         rasp's tilt). Q / E skew or turn it 15 degrees.
 ## The tools cut as the wood lets them (core tools/cutting.h):
 ##   chisel          pares along its path, as deep as a hand can push it in this wood and
 ##                   grain. From an edge or a cut it goes in at once; in the middle of a
@@ -38,10 +40,15 @@ extends Node3D
 ##   rasp            back and forth along its line, cutting on the push: takes the surface
 ##                   down steadily where its face goes, resting on the high spots, and never
 ##                   tears the grain; tilted, chamfers an arris; its round face hollows
-##   spokeshave      its sole on the work, an even shaving of the depth it is set to: on a
-##                   flat face, over a curve, bridging hollows shorter than its sole; as deep
-##                   as two hands push the chip (deeper on a narrow edge), its mouth passes
-##                   (0.8 mm) and its toe rides (a step stops it)
+##   planes          (the slot's id: spokeshave) a spokeshave: its sole on the work, an even
+##                   shaving of the depth it is set to: on a flat face, over a curve,
+##                   bridging hollows shorter than its sole; as deep as two hands push the
+##                   chip (deeper on a narrow edge), its mouth passes (0.8 mm) and its toe
+##                   rides (a step stops it). A block plane (a 150 mm sole, a 35 mm iron
+##                   inside its sides), with or without a chamfer fence (held across an
+##                   arris by edge lock, at 45 degrees to the faces, or on the plane between
+##                   two gauge lines); a shoulder plane (its iron flush with its sides: into
+##                   a rebate's inside corner)
 ##   card scraper    back and forth, cutting on the push: a hundredth of a millimetre from
 ##                   each point its burr passes over, for cleaning up tear-out
 ##   sanding block   rests on the highest points under it and takes them down first, only
@@ -103,7 +110,7 @@ const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 150.0, "saw
 ## plane).
 const PUSHED := ["chisel", "gouge", "spokeshave"]
 const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
-const EDGE_REACH := 6.0 # mm round where a chisel or gouge is locked that it looks for an edge
+const EDGE_REACH := 6.0 # mm round where a stroke is locked that edge lock looks for an edge
 const FLUSH := 0.05 # mm a tool locked to an edge keeps its side off it
 const EDGE_COLOUR := Color(0.35, 0.9, 1.0)
 ## A chop's blow: a tap, a firm blow, a heavy one (SdfBody's "blow").
@@ -187,7 +194,7 @@ var settings := {
 	"gouge": {"variant": "gouge_7_12", "depth": 0.3, "angle": 30.0, "skew": 0.0, "lean": 0.0, "blow": 1.0},
 	"saw": {"pressure": 1.0, "lean": 0.0}, # ("feed": a set feed, either way, for tests)
 	"rasp": {"variant": "rasp_cabinet", "pressure": 1.0, "tilt": 0.0},
-	"spokeshave": {"depth": 0.1, "lean": 0.0},
+	"spokeshave": {"variant": "spokeshave", "depth": 0.1, "lean": 0.0}, # the Planes slot
 	"scraper": {"pressure": 1.0},
 	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
@@ -720,9 +727,15 @@ func _note_edge(free: bool, surface: Vector3) -> void:
 	_lock.corner = false
 	_lock.edge = {}
 	_lock.free = free # (Alt: no edge lock, and not held to the marked lines)
-	if free or edge_aim <= 0.0 or not (current == "chisel" or current == "gouge") or is_chopping():
-		return
-	_lock.edge = board.find_edge(_lock.point, surface, EDGE_REACH, edge_fold)
+	if _edge_locks():
+		_lock.edge = board.find_edge(_lock.point, surface, EDGE_REACH, edge_fold)
+
+
+## Whether the stroke being locked looks for an edge: a chisel's or gouge's (not chopping),
+## or a plane's with a chamfer fence; not made freely (Alt), and edge lock not off.
+func _edge_locks() -> bool:
+	return not _lock.get("free", false) and edge_aim > 0.0 and not is_chopping() and \
+			(current == "chisel" or current == "gouge" or _fenced())
 
 
 ## The stroke asks to go `asked` (unit, in the plane it was locked on). Within `edge_aim` of
@@ -740,21 +753,31 @@ func _snap(asked: Vector3) -> void:
 	_lock.snapped = false
 	_lock.corner = false
 	var edge: Dictionary = _lock.get("edge", {})
-	if edge.is_empty():
-		return
 	var n: Vector3 = _lock.normal
+	if not _edge_along(edge, asked) and _fenced() and _edge_locks() and _lock.has("surface_normal"):
+		# A chamfer fence pressed by the end of an arris (nearer the end's edge, across the
+		# way: a plane is started at the end): the arris a little way ahead along the drag.
+		# (A chisel pressed there pares flat: it would be across the corner.)
+		var ahead: Dictionary = board.find_edge(_lock.point + asked * (EDGE_REACH * MM), _lock.surface_normal,
+				EDGE_REACH, edge_fold)
+		if _edge_along(ahead, asked):
+			edge = ahead
+			_lock.edge = ahead
+	if not _edge_along(edge, asked):
+		return
 	var way: Vector3 = edge.direction - n * n.dot(edge.direction)
 	way = way.normalized()
 	if way.dot(asked) < 0.0:
 		way = -way
-	if rad_to_deg(way.angle_to(asked)) > edge_aim:
-		return
+	# Abreast of where it was pressed.
+	var abreast: Vector3 = edge.point + edge.direction * edge.direction.dot(_lock.point - edge.point)
 	var far: Vector3 = edge.get("far_normal", Vector3.ZERO)
 	if edge.convex and not edge.floor and far != Vector3.ZERO:
-		# Across the corner: onto it along the bisector of its two faces.
+		# Across the corner: onto it along the bisector of its two faces (a chamfer fence's:
+		# of the piece's faces there, whatever fold of a chamfer begun the lock found).
 		var face: Vector3 = _lock.get("surface_normal", n)
-		var bisector := (face + far).normalized()
-		var on: Dictionary = board.raycast(edge.point + bisector * 0.005, -bisector, 0.01)
+		var bisector := _fence_normal(face, far) if _fenced() else (face + far).normalized()
+		var on: Dictionary = board.raycast(abreast + bisector * 0.005, -bisector, 0.01)
 		if on.is_empty() or on.get("stale", false):
 			return
 		_lock.point = on.position
@@ -764,8 +787,10 @@ func _snap(asked: Vector3) -> void:
 		_lock.snapped = true
 		_lock.corner = true
 		return
+	if _fenced():
+		return # (a chamfer fence rides an arris, not a wall)
 	var width: float = variant().get("width", 12.0) * MM
-	var start: Vector3 = edge.point + edge.across * (0.5 * width + FLUSH * MM)
+	var start: Vector3 = abreast + edge.across * (0.5 * width + FLUSH * MM)
 	var hit: Dictionary = board.raycast(start + n * 0.01, -n, 0.03)
 	if hit.is_empty() or hit.get("stale", false):
 		return
@@ -781,6 +806,37 @@ func _snap(asked: Vector3) -> void:
 		var spec: Array = INTENSITY[current]
 		_lock.level = -edge.step
 		settings[current].depth = clampf(snappedf(-edge.step, 0.01), spec[2], spec[3])
+
+
+## Whether an edge (SdfBody.find_edge's) runs within edge_aim of the way `asked`.
+func _edge_along(edge: Dictionary, asked: Vector3) -> bool:
+	if edge.is_empty():
+		return false
+	var n: Vector3 = _lock.normal
+	var way: Vector3 = edge.direction - n * n.dot(edge.direction)
+	if way.length() < 1e-4:
+		return false
+	return rad_to_deg(acos(clampf(absf(way.normalized().dot(asked)), 0.0, 1.0))) <= edge_aim
+
+
+## Whether the tool in hand is a plane with a chamfer fence.
+func _fenced() -> bool:
+	return current == "spokeshave" and variant().get("fence", false)
+
+
+## A chamfer fence's hold across an arris: the bisector of the piece's two faces there (the
+## piece's own axes nearest the faces the edge lock found, `face` and `far`), so that on a
+## chamfer begun, whose folds are what the lock finds, it is still held at 45 degrees to the
+## faces it rides.
+func _fence_normal(face: Vector3, far: Vector3) -> Vector3:
+	var basis: Basis = board.global_basis.orthonormalized()
+	var sum: Vector3 = basis.inverse() * (face + far)
+	var order := [0, 1, 2]
+	order.sort_custom(func(i, j): return absf(sum[i]) > absf(sum[j]))
+	var bisector := Vector3.ZERO
+	for k in 2:
+		bisector[order[k]] = signf(sum[order[k]])
+	return (basis * bisector).normalized()
 
 
 ## Space up: a plan not acted on is dropped; a stroke in progress carries on.
@@ -923,7 +979,7 @@ func _refit_tool() -> void:
 ## tool in hand's lean.
 func _leaned(normal: Vector3, way: Vector3) -> Vector3:
 	var by: float = settings.get(current, {}).get("lean", 0.0)
-	if absf(by) < 1e-3 or way.length() < 1e-6:
+	if absf(by) < 1e-3 or way.length() < 1e-6 or _fenced(): # (a fence holds the angle)
 		return normal
 	return normal.rotated(way.normalized(), deg_to_rad(by))
 
@@ -1453,7 +1509,7 @@ func set_setting(tool: String, key: String, value) -> void:
 	# A chisel's or gouge's model is its variant, held at its angle; a sanding block's, its
 	# block or pad; the others' look does not change.
 	if ((tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle")) or \
-			(tool == "sanding_block" and key == "variant") or tool == "layout":
+			((tool == "sanding_block" or tool == "spokeshave") and key == "variant") or tool == "layout":
 		_load_tool(tools[tool], tool)
 		if tool == current:
 			_show_tool(tool, _opacity)
@@ -1697,6 +1753,8 @@ func _place_blade(velocity: Vector3) -> void:
 		var box: Vector3 = _BODY_BOXES.get(current, Vector3.ZERO)
 		if current == "sanding_block":
 			box = Vector3(variant().get("length", 70.0), variant().get("width", 40.0), 26.0)
+		elif current == "spokeshave" and variant().get("id", "spokeshave") != "spokeshave":
+			box = Vector3(variant().get("sole", 150.0), variant().get("sole_width", 42.0), 30.0) # (a plane)
 		if _blade.size != box * MM:
 			_blade.size = box * MM
 		# Standing on the work: from its face up.
@@ -1850,7 +1908,7 @@ func _draw_outline() -> void:
 					p + a * l - s * 0.003, p + a * l + s * 0.003]
 		"rasp", "scraper", "spokeshave":
 			# Its face or blade across the stroke, as wide as it is.
-			var half: float = {"rasp": 12.5, "scraper": 30.0, "spokeshave": 25.0}[current] * MM
+			var half: float = {"rasp": 12.5, "scraper": 30.0, "spokeshave": variant().get("width", 50.0) * 0.5}[current] * MM
 			segments.append_array([p - s * half, p + s * half, p - s * half, p - s * half + a * 0.006,
 					p + s * half, p + s * half + a * 0.006])
 		"sanding_block":

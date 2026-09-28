@@ -4,6 +4,8 @@
 #include "compile/octree.h"
 #include "demo/gallery.h"
 #include "eval/query.h"
+#include "tools/catalog.h"
+#include "tools/layout.h"
 #include "tools/shaping.h"
 
 #include <cstdio>
@@ -279,4 +281,94 @@ TEST(a_spokeshave_tears_out_uphill) {
 	}
 	std::printf("    tear-out chips in 20 passes: %d uphill, %d downhill\n", uphill, downhill);
 	CHECK(uphill > 0 && downhill == 0);
+}
+
+namespace {
+
+Spokeshave plane(const char *id) {
+	const PlaneVariant *v = find_plane(id);
+	CHECK(v != nullptr);
+	return v != nullptr ? v->plane : Spokeshave{};
+}
+
+} // namespace
+
+// A block plane on the flat top: one even shaving its iron's width (35 mm) along the whole
+// pass, and nothing beyond the iron's sides. Set on 10 mm from the end, it starts at the end.
+TEST(a_block_plane_takes_a_full_width_shaving) {
+	Work_ ash(demo::board(mat::Ash));
+	const CutPlan plan = plan_spokeshave(plane("block_plane"), ash.work(), {-70, 0, kTop}, kUp, {1, 0, 0}, 120.0f, 0.1f, 1);
+	CHECK(plan.open && std::fabs(plan.depth - 0.1f) < 1e-4f && std::fabs(plan.width - 35.0f) < 1e-3f);
+	std::printf("    set on at x = -70, it starts at %.1f, %.0f mm long\n", double(plan.start.x), double(plan.length));
+	CHECK(plan.start.x < -79.0f && std::fabs(plan.length - (120.0f + (-70.0f - plan.start.x))) < 1e-3f);
+	ash.apply(plan.edits());
+	for (float x : {-78.0f, -40.0f, 0.0f, 40.0f}) {
+		for (float y : {-16.0f, 0.0f, 16.0f}) {
+			CHECK_NEAR(ash.height(x, y), kTop - 0.1f, 0.01);
+		}
+		CHECK_NEAR(ash.height(x, 19.0f), kTop, 2e-3);
+		CHECK_NEAR(ash.height(x, -19.0f), kTop, 2e-3);
+	}
+}
+
+// With its chamfer fence the block plane is held across the arris as it was set (at 45
+// degrees), not settled onto a face. Held to the plane between two gauge lines 3 mm in,
+// each pass (end to end, off both ends: its long sole, held flat, rides whatever a pass
+// leaves standing) widens the chamfer evenly along its length until it meets the lines,
+// then takes nothing.
+TEST(a_fenced_block_plane_widens_a_chamfer_evenly_to_its_lines) {
+	Work_ ash(demo::board(mat::Ash));
+	const vec3 n = gl::normalize(vec3{0, 1, 1});
+	Limits limits;
+	limits.floors.push_back(Stop::through({0, 47.0f, kTop}, n));
+	const Spokeshave fenced = plane("block_plane_fence");
+	int passes = 0;
+	float last = 1.0f;
+	for (; passes < 12 && last > 1e-3f; ++passes) {
+		// Set on the corner as it is now, where its middle is.
+		const auto on = raycast(ash.body, ash.octree, vec3{-79.5f, 50.0f, kTop} + n * 5.0f, -n, 10.0f, 1e-4f);
+		CHECK(on.has_value());
+		CutPlan plan = plan_spokeshave(fenced, ash.work(), on->point, n, {1, 0, 0}, 175.0f, 0.5f, 1);
+		CHECK(gl::dot(plan.normal, n) > 0.9999f); // (not settled onto a face)
+		limit_plan(plan, limits);
+		last = plan.depth;
+		ash.apply(plan.edits());
+	}
+	std::printf("    a 3 mm chamfer in %d passes of 0.5 mm\n", passes);
+	CHECK(last < 1e-3f && passes <= 7);
+	for (float x : {-40.0f, 0.0f, 40.0f}) {
+		CHECK_NEAR(ash.height(x, 48.5f), kTop - 1.5f, 0.05); // halfway: on the plane
+		CHECK_NEAR(ash.height(x, 46.5f), kTop, 2e-3);        // past the line: untouched
+	}
+}
+
+// In a rebate, its side against the shoulder: a shoulder plane's iron is flush with its side,
+// so it cuts right into the inside corner; a block plane's sole is wider than its iron, so it
+// leaves a strip by the shoulder as wide as the difference (3.5 mm).
+TEST(a_shoulder_plane_cuts_into_the_inside_corner_and_a_block_plane_does_not) {
+	Body rebated = demo::board(mat::Ash);
+	Edit rebate;
+	rebate.prim = Primitive::box({0, 35.0f, kTop}, {100.0f, 20.0f, 2.0f}); // 2 mm down beyond y = 15
+	rebate.op = Op::Subtract;
+	CHECK(rebated.add(rebate));
+	const float floor = kTop - 2.0f;
+	for (const char *id : {"shoulder_plane", "block_plane"}) {
+		Work_ w(rebated);
+		const Spokeshave p = plane(id);
+		// Its side 0.02 mm off the shoulder, on the rebate's floor.
+		const vec3 at{-60.0f, 15.0f + 0.5f * p.sole_width + 0.02f, floor};
+		const CutPlan plan = plan_spokeshave(p, w.work(), at, kUp, {1, 0, 0}, 120.0f, 0.2f, 1);
+		w.apply(plan.edits());
+		const float corner = floor - w.height(0.0f, 15.3f);
+		const float beyond = floor - w.height(0.0f, at.y);
+		std::printf("    %s: 0.3 mm from the shoulder %.2f mm off, under its middle %.2f\n", id, double(corner),
+				double(beyond));
+		CHECK_NEAR(beyond, 0.2, 0.02);
+		CHECK_NEAR(w.height(0.0f, 14.5f), kTop, 2e-3); // the shoulder itself untouched
+		if (p.sole_width <= p.blade_width) {
+			CHECK_NEAR(corner, 0.2, 0.02);
+		} else {
+			CHECK_NEAR(corner, 0.0, 2e-3);
+		}
+	}
 }

@@ -20,7 +20,8 @@ the world is in metres, the bench top at y = 0 with the vise at its middle.
 - **WASD** or the arrows walk (1.5 m/s), **Shift** hurries (3 m/s), the mouse looks about.
   Esc frees the mouse; a click takes it back.
 - **The hotbar** along the bottom holds the tools: a chisel and a carving gouge (each in
-  several kinds), a back saw, a rasp, a spokeshave, a card scraper, a sanding block, a
+  several kinds), a back saw, a rasp, the planes (a spokeshave, a block plane with or
+  without a chamfer fence, a shoulder plane), a card scraper, a sanding block, a
   sanding sponge, and the layout tools (a marking gauge, a knife and square). Keys **1 to 9**
   (or a click, or the wheel) put one in hand, held in view;
   **0** empties the hands. Every tool is an SDF body, built by the engine in steel, brass,
@@ -103,9 +104,12 @@ under the crosshair says to put a piece in it.
    - **Rasp, card scraper:** back and forth along their line at their working speed,
      cutting on the push (the way you first drag), resting on the high spots and taking the
      surface down only where their face goes; see *Shaping and finishing* below.
-   - **Spokeshave:** pushed along the drag at its working speed, taking its shaving: as
-     deep as two hands push the chip (deeper on a narrow edge) and its mouth passes
-     (0.8 mm), stopped where its toe meets a step it cannot ride.
+   - **Planes** (5; Tab for the kind): pushed along the drag at their working speed,
+     taking a shaving: as deep as the hands push the chip (deeper on a narrow edge) and the
+     mouth passes, stopped where the toe meets a step it cannot ride. The spokeshave's
+     short sole follows curves; a plane's long sole is held flat, and a plane is started
+     at the end of the work when pressed within 20 mm of it. See *Shaping and finishing*
+     below.
    - **Sanding block** (a cork block or a small pad): follows the pointer anywhere at its
      working speed. It rests on the highest points under it and takes them down first,
      only where it has rubbed, at a real rate: about a hundredth of a millimetre per metre
@@ -545,7 +549,7 @@ the board seventy strokes. (docs/PLAN.md, T4.)
 | saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
 | rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
 | card scraper | 0.01 mm of oak from each point its burr is pushed over; nothing on the pull | 200 mm/s | resting on high spots |
-| spokeshave | as deep as two hands (250 N) push the chip's section, up to its mouth (0.8 mm) | 150 mm/s; a fifth at the hands' limit | a step ahead of its toe (*blocked*), a chip too much to push (*stalls*), its mouth |
+| spokeshave, planes | as deep as two hands (250 N; a plane, one: 200 N) push the chip's section, up to its mouth (0.8 mm; a plane's 0.5 mm) | 150 mm/s; a fifth at the hands' limit | a step ahead of its toe (*blocked*), a chip too much to push (*stalls*), its mouth |
 | sanding sponge | a curvature flow of 0.05 / grit mm² per mm (ten passes at 120 grit round an ash arris to 0.5 mm radius) | 300 mm/s | (it only rounds: faces and hollows stay) |
 
 The saw's rate is the hand's weight shared by the teeth in the wood: a chord of 10 mm or
@@ -560,7 +564,7 @@ follows; let go, the stroke ends where it got to. Whatever part of it meets the 
 blade, a face, a card, a sole; not the saw's plate, which slides in its own kerf) pushes
 loose pieces in its way aside.
 
-### Shaping and finishing: rasps, a card scraper, a spokeshave
+### Shaping and finishing: rasps, a card scraper, a spokeshave, planes
 
 `native/src/core/tools/shaping.h`:
 - **Rasps** (a coarse wood rasp, a cabinet rasp flat or round, a fine patternmaker's) take
@@ -594,8 +598,33 @@ loose pieces in its way aside.
     (*blocked*): the stroke ends half a sole short of the step.
   - Against the grain it tears out as a chisel does, at half the rate: its mouth keeps the
     split short.
-- `native/tests/test_shaping.cpp` checks each of these, and `game/tests/tool_planning`
-  makes a spokeshave pass and ten rasp strokes in the workshop.
+- **The planes** (the same slot, Tab for the kind: core `tools/catalog.h`) are the
+  spokeshave with longer soles:
+  - **The block plane:** a 150 mm sole 42 mm wide, a 35 mm iron bedded at 37° (a low
+    bed, bevel up), one hand's 200 N, a fine mouth (0.5 mm). It takes a full-width,
+    full-length shaving. Its long sole is held flat on the work (toe pressure going on,
+    heel pressure going off), so it rests on the highest point under it: it bridges
+    hollows, doesn't dip over a rounded end, and rides anything a shorter pass left
+    standing. So a pass goes end to end: pressed within 20 mm of the near end it starts at
+    the end, and it is dragged off the far end. Its sole's sides keep its iron 3.5 mm off
+    a wall.
+  - **The block plane with a chamfer fence:** the fence rides the two faces of an arris,
+    so the plane is held across it as set, not settled onto a face. Edge lock sets it
+    there, at 45° to the piece's own faces (on a chamfer begun, where the lock finds the
+    chamfer's folds, still at 45°), or, with gauge lines on both faces, on the plane
+    between them. Each pass widens the chamfer evenly along the board; once it meets the
+    lines, a pass takes nothing (3 mm lines: 4.50 mm² of section at every point along the
+    board after 5 passes of 0.5 mm, then nothing).
+  - **The shoulder plane:** 19 mm wide, its iron flush with its sides, a 160 mm sole. Set
+    flush on a rebate's width line (a line marked on the face), it cuts right into the
+    inside corner: a 8 × 1.5 mm rebate in 4 passes, its floor 1.500 mm down from end to
+    end and 0.3 mm from the shoulder, the shoulder square.
+  - Held to a floor gauged from the face it is on (a rebate's depth line), a tool is
+    squared to that face (within 15°): the normal fitted around the pointer tips several
+    degrees near an edge, and would tilt the floor it leaves.
+- `native/tests/test_shaping.cpp` checks each of these, `game/tests/tool_planning` makes a
+  spokeshave pass and ten rasp strokes in the workshop, and `game/tests/planes` the
+  fenced chamfer and the shoulder plane's rebate.
 
 ### Pieces: sawn through, the board comes apart
 

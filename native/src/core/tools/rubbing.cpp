@@ -584,11 +584,13 @@ private:
 } // namespace
 
 Frame settle(const Work &work, const Frame &plane, vec2 half) {
-	// Heights under the face, 9 by 5.
+	// Heights under the face, 9 by 5, a millimetre in from its edges (its edges are eased: set
+	// flush against a wall, it does not stand on the wall's foot).
+	const vec2 in(std::max(half.x - 1.0f, 0.5f * half.x), std::max(half.y - 1.0f, 0.5f * half.y));
 	std::vector<vec3> at;
 	for (int j = 0; j < 5; ++j) {
 		for (int i = 0; i < 9; ++i) {
-			const vec2 p(half.x * (float(i) / 4.0f - 1.0f), half.y * (float(j) / 2.0f - 1.0f));
+			const vec2 p(in.x * (float(i) / 4.0f - 1.0f), in.y * (float(j) / 2.0f - 1.0f));
 			const auto hit = raycast(work.body, work.octree, plane.point({p.x, p.y, 10.0f}), -plane.z, 30.0f, 1e-3f);
 			if (hit) {
 				at.push_back({p.x, p.y, gl::dot(hit->point - plane.origin, plane.z)});

@@ -6,7 +6,7 @@ extends CanvasLayer
 ## GPU frame time).
 
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
-		"spokeshave": "5 Spokeshave", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
+		"spokeshave": "5 Planes", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
 		"layout": "9 Layout"}
 ## What stands in a planned cut's way (SdfBody.plan_stroke's warnings), in words.
 const WARNINGS := {
@@ -101,8 +101,13 @@ func _ready() -> void:
 		workshop.set_setting("rasp", "variant", workshop.variants.rasp[i].id))
 	_slider(rasp, "rasp", "pressure", "Pressure", "%.2f")
 	_slider(rasp, "rasp", "tilt", "Tilt", "%.0f°")
-	var shave := VBoxContainer.new()
+	var shave := VBoxContainer.new() # the Planes slot: a spokeshave, block planes, a shoulder plane
 	left.add_child(shave)
+	var planes: Array = []
+	for v in workshop.variants.get("spokeshave", []):
+		planes.append(v.label)
+	_variants["spokeshave"] = _choice(shave, "Kind", planes, 0, func(i):
+		workshop.set_setting("spokeshave", "variant", workshop.variants.spokeshave[i].id))
 	_slider(shave, "spokeshave", "depth", "Depth", "%.2f mm")
 	var scraper := VBoxContainer.new()
 	left.add_child(scraper)

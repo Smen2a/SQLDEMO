@@ -96,6 +96,7 @@ if [[ "$GPU" == 0 ]]; then
 	check physics_calm "physics calm: pieces and debris land and lie still" res://tests/physics_calm.tscn
 	check layout_lines "layout lines: the lines are laid out" res://tests/layout_lines.tscn
 	check guiding_hand "guiding hand: the hand pivots the tools" res://tests/guiding_hand.tscn
+	check planes "planes: the planes take whole sections to the lines" res://tests/planes.tscn
 	exit $status
 fi
 

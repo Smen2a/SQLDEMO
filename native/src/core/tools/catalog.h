@@ -19,7 +19,7 @@
 // Sweep radii follow the Sheffield list at 12 mm: #3 about 1.8 widths, #7 about 0.6, #11
 // half the width (a U).
 // And rasps, coarse to fine: a wood rasp, a cabinet rasp (flat or half-round face) and a
-// patternmaker's rasp; a sanding block and a small sanding pad.
+// patternmaker's rasp; a sanding block and a small sanding pad; the spokeshave and planes.
 namespace sdf::tools {
 
 struct ChiselVariant {
@@ -51,5 +51,17 @@ struct SandingVariant {
 
 const std::vector<SandingVariant> &sanding_catalog();
 const SandingVariant *find_sanding(const std::string &id);
+
+// The spokeshave and the planes (shaping.h): a spokeshave; a block plane (a 150 mm sole
+// 42 mm wide, a 35 mm iron bedded at 37 degrees, bevel up); the block plane with a chamfer
+// fence; a shoulder plane (19 mm, its iron flush with its sides).
+struct PlaneVariant {
+	std::string id;    // e.g. "block_plane"
+	std::string label; // e.g. "Block plane"
+	Spokeshave plane;
+};
+
+const std::vector<PlaneVariant> &plane_catalog();
+const PlaneVariant *find_plane(const std::string &id);
 
 } // namespace sdf::tools

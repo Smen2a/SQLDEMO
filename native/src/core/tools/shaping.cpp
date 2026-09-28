@@ -166,22 +166,71 @@ std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &w
 // --- spokeshave ------------------------------------------------------------------------
 
 Body Spokeshave::model() const {
-	// Its sole on the work (z = 0) around the blade's edge at the origin; the body across the
-	// stroke (y), a handle out to each side.
-	Body b;
-	b.base = Primitive::box({0.0f, 0.0f, 6.0f}, {0.5f * sole, 0.5f * blade_width + 6.0f, 6.0f}, 2.0f);
-	b.base_material = mat::Steel;
-	// The blade through its mouth, bedded at its angle.
 	const float bed = bed_deg * kDeg;
-	const vec4 bedded = quat_axis_angle({0, 1, 0}, -bed);
-	b.add(join(Primitive::box({4.0f, 0.0f, 14.0f}, {1.5f, 0.5f * blade_width, 16.0f}, 0.0f, bedded), mat::Steel));
-	for (const float side : {-1.0f, 1.0f}) {
-		const vec4 turned = quat_axis_angle({1, 0, 0}, side * 20.0f * kDeg);
-		b.add(join(Primitive::cylinder({0.0f, side * (0.5f * blade_width + 45.0f), 16.0f}, 11.0f, 40.0f, 5.0f, turned),
-				mat::Walnut, Blend::Round, 3.0f));
+	Body b;
+	if (kind == Kind::Spokeshave) {
+		// Its sole on the work (z = 0) around the blade's edge at the origin; the body across
+		// the stroke (y), a handle out to each side.
+		b.base = Primitive::box({0.0f, 0.0f, 6.0f}, {0.5f * sole, 0.5f * blade_width + 6.0f, 6.0f}, 2.0f);
+		b.base_material = mat::Steel;
+		// The blade through its mouth, bedded at its angle.
+		const vec4 bedded = quat_axis_angle({0, 1, 0}, -bed);
+		b.add(join(Primitive::box({4.0f, 0.0f, 14.0f}, {1.5f, 0.5f * blade_width, 16.0f}, 0.0f, bedded), mat::Steel));
+		for (const float side : {-1.0f, 1.0f}) {
+			const vec4 turned = quat_axis_angle({1, 0, 0}, side * 20.0f * kDeg);
+			b.add(join(Primitive::cylinder({0.0f, side * (0.5f * blade_width + 45.0f), 16.0f}, 11.0f, 40.0f, 5.0f, turned),
+					mat::Walnut, Blend::Round, 3.0f));
+		}
+		b.grain_origin = {0.0f, 0.0f, 40.0f};
+		b.grain_axis = {0, 1, 0};
+		return b;
 	}
-	b.grain_origin = {0.0f, 0.0f, 40.0f};
-	b.grain_axis = {0, 1, 0};
+	// A plane: its sole on the work (z = 0), the edge at the origin in its mouth, the iron
+	// bedded low behind it (bevel up), rising towards the heel.
+	const vec3 up_back{-std::cos(bed), 0.0f, std::sin(bed)};
+	const vec4 bedded = quat_axis_angle({0, 1, 0}, bed);
+	auto iron = [&](float length, float width) {
+		return Primitive::box(up_back * (0.5f * length), {0.5f * length, 0.5f * width, 1.5f}, 0.0f, bedded);
+	};
+	if (kind == Kind::BlockPlane) {
+		// A cast body: the sole and two cheeks, low at the ends; the iron under a brass
+		// lever cap; a finger rest at the toe.
+		b.base = Primitive::box({0.0f, 0.0f, 3.0f}, {0.5f * sole, 0.5f * sole_width, 3.0f}, 1.0f);
+		b.base_material = mat::Steel;
+		for (const float side : {-1.0f, 1.0f}) {
+			b.add(join(Primitive::box({-4.0f, side * (0.5f * sole_width - 2.0f), 14.0f}, {0.5f * sole - 16.0f, 2.0f, 11.0f},
+					2.0f), mat::Steel, Blend::Round, 2.0f));
+		}
+		b.add(join(iron(62.0f, blade_width), mat::Steel));
+		b.add(join(Primitive::box(up_back * 34.0f + vec3(0.0f, 0.0f, 3.0f), {22.0f, 0.5f * blade_width - 1.0f, 3.0f}, 1.5f,
+				bedded), mat::Brass));
+		b.add(join(Primitive::sphere({0.5f * sole - 16.0f, 0.0f, 22.0f}, 9.0f), mat::Brass, Blend::Round, 3.0f));
+		if (fence) {
+			// A chamfer fence under each side of the sole: a plate lying on each face of the
+			// arris (at 45 degrees to the sole), on a bracket down from the sole's side.
+			for (const float side : {-1.0f, 1.0f}) {
+				const vec4 laid = quat_axis_angle({1, 0, 0}, -side * 45.0f * kDeg);
+				b.add(join(Primitive::box({0.0f, side * 20.0f, -19.0f}, {0.5f * sole - 20.0f, 8.0f, 1.0f}, 0.5f, laid),
+						mat::Brass));
+				b.add(join(Primitive::box({0.0f, side * (0.5f * sole_width + 1.5f), -7.0f}, {20.0f, 1.5f, 9.0f}, 0.5f),
+						mat::Brass));
+			}
+		}
+		b.grain_origin = {0.0f, 0.0f, 20.0f};
+		b.grain_axis = {1, 0, 0};
+		return b;
+	}
+	// A shoulder plane: a narrow steel body as wide as its iron, which runs flush with its
+	// sides; a walnut infill behind the iron and a wedge over it.
+	b.base = Primitive::box({0.0f, 0.0f, 16.0f}, {0.5f * sole, 0.5f * sole_width, 16.0f}, 1.0f);
+	b.base_material = mat::Steel;
+	b.add(join(iron(70.0f, blade_width), mat::Steel));
+	b.add(join(Primitive::box({-0.25f * sole - 8.0f, 0.0f, 36.0f}, {0.25f * sole - 12.0f, 0.5f * sole_width - 1.0f, 6.0f},
+			3.0f), mat::Walnut, Blend::Round, 2.0f));
+	b.add(join(Primitive::box(up_back * 40.0f + vec3(4.0f, 0.0f, 4.0f), {16.0f, 0.5f * sole_width - 1.5f, 4.0f}, 1.0f,
+			bedded), mat::Walnut));
+	b.grain_origin = {0.0f, 0.0f, 36.0f};
+	b.grain_axis = {1, 0, 0};
 	return b;
 }
 
@@ -196,13 +245,41 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	CutPlan p;
 	p.chisel = blade;
 	p.width = blade.width;
-	// Held flat on the work: its sole settles on the face under it.
-	const Frame frame = settle(work, Frame::at(start, normal, path), {0.5f * shave.sole, 0.5f * shave.blade_width});
+	// Held flat on the work: its sole settles on the face under it. With a fence, the fence
+	// holds it as it was set (across an arris).
+	const Frame set = Frame::at(start, normal, path);
+	const Frame frame = shave.fence ? set : settle(work, set, {0.5f * shave.sole, 0.5f * shave.sole_width});
+	const vec3 n = frame.z, t = frame.x, b = frame.y;
+	// The sole across (its blade, and beyond it where the sole is wider).
+	std::vector<float> across_sole{-0.5f * blade.width + 1.0f, 0.0f, 0.5f * blade.width - 1.0f};
+	if (shave.sole_width > blade.width + 2.0f) {
+		across_sole.push_back(-0.5f * shave.sole_width + 1.0f);
+		across_sole.push_back(0.5f * shave.sole_width - 1.0f);
+	}
+	auto on_work = [&](vec3 at) {
+		for (const float across : across_sole) {
+			if (raycast(work.body, work.octree, at + b * across + n * 40.0f, -n, 100.0f, 1e-3f)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	// A plane (its sole long) is started with its iron over the near end of the work: set on
+	// within kPlaneStart of that end, its pass begins there. (Begun further in, its sole
+	// would ride the wood an earlier pass left standing at the end, and take less and less.)
+	if (shave.kind != Spokeshave::Kind::Spokeshave) {
+		for (float back = 0.5f; back <= kPlaneStart; back += 0.5f) {
+			if (!on_work(start - t * back)) {
+				start -= t * (back - 0.5f);
+				length += back - 0.5f;
+				break;
+			}
+		}
+	}
 	p.start = start;
 	p.normal = frame.z;
 	p.path = frame.x;
 	p.open = true; // the sole sets the blade's depth: it cuts from its first millimetre
-	const vec3 n = frame.z, t = frame.x, b = frame.y;
 	const Wood wood = work.wood(start - n * 0.5f);
 	p.split = wood.split;
 	const vec3 f = work.fibre();
@@ -225,11 +302,11 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	}
 
 	// The surface's height above the plane it was set on along the path (NaN off the work):
-	// the highest across its blade, which its sole spans.
+	// the highest across its sole.
 	const float nan = std::numeric_limits<float>::quiet_NaN();
 	auto height_at = [&](float s) {
 		float top = nan;
-		for (const float across : {-0.5f * blade.width + 1.0f, 0.0f, 0.5f * blade.width - 1.0f}) {
+		for (const float across : across_sole) {
 			const auto hit = raycast(work.body, work.octree, start + t * s + b * across + n * 40.0f, -n, 100.0f, 1e-3f);
 			if (hit) {
 				const float h = gl::dot(hit->point - start, n);
@@ -247,10 +324,19 @@ CutPlan plan_spokeshave(const Spokeshave &shave, const Work &work, vec3 start, v
 	auto h = [&](int i) { return heights[std::size_t(std::clamp(i, from, to) - from)]; };
 	// Where the sole rests: the lowest line lying on the surface under it, at its middle
 	// (the upper hull of the heights under the sole): the surface itself where it is convex,
-	// bridging hollows shorter than the sole.
+	// bridging hollows shorter than the sole. A plane's long sole is held flat on the work
+	// (toe pressure going on, heel pressure going off), riding the highest under it: it does
+	// not dip over a rounded end, or follow a curve.
+	const bool flat = shave.kind != Spokeshave::Kind::Spokeshave;
 	auto rest_at = [&](int s) {
 		float best = -std::numeric_limits<float>::infinity();
 		const int lo = std::max(from, s - int(half)), hi = std::min(to, s + int(half));
+		if (flat) {
+			for (int i = lo; i <= hi; ++i) {
+				best = std::isnan(h(i)) ? best : std::max(best, h(i));
+			}
+			return best;
+		}
 		for (int i = lo; i <= s; ++i) {
 			if (std::isnan(h(i))) {
 				continue;
