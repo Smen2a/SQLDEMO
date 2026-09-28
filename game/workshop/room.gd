@@ -43,7 +43,7 @@ const STOCK := {
 			"shelf": 0, "at": -0.22, "count": 5},
 	"head_oak": {"wood": "oak", "size": Vector3(120, 70, 55), "kind": "mallet-head blank", "label": "oak heads",
 			"shelf": 0, "at": 0.1, "count": 3},
-	"strip_oak": {"wood": "oak", "size": Vector3(150, 30, 10), "kind": "strip", "label": "oak strips",
+	"strip_oak": {"wood": "oak", "size": Vector3(150, 12, 5), "kind": "strip", "label": "oak strips",
 			"shelf": 0, "at": 0.33, "count": 5},
 }
 ## The woods' colours on the rack (core materials: between their early- and latewood).
@@ -52,6 +52,7 @@ const WOOD_COLOUR := {"ash": Color(0.78, 0.67, 0.5), "oak": Color(0.68, 0.53, 0.
 
 var bench: StaticBody3D
 var table: StaticBody3D
+var book: StaticBody3D # the plan book on the side table (meta "plans": E opens it)
 var stacks := {} # stock kind -> its stack's static body (meta "stock": the kind; "top": where the next piece lies)
 var jaws: Array[MeshInstance3D] = []
 
@@ -184,10 +185,25 @@ func _bench() -> void:
 	add_child(screw)
 
 
-## A side table, to set pieces down on.
+## A side table, to set pieces down on, the plan book lying on it.
 func _table() -> void:
 	table = _box(TABLE_TOP, TABLE_AT, _oak, true)
 	table.set_meta("ground", true)
+	# The plan book: a red cloth cover over its pages, lying at the table's far left corner.
+	var top := TABLE_AT.y + 0.5 * TABLE_TOP.y
+	var at := Vector3(TABLE_AT.x - 0.12, top + 0.0125, TABLE_AT.z - 0.12)
+	book = _box(Vector3(0.16, 0.025, 0.22), at, _material(Color(0.42, 0.12, 0.1), 0.7), true)
+	book.set_meta("plans", true)
+	_box(Vector3(0.152, 0.021, 0.214), at + Vector3(0.006, 0.0, 0.0), _material(Color(0.93, 0.9, 0.82), 0.9), false)
+	var title := Label3D.new()
+	title.text = "Plans"
+	title.pixel_size = 0.0008
+	title.font_size = 48
+	title.modulate = Color(0.95, 0.85, 0.6)
+	title.outline_size = 0
+	title.position = at + Vector3(0.0, 0.0126, 0.0)
+	title.rotation = Vector3(-PI / 2, 0.0, 0.0)
+	add_child(title)
 	var leg_height := TABLE_AT.y - 0.5 * TABLE_TOP.y - FLOOR
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:

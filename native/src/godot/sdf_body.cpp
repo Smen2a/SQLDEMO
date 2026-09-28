@@ -8,6 +8,7 @@
 #include "demo/gallery.h"
 #include "eval/query.h"
 #include "pieces/hull.h"
+#include "plans/part.h"
 
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -117,6 +118,84 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 
 vec3 to_vec(const Vector3 &v) {
 	return vec3(float(v.x), float(v.y), float(v.z));
+}
+
+// A plan's part (game/plans/*.json, as parsed): its size and features (plans/part.h).
+vec3 triple_of(const Variant &v) {
+	if (v.get_type() == Variant::VECTOR3) {
+		return to_vec(v);
+	}
+	const Array a = v;
+	return a.size() >= 3 ? vec3(float(double(a[0])), float(double(a[1])), float(double(a[2]))) : vec3(0.0f);
+}
+
+vec2 pair_of(const Variant &v) {
+	if (v.get_type() == Variant::VECTOR2) {
+		const Vector2 w = v;
+		return vec2(float(w.x), float(w.y));
+	}
+	const Array a = v;
+	return a.size() >= 2 ? vec2(float(double(a[0])), float(double(a[1]))) : vec2(0.0f);
+}
+
+plans::Face face_named(const String &name) {
+	if (name == "back") {
+		return plans::Face::Back;
+	}
+	if (name == "edge" || name == "other_edge") {
+		return name == "edge" ? plans::Face::Edge : plans::Face::OtherEdge;
+	}
+	if (name == "end" || name == "far_end") {
+		return name == "end" ? plans::Face::End : plans::Face::FarEnd;
+	}
+	return plans::Face::Side;
+}
+
+plans::Part part_of(const Dictionary &d) {
+	plans::Part p;
+	p.id = String(d.get("id", "")).utf8().get_data();
+	p.name = String(d.get("name", "")).utf8().get_data();
+	p.size = triple_of(d.get("size", Array()));
+	const Array features = d.get("features", Array());
+	for (int i = 0; i < features.size(); ++i) {
+		const Dictionary f = features[i];
+		plans::Feature g;
+		const String kind = f.get("kind", "hole");
+		using Kind = plans::Feature::Kind;
+		g.kind = Kind::Hole;
+		for (const auto &[named, k] : {std::pair{"tenon", Kind::Tenon}, std::pair{"kerf", Kind::Kerf},
+					 std::pair{"rebate", Kind::Rebate}, std::pair{"chamfer", Kind::Chamfer}, std::pair{"taper", Kind::Taper}}) {
+			if (kind == named) {
+				g.kind = k;
+			}
+		}
+		g.name = String(f.get("name", kind)).utf8().get_data();
+		g.face = face_named(f.get("face", "side"));
+		g.other = face_named(f.get("other", "edge"));
+		if (f.has("along")) {
+			g.along = pair_of(f["along"]);
+		}
+		if (f.has("across")) {
+			g.across = pair_of(f["across"]);
+		}
+		if (f.has("y")) {
+			g.y = pair_of(f["y"]);
+		}
+		if (f.has("z")) {
+			g.z = pair_of(f["z"]);
+		}
+		g.depth = float(double(f.get("depth", 0.0)));
+		g.through = bool(f.get("through", false));
+		g.width = float(double(f.get("width", kind == "kerf" ? 0.8 : 0.0)));
+		g.far = String(f.get("end", "end")) == "far_end" || bool(f.get("far", false));
+		g.length = float(double(f.get("length", 0.0)));
+		g.axis = String(f.get("axis", "y")) == "z" ? 2 : 1;
+		g.at = float(double(f.get("at", 0.0)));
+		g.from = float(double(f.get("from", 0.0)));
+		g.to = float(double(f.get("to", 0.0)));
+		p.features.push_back(g);
+	}
+	return p;
 }
 
 } // namespace
@@ -283,6 +362,83 @@ bool SdfBody::load_stock(const String &wood, const Vector3 &size) {
 	return true;
 }
 
+Dictionary SdfBody::part_lines(const Dictionary &part, const Vector3 &stock) {
+	const plans::PartLines laid = plans::part_lines(part_of(part), to_vec(stock));
+	Array lines;
+	for (const plans::PlanLine &l : laid.lines) {
+		Dictionary d;
+		d["as"] = l.as == plans::PlanLine::As::Knife ? "knife" : l.as == plans::PlanLine::As::Gauge ? "gauge" : "guide";
+		d["face"] = to_godot(l.face);
+		d["origin"] = to_godot(l.origin);
+		d["dir"] = to_godot(l.dir);
+		d["length"] = double(l.length);
+		d["toward"] = to_godot(l.toward);
+		d["distance"] = double(l.distance);
+		d["feature"] = String(l.feature.c_str());
+		lines.push_back(d);
+	}
+	Dictionary out;
+	out["lines"] = lines;
+	out["later"] = laid.later;
+	return out;
+}
+
+bool SdfBody::load_part(const Dictionary &part, const String &wood) {
+	std::uint16_t material = 0;
+	const plans::Part p = part_of(part);
+	if (!demo::wood_named(wood.utf8().get_data(), material) || p.size.x <= 0.0f || p.size.y <= 0.0f ||
+			p.size.z <= 0.0f) {
+		UtilityFunctions::push_error("SdfBody.load_part: no part of ", wood, " ", part);
+		return false;
+	}
+	const float scale = std::max(p.size.x, std::max(p.size.y, p.size.z)) / 160.0f;
+	Camera camera;
+	camera.target = p.size * 0.5f;
+	camera.eye = camera.target + vec3(60, -170, 140) * scale;
+	camera.fov_deg = 38;
+	load_body(plans::part_solid(p, material), camera);
+	return true;
+}
+
+bool SdfBody::scribe_lines(const Array &lines, double depth) {
+	if (stroke_ || !session_.has_adf()) {
+		UtilityFunctions::push_error("SdfBody.scribe_lines: needs an ADF body with no tool engaged");
+		return false;
+	}
+	std::vector<Edit> edits;
+	for (int i = 0; i < lines.size(); ++i) {
+		const Dictionary l = lines[i];
+		const vec3 origin = to_vec(l.get("origin", Vector3())), dir = to_vec(l.get("dir", Vector3(1, 0, 0)));
+		const vec3 a = origin + dir * float(double(l.get("from", 0.0)));
+		const vec3 b = origin + dir * float(double(l.get("to", l.get("length", 0.0))));
+		const float length = gl::length(b - a);
+		if (length < 1.0f) {
+			continue;
+		}
+		// As layout.gd scribes one: the knife's V drawn along it 5 mm at a time.
+		auto stroke = tools::chisel_stroke(tools::scribe_edge(), a, gl::normalize(to_vec(l.get("face", Vector3(0, 0, 1)))),
+				(b - a) / length, float(depth));
+		const int steps = std::max(2, int(std::ceil(length / 5.0f)));
+		for (int k = 1; k <= steps; ++k) {
+			stroke->move_to(a + (b - a) * (float(k) / float(steps)));
+		}
+		for (const Edit &e : stroke->edits()) {
+			edits.push_back(e);
+		}
+		for (const Edit &e : stroke->finish()) {
+			edits.push_back(e);
+		}
+	}
+	if (edits.empty()) {
+		return false;
+	}
+	std::vector<Command> commands;
+	commands.push_back({Command::STROKE, 0, std::move(edits)});
+	commands.push_back({Command::COMMIT, 0, {}});
+	queue_all(std::move(commands));
+	return true;
+}
+
 void SdfBody::load_body(const Body &body, const Camera &camera) {
 	flush();
 	stroke_.reset();
@@ -401,6 +557,10 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 		model = gauge.model();
 	} else if (name == "marking_knife") {
 		model = tools::MarkingKnife{}.model();
+	} else if (name == "pencil") {
+		model = tools::Pencil{}.model();
+	} else if (name == "sheet") {
+		model = tools::Sheet{}.model();
 	} else {
 		UtilityFunctions::push_error("SdfBody: unknown tool ", name);
 		return false;
@@ -2140,6 +2300,9 @@ AABB SdfBody::get_body_bounds() const {
 void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("load_demo", "name"), &SdfBody::load_demo);
 	ClassDB::bind_method(D_METHOD("load_stock", "wood", "size"), &SdfBody::load_stock);
+	ClassDB::bind_static_method("SdfBody", D_METHOD("part_lines", "part", "stock"), &SdfBody::part_lines);
+	ClassDB::bind_method(D_METHOD("load_part", "part", "wood"), &SdfBody::load_part);
+	ClassDB::bind_method(D_METHOD("scribe_lines", "lines", "depth"), &SdfBody::scribe_lines);
 	ClassDB::bind_method(D_METHOD("load_tool", "name", "settings"), &SdfBody::load_tool, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);

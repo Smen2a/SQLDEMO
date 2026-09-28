@@ -8,10 +8,17 @@ extends Node3D
 ##                   wheel sets it, Ctrl finely).
 ##   marking knife   drawn along a square whose stock rides the nearest edge: a line across
 ##                   the face, square to that edge, through the pointer.
+##   pencil          a line in pencil: a click draws one across the face, square to the
+##                   nearest edge; a drag, along the edge or across it as the drag goes.
+##   plan sheet      a part of a plan (plans.gd), laid on the piece: its face side on the
+##                   face pointed at, from the nearer end and edge; a click draws it on in
+##                   pencil, and the piece becomes that part.
 ## Hovered, the line shows where it would go. A click scribes it the whole way across the face,
 ## a drag as far as the drag goes. Either way it is a real cut (a knife's V, 0.3 mm deep: core
 ## tools/layout.h), one undo step, and a mark on the piece: body space (millimetres), so it
 ## moves with the piece. Marks are drawn while a tool is in hand at the bench.
+## Pencil only guides: nothing holds to it. The knife or gauge by a pencil line (within SNAP)
+## takes that line, knifed or gauged in as the plan (or the pencil) meant it ("as").
 
 const MM := 0.001
 const LINE_COLOUR := Color(1.0, 0.35, 0.15)
@@ -21,11 +28,17 @@ const LIFT := 0.05 # mm the lines are drawn off the face (the scribe is below it
 const DRAG := 2.0 # mm a drag goes before it scribes only as far as it goes
 const SCRIBE_DEPTH := 0.3 # mm (core tools/layout.h kScribeDepth)
 const SCRIBE_STEP := 5.0 # mm the scribe is drawn along at a time
+const PENCIL_COLOUR := Color(0.3, 0.3, 0.34)
+const SHEET_COLOUR := Color(0.2, 0.45, 1.0) # a plan's sheet laid on the piece, before a click draws it on
+const UNFIT_COLOUR := Color(1.0, 0.25, 0.2) # a sheet laid on a piece too small for it
+const SNAP := 1.5 # mm: the knife or gauge this near a pencil line takes it
 
 var workshop
 ## The line under the pointer (body space, see line_at()), or {}.
 var preview := {}
-var _press := {}  # while the button is down: {"line", "from", "to" (mm along it), "dragged"}
+## The plan sheet laid on the piece under the pointer (plans.gd placement_at()), or {}.
+var placed := {}
+var _press := {}  # while the button is down: {"line", "from", "to" (mm along it), "dragged"}; the sheet's: {"plan"}
 var _mesh: MeshInstance3D
 
 
@@ -58,6 +71,41 @@ func distance() -> float:
 ##   "distance", "edge"          the gauge's setting, and where that edge is along `toward`.
 ## Or {} (off the piece, or the gauge set wider than the face).
 func line_at(point: Vector3, normal: Vector3) -> Dictionary:
+	var at := _face_at(point, normal)
+	if at.is_empty():
+		return {}
+	var lo: Vector3 = at.lo
+	var hi: Vector3 = at.hi
+	var p: Vector3 = at.p
+	var a: int = at.a
+	var e: int = at.e
+	var origin := Vector3.ZERO
+	origin[at.i] = at.face_at
+	var dir := Vector3.ZERO
+	if kind() == "gauge":
+		var at_line: float = at.edge - at.side * distance()
+		if at_line <= lo[a] or at_line >= hi[a]:
+			return {}
+		origin[a] = at_line
+		origin[e] = lo[e]
+		dir[e] = 1.0
+		return {"kind": "gauge", "face": at.face, "origin": origin, "dir": dir, "length": hi[e] - lo[e],
+				"toward": at.toward, "distance": distance(), "edge": at.edge}
+	# The knife, along the square: across the face, square to that edge, through the point.
+	origin[e] = clampf(p[e], lo[e], hi[e])
+	origin[a] = lo[a]
+	dir[a] = 1.0
+	var across := Vector3.ZERO
+	across[e] = 1.0
+	return {"kind": "knife", "face": at.face, "origin": origin, "dir": dir, "length": hi[a] - lo[a], "toward": across}
+
+
+## Where a point (world, with the surface's normal) lies on the piece in the vise's bounds
+## faces: {"lo", "hi" (the bounds, body space), "p" (the point), "i" (the face's axis), "face"
+## (its outward normal), "face_at", "a" (the axis across to the nearest of its four edges),
+## "side" (-1 or 1, which way), "edge" (where that edge is along a), "toward" (towards it),
+## "e" (the axis along it)}; {} with no piece.
+func _face_at(point: Vector3, normal: Vector3) -> Dictionary:
 	var sdf = workshop.board
 	if sdf == null:
 		return {}
@@ -72,7 +120,6 @@ func line_at(point: Vector3, normal: Vector3) -> Dictionary:
 			i = axis
 	var face := Vector3.ZERO
 	face[i] = signf(n[i])
-	var face_at: float = hi[i] if n[i] > 0.0 else lo[i]
 	# The nearest of the face's four edges: across (a) from the point, running along (e).
 	var j := (i + 1) % 3
 	var k := (i + 2) % 3
@@ -84,52 +131,144 @@ func line_at(point: Vector3, normal: Vector3) -> Dictionary:
 			best = c[0]
 			a = c[1]
 			side = c[2]
-	var e := k if a == j else j
 	var toward := Vector3.ZERO
 	toward[a] = side
-	var edge: float = hi[a] if side > 0.0 else lo[a]
+	return {"lo": lo, "hi": hi, "p": p, "i": i, "face": face, "face_at": hi[i] if n[i] > 0.0 else lo[i], "a": a,
+			"side": side, "edge": hi[a] if side > 0.0 else lo[a], "toward": toward, "e": k if a == j else j}
+
+
+## The pencil at a point: a line across the face, square to the nearest edge, through the
+## point (a click draws it the whole way across; a drag, see _drawn()).
+func _pencil_at(point: Vector3, normal: Vector3) -> Dictionary:
+	var at := _face_at(point, normal)
+	if at.is_empty():
+		return {}
+	var lo: Vector3 = at.lo
+	var hi: Vector3 = at.hi
+	var a: int = at.a
+	var e: int = at.e
 	var origin := Vector3.ZERO
-	origin[i] = face_at
-	var dir := Vector3.ZERO
-	if kind() == "gauge":
-		var at: float = edge - side * distance()
-		if at <= lo[a] or at >= hi[a]:
-			return {}
-		origin[a] = at
-		origin[e] = lo[e]
-		dir[e] = 1.0
-		return {"kind": "gauge", "face": face, "origin": origin, "dir": dir, "length": hi[e] - lo[e], "toward": toward,
-				"distance": distance(), "edge": edge}
-	# The knife, along the square: across the face, square to that edge, through the point.
-	origin[e] = clampf(p[e], lo[e], hi[e])
+	origin[at.i] = at.face_at
+	origin[e] = clampf(at.p[e], lo[e], hi[e])
 	origin[a] = lo[a]
+	var dir := Vector3.ZERO
 	dir[a] = 1.0
 	var across := Vector3.ZERO
 	across[e] = 1.0
-	return {"kind": "knife", "face": face, "origin": origin, "dir": dir, "length": hi[a] - lo[a], "toward": across}
+	return {"kind": "pencil", "as": "knife", "face": at.face, "origin": origin, "dir": dir, "length": hi[a] - lo[a],
+			"toward": across, "from": 0.0, "to": hi[a] - lo[a], "at": at}
 
 
-## The pointer over the work: where the line would go.
+## The pencil drawn from `start` to `now` (body space, on the face): along the nearest edge
+## (parallel to it: a line gauged from it) or across it, whichever way the drag went further.
+func _drawn(line: Dictionary, start: Vector3, now: Vector3) -> Dictionary:
+	var at: Dictionary = line.at
+	var lo: Vector3 = at.lo
+	var hi: Vector3 = at.hi
+	var a: int = at.a
+	var e: int = at.e
+	var origin := Vector3.ZERO
+	origin[at.i] = at.face_at
+	var dir := Vector3.ZERO
+	var drawn := {"kind": "pencil", "face": at.face, "at": at}
+	if absf(now[e] - start[e]) >= absf(now[a] - start[a]):
+		origin[a] = clampf(start[a], lo[a], hi[a])
+		origin[e] = lo[e]
+		dir[e] = 1.0
+		drawn.merge({"as": "gauge", "toward": at.toward, "distance": absf(origin[a] - at.edge), "edge": at.edge,
+				"length": hi[e] - lo[e], "from": clampf(minf(start[e], now[e]), lo[e], hi[e]) - lo[e],
+				"to": clampf(maxf(start[e], now[e]), lo[e], hi[e]) - lo[e]})
+	else:
+		origin[e] = clampf(start[e], lo[e], hi[e])
+		origin[a] = lo[a]
+		dir[a] = 1.0
+		var across := Vector3.ZERO
+		across[e] = 1.0
+		drawn.merge({"as": "knife", "toward": across, "length": hi[a] - lo[a],
+				"from": clampf(minf(start[a], now[a]), lo[a], hi[a]) - lo[a],
+				"to": clampf(maxf(start[a], now[a]), lo[a], hi[a]) - lo[a]})
+	drawn.origin = origin
+	drawn.dir = dir
+	return drawn
+
+
+## The knife or gauge by a pencil line on the face it is on (within SNAP mm of the point,
+## body space): that line, to be knifed or gauged in as it was meant to be; else `line`.
+func _snap(line: Dictionary, p: Vector3, face: Vector3) -> Dictionary:
+	var piece: RigidBody3D = workshop.clamped
+	if piece == null:
+		return line
+	var best := SNAP
+	var found := {}
+	for mark in marks_of(piece):
+		if mark.kind != "pencil" or mark.as == "guide" or mark.face.dot(face) < 0.9:
+			continue
+		var s := clampf((p - mark.origin).dot(mark.dir), mark.from, mark.to)
+		var d := p.distance_to(mark.origin + mark.dir * s)
+		if d < best:
+			best = d
+			found = mark
+	if found.is_empty():
+		return line
+	var snapped := found.duplicate()
+	snapped.kind = found.as
+	snapped.snapped = true
+	snapped.erase("serial")
+	snapped.erase("step")
+	return snapped
+
+
+## The pointer over the work: where the line would go (the sheet: where the part would).
 func hover(position: Vector2) -> void:
 	if not _press.is_empty():
 		return
 	var hit: Dictionary = workshop._surface_at(position)
-	preview = {} if hit.is_empty() or hit.get("stale", false) else line_at(hit.position, hit.get("own_normal", hit.normal))
+	preview = {}
+	placed = {}
+	if hit.is_empty() or hit.get("stale", false):
+		return
+	var normal: Vector3 = hit.get("own_normal", hit.normal)
+	match kind():
+		"plan":
+			placed = workshop.plans.placement_at(hit.position, normal)
+		"pencil":
+			preview = _pencil_at(hit.position, normal)
+		_:
+			var at := _face_at(hit.position, normal)
+			if not at.is_empty():
+				preview = _snap(line_at(hit.position, normal), at.p, at.face)
 
 
-## Button down: the scribe starts from the pointer's place along the line.
+## Button down: the scribe starts from the pointer's place along the line (the sheet is laid
+## on when it comes up).
 func press(position: Vector2) -> void:
 	hover(position)
+	if kind() == "plan":
+		if not placed.is_empty():
+			_press = {"plan": placed}
+		return
 	if preview.is_empty():
 		return
 	var s := _along(preview, position)
-	_press = {"line": preview, "from": s, "to": s, "dragged": false}
+	_press = {"line": preview, "from": s, "to": s, "dragged": false, "start": _on_face(preview, position)}
 
 
-## A drag: the scribe goes as far as the pointer, along the line.
+## A drag: the scribe goes as far as the pointer, along the line (the pencil: along the edge
+## or across it, as the drag goes).
 func drag(position: Vector2) -> void:
 	if _press.is_empty():
 		hover(position)
+		return
+	if _press.has("plan"):
+		return
+	if _press.line.kind == "pencil":
+		var now := _on_face(_press.line, position)
+		if now.distance_to(_press.start) >= DRAG:
+			_press.dragged = true
+		if _press.dragged:
+			_press.line = _drawn(_press.line, _press.start, now)
+			_press.from = _press.line.from
+			_press.to = _press.line.to
 		return
 	var s := _along(_press.line, position)
 	_press.to = s
@@ -137,14 +276,29 @@ func drag(position: Vector2) -> void:
 		_press.dragged = true
 
 
-## Button up: the line is scribed (as far as it was dragged, or the whole way).
+## Button up: the line is scribed (as far as it was dragged, or the whole way: a pencil line
+## taken, its own length), or drawn in pencil; the sheet is laid on.
 func release() -> void:
 	if _press.is_empty():
 		return
+	if _press.has("plan"):
+		var sheet: Dictionary = _press.plan
+		_press = {}
+		if workshop.plans.transfer(sheet):
+			placed = {} # (drawn on: seen in pencil now, until the pointer moves)
+		return
 	var line: Dictionary = _press.line
-	var from: float = _press.from if _press.dragged else 0.0
-	var to: float = _press.to if _press.dragged else line.length
+	var from: float = _press.from if _press.dragged else line.get("from", 0.0)
+	var to: float = _press.to if _press.dragged else line.get("to", line.length)
 	_press = {}
+	if line.kind == "pencil":
+		var mark := line.duplicate()
+		mark.erase("at")
+		mark.from = minf(from, to)
+		mark.to = maxf(from, to)
+		if mark.to - mark.from >= DRAG:
+			workshop.plans.pencil(mark)
+		return
 	scribe(line, from, to)
 
 
@@ -169,6 +323,7 @@ func scribe(line: Dictionary, from: float, to: float) -> void:
 	mark.from = minf(from, to)
 	mark.to = maxf(from, to)
 	mark.step = step
+	mark.erase("snapped")
 	marks_of(piece).append(mark)
 	piece.set_meta("marks_undone", [])
 	workshop._ui.refresh()
@@ -246,7 +401,7 @@ func hold(lock: Dictionary, tool: String) -> Dictionary:
 	var piece: RigidBody3D = workshop.clamped
 	if piece == null or workshop.board == null or lock.get("free", false) or tool == "sanding_sponge":
 		return {}
-	var marks := marks_of(piece)
+	var marks := marks_of(piece).filter(func(m): return m.kind != "pencil") # (pencil only guides)
 	if marks.is_empty():
 		return {}
 	var floors := []
@@ -456,14 +611,48 @@ func _axis(v: Vector3) -> Vector3:
 
 ## For the line by the pointer.
 func describe() -> String:
+	match kind():
+		"plan":
+			return _describe_sheet()
+		"pencil":
+			if preview.is_empty():
+				return "Pencil   (hover over a face)"
+			var at: Dictionary = preview.at
+			var p: Vector3 = at.p
+			var e: int = at.e
+			return "Pencil   %.1f mm from the edge, %.1f mm from the end of it   click: a line across, drag: along the edge or across it" % [
+					absf(p[at.a] - at.edge), minf(p[e] - at.lo[e], at.hi[e] - p[e])]
+	var tool := "Marking gauge %.1f mm in" % distance() if kind() == "gauge" else "Marking knife and square"
+	if preview.get("snapped", false):
+		var what := "gauge" if preview.kind == "gauge" else "knife"
+		var of: String = (" (%s)" % preview.feature) if preview.get("feature", "") != "" else ""
+		return "%s   on the pencil line%s: click: %s it in, drag: as far as you go" % [tool, of, what]
 	if kind() == "gauge":
-		var said := "Marking gauge %.1f mm in" % distance()
 		if preview.is_empty():
-			return said + "   (hover over a face, near the edge its fence rides)"
-		return said + "   click: along the whole face, drag: as far as you go"
+			return tool + "   (hover over a face, near the edge its fence rides)"
+		return tool + "   click: along the whole face, drag: as far as you go"
 	if preview.is_empty():
-		return "Marking knife and square   (hover over a face)"
-	return "Marking knife and square   click: across the whole face, drag: as far as you go"
+		return tool + "   (hover over a face)"
+	return tool + "   click: across the whole face, drag: as far as you go"
+
+
+func _describe_sheet() -> String:
+	var plans = workshop.plans
+	var p: Dictionary = plans.sheet_part()
+	if p.is_empty():
+		return "Plan sheet   (take one from the plan book: P)"
+	var name: String = "%s: %s" % [plans.plans[plans.sheet.plan].get("name", plans.sheet.plan), p.get("name", p.id)]
+	if placed.get("on_end", false):
+		return name + "   (lay it on a face or an edge, not an end: it runs along the grain)"
+	if placed.is_empty():
+		return name + "   (hover over the piece: its face side on the face you point at, from the nearer end and edge)"
+	if not placed.fits:
+		var size: Vector3 = plans.size_of(p)
+		return name + "   too small for it: it needs %.0f x %.0f x %.0f mm" % [size.x, size.y, size.z]
+	var said := name + "   click: draw it on in pencil (%d lines" % placed.marks.size()
+	if placed.later > 0:
+		said += "; %d more once the piece is cut to size" % placed.later
+	return said + ")"
 
 
 func _process(_delta: float) -> void:
@@ -474,16 +663,30 @@ func _process(_delta: float) -> void:
 	if sdf == null or piece == null or workshop.mode != workshop.Mode.WORK or workshop.current == "":
 		return
 	var lines := []
+	# Pencil first: a line knifed or gauged in over it is drawn on top.
 	for mark in marks_of(piece):
-		lines.append([mark, mark.from, mark.to, HELD_COLOUR if held.has(mark) else LINE_COLOUR])
+		if mark.kind == "pencil":
+			lines.append([mark, mark.from, mark.to, PENCIL_COLOUR])
+	for mark in marks_of(piece):
+		if mark.kind != "pencil":
+			lines.append([mark, mark.from, mark.to, HELD_COLOUR if held.has(mark) else LINE_COLOUR])
 	if workshop.current == "layout":
-		if not _press.is_empty():
+		if _press.has("line"):
 			var line: Dictionary = _press.line
-			var from: float = _press.from if _press.dragged else 0.0
-			var to: float = _press.to if _press.dragged else line.length
+			var from: float = _press.from if _press.dragged else line.get("from", 0.0)
+			var to: float = _press.to if _press.dragged else line.get("to", line.length)
 			lines.append([line, from, to, PREVIEW_COLOUR])
 		elif not preview.is_empty():
-			lines.append([preview, 0.0, preview.length, PREVIEW_COLOUR])
+			lines.append([preview, preview.get("from", 0.0), preview.get("to", preview.length), PREVIEW_COLOUR])
+		var sheet: Dictionary = _press.get("plan", placed)
+		# (Not over the part drawn on there already: its pencil shows.)
+		var tag: Dictionary = piece.get_meta("part", {})
+		var plans = workshop.plans
+		if not sheet.is_empty() and not plans.sheet.is_empty() and tag.get("plan", "") == plans.sheet.plan and \
+				tag.get("part", "") == plans.sheet.part and tag.placement.is_equal_approx(sheet.get("placement", Transform3D())):
+			sheet = {}
+		for mark in sheet.get("marks", []):
+			lines.append([mark, mark.from, mark.to, SHEET_COLOUR if sheet.fits else UNFIT_COLOUR])
 	if lines.is_empty():
 		return
 	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
@@ -498,12 +701,16 @@ func _process(_delta: float) -> void:
 
 ## How far along `line` (mm) the pointer is, on its face's plane.
 func _along(line: Dictionary, position: Vector2) -> float:
+	return clampf((_on_face(line, position) - line.origin).dot(line.dir), 0.0, line.length)
+
+
+## Where the pointer is on `line`'s face's plane (body space; the line's origin if the ray
+## misses it).
+func _on_face(line: Dictionary, position: Vector2) -> Vector3:
 	var cam: Camera3D = workshop.camera
 	var plane := Plane(dir_to_world(line.face), to_world(line.origin))
 	var at = plane.intersects_ray(cam.project_ray_origin(position), cam.project_ray_normal(position))
-	if at == null:
-		return 0.0
-	return clampf((to_body(at) - line.origin).dot(line.dir), 0.0, line.length)
+	return line.origin if at == null else to_body(at)
 
 
 func to_body(point: Vector3) -> Vector3:

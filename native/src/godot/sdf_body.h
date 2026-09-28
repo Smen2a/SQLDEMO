@@ -61,6 +61,21 @@ public:
 	// the grain, body x) by its width (y) by its thickness (z), centred, arrises eased (core
 	// demo::stock). The workshop's "board" is 160 x 100 x 25.
 	bool load_stock(const godot::String &wood, const godot::Vector3 &size);
+	// Plans (core plans/part.h). A part as a plan gives it (game/plans/*.json: {id, name,
+	// size [L, W, T], features [{kind, name, face, other, along, across, depth, through,
+	// width, end, length, y, z, axis, at, from, to}]}).
+	// The lines laying it out on stock `stock` mm (along its length, width, thickness; the
+	// part flush with it at its reference corner), in part space: {"lines": [{as ("knife",
+	// "gauge" or "guide"), face (outward normal), origin, dir, length, toward, distance,
+	// feature}], "later": how many wait for faces the stock does not have yet}.
+	static godot::Dictionary part_lines(const godot::Dictionary &part, const godot::Vector3 &stock);
+	// The part as it is meant to be, in `wood` (part space: its reference corner at the
+	// node's origin).
+	bool load_part(const godot::Dictionary &part, const godot::String &wood);
+	// Knife lines scribed all at once, as one undo step: [{origin, dir, face (body space),
+	// from, to (mm along it)}], `depth` mm deep. False with nothing to scribe (or a tool
+	// engaged).
+	bool scribe_lines(const godot::Array &lines, double depth);
 	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
 	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
 	// cast shadows.

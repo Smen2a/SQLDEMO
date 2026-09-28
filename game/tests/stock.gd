@@ -38,9 +38,13 @@ func _ready() -> void:
 		_check(piece.get_meta("wood_name") == spec.wood and piece.get_meta("kind") == spec.kind,
 				"%s: named as its stack (%s %s)" % [kind, piece.get_meta("wood_name"), piece.get_meta("kind")])
 		_check((size - spec.size).abs().length() < 0.5, "%s: its size" % kind)
-		# Short of the box by its eased arrises (and what the ADF's voxels miss round the surface:
-		# under 5% on the thinnest).
-		_check(volume < box and volume > 0.95 * box, "%s: its volume" % kind)
+		# The box less its eased arrises (a millimetre's round: (1 - pi/4) mm^2 along each of its
+		# 12 edges), as the ADF measures it: to about a tenth of a millimetre all over its surface,
+		# either way (over 4% of a 5 mm strip): within 0.3 mm of it.
+		var s: Vector3 = spec.size
+		var eased := box - (1.0 - PI / 4.0) * 4.0 * (s.x + s.y + s.z)
+		var skin := 2.0 * (s.x * s.y + s.y * s.z + s.z * s.x)
+		_check(absf(volume - eased) < 0.3 * skin, "%s: its volume (%.0f mm^3, %.0f eased)" % [kind, volume, eased])
 		_check(absf(piece.mass - volume * DENSITY[spec.wood] * 1e-6) < 0.02 * piece.mass, "%s: its mass" % kind)
 		# Into the vise flat, on edge and on end (as it was turned when let go).
 		for up in 3:

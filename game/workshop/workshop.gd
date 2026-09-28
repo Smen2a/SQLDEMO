@@ -96,6 +96,7 @@ const Player := preload("res://workshop/player.gd")
 const WorkshopUi := preload("res://workshop/workshop_ui.gd")
 const Debris := preload("res://workshop/debris.gd")
 const Layout := preload("res://workshop/layout.gd")
+const Plans := preload("res://workshop/plans.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
@@ -205,7 +206,9 @@ var settings := {
 	"scraper": {"pressure": 1.0},
 	"sanding_block": {"variant": "block", "grit": 120, "pressure": 1.0},
 	"sanding_sponge": {"grit": 120, "pressure": 1.0},
-	"layout": {"variant": "gauge", "distance": 6.0}, # a marking gauge (mm in from the edge) or a knife
+	# A marking gauge (mm in from the edge), a knife, a pencil, or a plan's sheet (plans.gd); with
+	# `scribe`, a sheet is scribed on at once rather than drawn in pencil.
+	"layout": {"variant": "gauge", "distance": 6.0, "scribe": false},
 }
 var wood := "board" ## the piece in the vise at the start (and set_wood's): a stock kind (Room.STOCK)
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
@@ -261,7 +264,8 @@ var _lock := {}
 var _plan := {}           # what SdfBody.plan_stroke made of it
 ## The chisels and gouges (SdfBody.tool_catalog()): family -> [{id, label, width, ...}].
 var variants := {}
-var layout # layout.gd: the marking gauge and knife, and the lines they leave
+var layout # layout.gd: the marking gauge and knife, the pencil and the plan sheet, and the lines they leave
+var plans # plans.gd: the plans (game/plans), the sheet in hand, laying a part out on the wood
 var _progress := 0.0      # mm a push tool has gone along its path
 var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
@@ -304,10 +308,15 @@ func _ready() -> void:
 			variants[v.family] = []
 		variants[v.family].append(v)
 	variants["layout"] = [{"id": "gauge", "family": "layout", "label": "Marking gauge"},
-			{"id": "knife", "family": "layout", "label": "Marking knife and square"}]
+			{"id": "knife", "family": "layout", "label": "Marking knife and square"},
+			{"id": "pencil", "family": "layout", "label": "Pencil"},
+			{"id": "plan", "family": "layout", "label": "Plan sheet"}]
 	layout = Layout.new()
 	layout.workshop = self
 	add_child(layout)
+	plans = Plans.new()
+	plans.workshop = self
+	add_child(plans)
 	# An ash board in the vise.
 	_clamp(_new_piece(wood))
 
@@ -416,6 +425,8 @@ func interact() -> void:
 		pick_up(thing)
 	elif thing.has_meta("stock"):
 		take_stock(thing)
+	elif thing.has_meta("plans"):
+		_ui.open_plans()
 
 
 ## A new piece of stock from a stack on the rack (room.gd), into the hands: off the top of the
@@ -598,6 +609,8 @@ func prompt() -> String:
 		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
 	if thing.has_meta("workpiece"):
 		return "E: pick up the %s" % _name_of(thing)
+	if thing.has_meta("plans"):
+		return "E: open the plan book"
 	if thing.has_meta("stock"):
 		var wood_name: String = thing.get_meta("wood_name")
 		return "E: take %s %s %s" % ["an" if "aeiou".contains(wood_name[0]) else "a", wood_name,
@@ -1353,6 +1366,9 @@ func undo() -> void:
 	if board == null:
 		return
 	board.flush()
+	# Drawn in pencil straight after (a line, a sheet laid on): that goes first, the body as it was.
+	if plans.undo(clamped, board.get_stats().get("steps", 0)):
+		return
 	var last := -1
 	for i in offcuts.size():
 		if offcuts[i].from == clamped:
@@ -1637,7 +1653,8 @@ func _step_key(step: int) -> int:
 ## Loads a tool's model into `body` (the Layout slot's: its gauge, set, or its knife).
 func _load_tool(body, tool: String) -> void:
 	if tool == "layout":
-		body.load_tool("marking_gauge" if settings.layout.variant == "gauge" else "marking_knife", settings.layout)
+		var models := {"gauge": "marking_gauge", "knife": "marking_knife", "pencil": "pencil", "plan": "sheet"}
+		body.load_tool(models.get(settings.layout.variant, "marking_knife"), settings.layout)
 	else:
 		body.load_tool(tool, settings[tool])
 
@@ -1681,9 +1698,18 @@ func stroke_state() -> Dictionary:
 # --- per frame ---------------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
-	# The hotbar, walking or working: 1 to 9 the tools, 0 empty hands.
+	# The plan book, open over everything: P or Esc closes it.
+	if _ui != null and _ui.plans_open():
+		if event is InputEventKey and event.pressed and not event.echo and \
+				((event as InputEventKey).keycode == KEY_P or (event as InputEventKey).keycode == KEY_ESCAPE):
+			_ui.close_plans()
+		return
+	# The hotbar, walking or working: 1 to 9 the tools, 0 empty hands; P the plan book.
 	if event is InputEventKey and event.pressed and not event.echo:
 		var code := (event as InputEventKey).keycode
+		if code == KEY_P:
+			_ui.open_plans()
+			return
 		if code >= KEY_1 and code <= KEY_9:
 			select_tool(TOOL_NAMES[code - KEY_1])
 			return

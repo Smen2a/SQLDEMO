@@ -26,6 +26,17 @@ struct MarkingKnife {
 	Body model() const;
 };
 
+// A pencil: its point at the origin, standing up (z), a round cedar body sharpened to a
+// graphite lead.
+struct Pencil {
+	Body model() const;
+};
+
+// A sheet of a plan (paper, A5): lying flat, its near corner at the origin, along x and y.
+struct Sheet {
+	Body model() const;
+};
+
 struct CutPlan; // tools/cutting.h
 
 // A plane a tool stops at, from a marked line: at(p) > 0 on the waste side (what may be

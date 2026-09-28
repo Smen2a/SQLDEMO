@@ -38,6 +38,7 @@ add_library(sdf_core STATIC
 	src/core/pieces/hull.cpp
 	src/core/pieces/parts.cpp
 	src/core/pieces/pieces.cpp
+	src/core/plans/part.cpp
 	src/core/tools/catalog.cpp
 	src/core/tools/cutting.cpp
 	src/core/tools/debris.cpp
@@ -88,6 +89,7 @@ if(ZLIB_FOUND)
 		tests/test_parts.cpp
 		tests/test_pieces.cpp
 		tests/test_crumbs.cpp
+		tests/test_plans.cpp
 		tests/test_smoothing.cpp
 		tests/test_cutting.cpp
 		tests/test_shaping.cpp

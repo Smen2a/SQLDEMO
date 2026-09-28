@@ -15,10 +15,10 @@ workshop, seen through your own eyes: a workbench with a vise in the middle of i
 ash board clamped in it, a side table to its right, and a lumber rack against the left wall
 with stacks of stock: ash, oak and walnut boards (160 × 100 × 25 mm) on the middle shelf,
 and on the bottom one the blanks for a mallet: ash handle blanks (320 × 35 × 28), oak head
-blanks (120 × 70 × 55) and oak strips (150 × 30 × 10). Each is a blank of its wood,
-flat-sawn, its arrises eased by a millimetre (`SdfBody.load_stock`). The room is built in
-code (`game/workshop/room.gd`); the world is in metres, the bench top at y = 0 with the
-vise at its middle.
+blanks (120 × 70 × 55) and oak strips (150 × 12 × 5, a wedge's section). Each is a blank of
+its wood, flat-sawn, its arrises eased by a millimetre (`SdfBody.load_stock`). The plan book
+lies on the side table. The room is built in code (`game/workshop/room.gd`); the world is in
+metres, the bench top at y = 0 with the vise at its middle.
 
 **Walking** (`game/workshop/player.gd`, a first-person `CharacterBody3D`):
 - **WASD** or the arrows walk (1.5 m/s), **Shift** hurries (3 m/s), the mouse looks about.
@@ -26,13 +26,15 @@ vise at its middle.
 - **The hotbar** along the bottom holds the tools: a chisel and a carving gouge (each in
   several kinds), a back saw, a rasp, the planes (a spokeshave, a block plane with or
   without a chamfer fence, a shoulder plane), a card scraper, a sanding block, a
-  sanding sponge, and the layout tools (a marking gauge, a knife and square). Keys **1 to 9**
+  sanding sponge, and the layout tools (a marking gauge, a knife and square, a pencil, and the
+  sheet of a plan). Keys **1 to 9**
   (or a click, or the wheel) put one in hand, held in view;
   **0** empties the hands. Every tool is an SDF body, built by the engine in steel, brass,
   ash, walnut, cork and abrasive.
 - **E** does what the line under the crosshair says, within 2 m:
   - on a piece of work lying about (a board, an offcut): **pick it up**;
   - on a stack on the rack: **take a new piece** of that stock into your hands;
+  - on the plan book on the side table: **open it** (*Plans* below; **P** opens it anywhere);
   - on the bench, or the piece in the vise: **step up to the bench** (below);
   - carrying something: **let go** of it.
 - **Carrying.** A piece in your hands is held in front of your eyes, turned as you turn. It
@@ -61,12 +63,21 @@ under the crosshair says to put a piece in it.
   parallel to that edge, that far in, on the face under the pointer.
 - **The knife and square** (Tab). The square's stock rides the nearest edge, and the line
   runs across the face, square to it, through the pointer.
+- **The pencil.** A click draws a line across the face, square to the nearest edge; a drag,
+  a line along that edge (at the distance the drag started from it) or across it, whichever
+  way the drag goes. The line by the pointer gives its distance from the edge and the end.
+- **A plan's sheet** (taken from the plan book): laid on the piece, it draws a part on in
+  pencil (*Plans* below).
 - **Scribing.** A click scribes the line the whole way across the face; a drag, only as
   far as it goes. The line is a real cut, a knife's V 0.3 mm deep (core
   `tools/layout.h`), and one undo step.
 - **Marks.** The line is also a mark on the piece, in its body space so it moves with the
   piece. Marks are drawn while a tool is in hand, and undo and redo take them with their
   cuts.
+- **Pencil only guides.** It cuts nothing, holds no tool, and is drawn in graphite. The knife
+  or gauge within 1.5 mm of a pencil line takes that line: a click knifes or gauges it in,
+  the whole of it (as the plan, or the pencil, meant it: a line along the grain gauged, one
+  across it knifed). Pencil is undone by undo straight after it, before any cut.
 - **The lines hold the tools.** A stroke locked or pressed on the piece is held to the
   lines marked on it (drawn blue while it is; *at the line* where they stop it). What a
   line means depends on how the tool is held:
@@ -953,6 +964,39 @@ straight after puts it back.
     arris free a 2.3 mm³ sliver: looked for and cut out in 16 ms on the worker (9 ms of
     it cutting out and measuring); its chunk, a hull of 12 corners, lies where it was.
 
+### Plans: a part to lay out
+
+An object is made of parts, each made to a drawing. The plan book on the side table (E, or
+**P** anywhere) holds the plans: for now the **mallet**, an oak head with a mortise through
+it, an ash handle whose tenon goes through the head and stands 3 mm proud, and an oak wedge
+driven into a kerf in the tenon.
+- **A part** is a rectangular blank with features cut into it (core `plans/part.h`): a hole
+  or mortise, a tenon (four rebates round an end), a saw kerf, a rebate or notch, a
+  chamfer, a taper. Its space has its reference corner at the origin where the reference
+  end, the face edge and the face side meet, x along the grain. The plans are JSON
+  (`game/plans/*.json`) in those terms.
+- **The plan book** (`game/workshop/plan_viewer.gd`) lists a plan's parts (each with its
+  wood, size, and how many pieces have been laid out as it) and its joints, and draws a
+  part's sheet: its face side, face edge and end, each with the lines that lay it out, what
+  the features take out dashed, its sizes, and each feature's in words.
+- **Laying it on.** *Take this sheet* puts it in hand (the Layout slot). Hovered on the
+  piece in the vise, it shows the part in blue where it would go: its face side on the face
+  pointed at (any face along the grain), its reference end the nearer end, its face edge
+  the nearer edge of that face; red if the piece is too small for it. A click draws it on
+  in pencil (`SdfBody.part_lines`): knifed to length round the piece where the piece is
+  longer, gauged to width and thickness where it is wider or thicker, then each feature's
+  lines on every face the piece has (a line on a face it does not have yet, being bigger
+  that way, waits: the line by the pointer says how many). The piece becomes that part
+  (its meta `part`: the plan, the part, and where it lies on it).
+- **Scribe a sheet as you lay it on** (the Layout panel) scribes all its lines at once
+  instead, one undo step (`SdfBody.scribe_lines`).
+- **The intended part** (`part_solid`): the blank less its features, as an SDF body,
+  for checking a part against its drawing and assembling parts (next steps).
+- **Measured** (`native/tests/test_plans.cpp`, `game/tests/plan_transfer`): the head's
+  mortise takes exactly its 19,800 mm³ out of the solid, its lines on its surface; the
+  handle's tenon and kerf, 36,328 mm³ (36,325); the head laid on its blank in 12 pencil
+  lines, where `part_lines` puts them; the length line knifed in by a click beside it.
+
 ## Layout
 
 | Path | What it is |
@@ -964,6 +1008,7 @@ straight after puts it back.
 | `native/src/core/adf/` | The adaptive distance field: the Live display cache (sampled bricks, exact cells at creases). |
 | `native/src/core/eval/` | The CPU reference renderer (ground truth for every later GPU path) and exact ray queries. |
 | `native/src/core/tools/` | The hand tools: each one's model and the cuts it makes, strokes that turn a tool's motion into edits, and the curvature flow that builds a sanding sponge's smoothing layer (`smoothing.h`). |
+| `native/src/core/plans/` | Plans: a part as a blank with features; the lines that lay it out on a piece of stock, and its intended solid. |
 | `native/src/core/pieces/` | Bodies that come apart: whether a cut left two parts (`plane_clear`), islands and crumbs cut out by a region (`parts.h`), each piece's bounds, volume, centre of mass and hull points, and convex hulls (`hull.h`). |
 | `native/src/core/edit/` | `EditSession`: a body's edits with the stroke in progress and undo / redo, its octree and ADF kept up to date incrementally. |
 | `native/src/demo/`, `native/tools/` | Demo scenes; `sdf_gallery` (renders the galleries), `sdf_render` (renders any demo, diffs against another image) and `sdf_bench` (octree scaling). |
@@ -1226,7 +1271,9 @@ The Godot tests come in two tiers:
     the vise squaring what goes in it, a board from the rack worked at the bench and
     carried away with its cut;
   - the rack's stock (`stock`): every kind its wood and size, clamped flat, on edge and on
-    end.
+    end;
+  - a plan laid on the wood (`plan_transfer`): the plan book, the sheet in pencil, undo,
+    the knife taking a pencil line, the pencil, scribing a sheet on at once.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

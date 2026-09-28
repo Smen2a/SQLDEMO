@@ -58,6 +58,24 @@ Body MarkingKnife::model() const {
 	return b;
 }
 
+Body Pencil::model() const {
+	// The lead, a thin graphite rod, flared by a long chamfer into the body: its cone.
+	Body b;
+	b.base = Primitive::capsule({0.0f, 0.0f, 0.4f}, {0.0f, 0.0f, 14.0f}, 0.4f);
+	b.base_material = mat::Steel;
+	b.add(join(Primitive::cylinder({0.0f, 0.0f, 90.0f}, 3.6f, 70.0f, 0.6f, along_z()), mat::Ash, Blend::Chamfer, 10.0f));
+	b.grain_origin = {0.0f, 0.0f, 90.0f};
+	b.grain_axis = {0, 0, 1};
+	return b;
+}
+
+Body Sheet::model() const {
+	Body b;
+	b.base = Primitive::box({74.0f, 105.0f, 0.15f}, {74.0f, 105.0f, 0.15f});
+	b.base_material = mat::Putty;
+	return b;
+}
+
 Stop Stop::through(vec3 point, vec3 waste) {
 	Stop s;
 	s.normal = gl::normalize(waste);

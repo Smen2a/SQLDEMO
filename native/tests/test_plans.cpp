@@ -1,0 +1,257 @@
+#include "test.h"
+
+#include "body/materials.h"
+#include "plans/part.h"
+
+#include <cmath>
+#include <cstdio>
+
+using namespace sdf;
+using namespace sdf::plans;
+
+namespace {
+
+// The mallet's parts (game/plans/mallet.json).
+Part head() {
+	Part p;
+	p.id = "head";
+	p.size = {110, 70, 55};
+	Feature mortise;
+	mortise.kind = Feature::Kind::Hole;
+	mortise.name = "mortise";
+	mortise.face = Face::Side;
+	mortise.along = {40, 70};
+	mortise.across = {29, 41};
+	mortise.through = true;
+	p.features.push_back(mortise);
+	return p;
+}
+
+Part handle() {
+	Part p;
+	p.id = "handle";
+	p.size = {300, 35, 28};
+	Feature tenon;
+	tenon.kind = Feature::Kind::Tenon;
+	tenon.name = "tenon";
+	tenon.length = 58;
+	tenon.y = {2.5f, 32.5f};
+	tenon.z = {8, 20};
+	p.features.push_back(tenon);
+	Feature kerf;
+	kerf.kind = Feature::Kind::Kerf;
+	kerf.name = "wedge kerf";
+	kerf.depth = 38;
+	kerf.axis = 1;
+	kerf.at = 17.5f;
+	kerf.width = 0.8f;
+	p.features.push_back(kerf);
+	return p;
+}
+
+Part wedge() {
+	Part p;
+	p.id = "wedge";
+	p.size = {45, 12, 5};
+	Feature taper;
+	taper.kind = Feature::Kind::Taper;
+	taper.name = "taper";
+	taper.face = Face::Back;
+	taper.from = 5;
+	taper.to = 1;
+	p.features.push_back(taper);
+	return p;
+}
+
+// The volume of a body's material within its part's box (a millimetre round it), counted
+// on a 0.5 mm grid (cell centres).
+double grid_volume(const Body &b, vec3 size) {
+	const float h = 0.5f;
+	double v = 0.0;
+	for (float z = -1.0f + 0.5f * h; z < size.z + 1.0f; z += h) {
+		for (float y = -1.0f + 0.5f * h; y < size.y + 1.0f; y += h) {
+			for (float x = -1.0f + 0.5f * h; x < size.x + 1.0f; x += h) {
+				v += b.distance({x, y, z}) < 0.0f ? 1.0 : 0.0;
+			}
+		}
+	}
+	return v * double(h * h * h);
+}
+
+// What the features take out of the blank: the blank's volume less the part's.
+double removed(const Part &p) {
+	Part blank = p;
+	blank.features.clear();
+	return grid_volume(part_solid(blank, mat::Oak), p.size) - grid_volume(part_solid(p, mat::Oak), p.size);
+}
+
+int count(const PartLines &l, PlanLine::As as, const std::string &feature) {
+	int n = 0;
+	for (const PlanLine &line : l.lines) {
+		n += line.as == as && line.feature == feature;
+	}
+	return n;
+}
+
+// Each line on its face's plane (of the stock's box `stock`, in part space) and within it,
+// running in the face, `toward` in the face and square to it.
+bool on_faces(const PartLines &l, vec3 stock) {
+	bool ok = true;
+	for (const PlanLine &line : l.lines) {
+		const vec3 b = line.origin + line.dir * line.length;
+		for (int a = 0; a < 3; ++a) {
+			const float n = a == 0 ? line.face.x : a == 1 ? line.face.y : line.face.z;
+			const float o = a == 0 ? line.origin.x : a == 1 ? line.origin.y : line.origin.z;
+			const float e = a == 0 ? b.x : a == 1 ? b.y : b.z;
+			const float hi = a == 0 ? stock.x : a == 1 ? stock.y : stock.z;
+			if (n != 0.0f) {
+				const float plane = n > 0.0f ? hi : 0.0f;
+				ok = ok && std::fabs(o - plane) < 1e-4f && std::fabs(e - plane) < 1e-4f;
+			}
+			ok = ok && o > -1e-4f && o < hi + 1e-4f && e > -1e-4f && e < hi + 1e-4f;
+		}
+		ok = ok && std::fabs(gl::dot(line.dir, line.face)) < 1e-5f && std::fabs(gl::dot(line.toward, line.face)) < 1e-5f &&
+				std::fabs(gl::dot(line.toward, line.dir)) < 1e-5f;
+	}
+	return ok;
+}
+
+// Points along the lines (1.5 mm in from their ends) lie on the solid's surface.
+float off_surface(const Body &b, const PartLines &l, const std::string &feature) {
+	float worst = 0.0f;
+	for (const PlanLine &line : l.lines) {
+		if (line.feature != feature) {
+			continue;
+		}
+		for (float s = 1.5f; s <= line.length - 1.5f; s += 1.0f) {
+			worst = std::max(worst, std::fabs(b.distance(line.origin + line.dir * s)));
+		}
+	}
+	return worst;
+}
+
+} // namespace
+
+// The head's mortise: knifed round on the face side and, as it goes through, on the back;
+// cut out of the solid, it takes 30 x 12 x 55 mm. On longer stock the head is knifed to
+// length round it; on thicker stock the back's lines wait (that face is not there yet) and
+// the thickness is gauged instead.
+TEST(a_mortise_is_laid_out_and_cut_through) {
+	const Part p = head();
+	const PartLines exact = part_lines(p, p.size);
+	CHECK(exact.lines.size() == 8 && exact.later == 0);
+	CHECK(count(exact, PlanLine::As::Knife, "mortise") == 8);
+	CHECK(on_faces(exact, p.size));
+	const Body solid = part_solid(p, mat::Oak);
+	const float off = off_surface(solid, exact, "mortise");
+	const double taken = removed(p);
+	std::printf("    mortise lines %.3f mm off the surface at worst; %.0f mm^3 taken (19800)\n", double(off), taken);
+	CHECK(off < 0.05f);
+	CHECK(std::fabs(taken - 19800.0) < 0.005 * 19800.0);
+
+	const PartLines longer = part_lines(p, {120, 70, 55});
+	CHECK(longer.lines.size() == 12 && longer.later == 0);
+	CHECK(count(longer, PlanLine::As::Knife, "") == 4);
+	CHECK(on_faces(longer, {120, 70, 55}));
+
+	const PartLines thicker = part_lines(p, {110, 70, 60});
+	CHECK(thicker.later == 4); // the back's
+	CHECK(count(thicker, PlanLine::As::Gauge, "") == 4 && count(thicker, PlanLine::As::Knife, "mortise") == 4);
+	CHECK(on_faces(thicker, {110, 70, 60}));
+	for (const PlanLine &line : thicker.lines) {
+		if (line.feature.empty()) { // gauged 5 mm from the stock's back, the waste beyond
+			CHECK(std::fabs(line.origin.z - 55.0f) < 1e-4f && line.toward.z > 0.99f && std::fabs(line.distance - 5.0f) < 1e-4f);
+		}
+	}
+}
+
+// The handle's tenon: four rebates round its end, each a shoulder gauged across its face
+// from the end and a depth gauged on the faces beside it and on the end; the wedge's kerf
+// knifed across the end. The solid lacks what the four cheeks and the kerf take.
+TEST(a_tenon_is_four_rebates_round_its_end) {
+	const Part p = handle();
+	const PartLines l = part_lines(p, p.size);
+	CHECK(count(l, PlanLine::As::Gauge, "tenon") == 16 && count(l, PlanLine::As::Knife, "wedge kerf") == 1);
+	CHECK(l.lines.size() == 17 && l.later == 0);
+	CHECK(on_faces(l, p.size));
+	int shoulders = 0;
+	for (const PlanLine &line : l.lines) {
+		if (line.feature == "tenon" && std::fabs(line.origin.x - 58.0f) < 1e-4f && std::fabs(line.dir.x) < 1e-4f) {
+			++shoulders; // across its face at 58 mm, gauged from the end: the waste towards it
+			CHECK(line.toward.x < -0.99f && std::fabs(line.distance - 58.0f) < 1e-4f);
+		}
+	}
+	CHECK(shoulders == 4);
+	const Body solid = part_solid(p, mat::Ash);
+	// The shoulders lie on its surface (where each cheek meets the rest of the handle).
+	float worst = 0.0f;
+	for (const PlanLine &line : l.lines) {
+		if (line.feature == "tenon" && std::fabs(line.origin.x - 58.0f) < 1e-4f && std::fabs(line.dir.x) < 1e-4f) {
+			for (float s = 1.5f; s <= line.length - 1.5f; s += 1.0f) {
+				worst = std::max(worst, std::fabs(solid.distance(line.origin + line.dir * s)));
+			}
+		}
+	}
+	const double taken = removed(p), expected = (35.0 * 28.0 - 30.0 * 12.0) * 58.0 + 0.8 * 12.0 * 38.0;
+	std::printf("    shoulders %.3f mm off the surface at worst; %.0f mm^3 taken (%.0f)\n", double(worst), taken, expected);
+	CHECK(worst < 0.05f);
+	CHECK(std::fabs(taken - expected) < 0.01 * expected);
+	// A 320 mm handle blank: knifed to length round it too.
+	const PartLines longer = part_lines(p, {320, 35, 28});
+	CHECK(longer.lines.size() == 21 && count(longer, PlanLine::As::Knife, "") == 4);
+}
+
+// The wedge: its slope pencilled on both edges, its thin end gauged; the solid is its taper.
+TEST(a_wedge_tapers) {
+	const Part p = wedge();
+	const PartLines l = part_lines(p, p.size);
+	CHECK(count(l, PlanLine::As::Guide, "taper") == 2 && count(l, PlanLine::As::Gauge, "taper") == 1);
+	CHECK(l.lines.size() == 3 && on_faces(l, p.size));
+	// (Less the eased arrises it takes off, which the blank had lost already: round the back
+	// and across its thin end, (1 - pi/4) mm^2 a millimetre.)
+	const double taken = removed(p), expected = 45.0 * 12.0 * (5.0 - 1.0) * 0.5 - (1.0 - 0.785398) * (2 * 45.0 + 12.0);
+	std::printf("    %.0f mm^3 taken (%.0f)\n", taken, expected);
+	CHECK(std::fabs(taken - expected) < 0.01 * expected);
+	const Body solid = part_solid(p, mat::Oak);
+	CHECK(solid.distance({2.0f, 6.0f, 4.5f}) < 0.0f);  // thick at its head
+	CHECK(solid.distance({43.0f, 6.0f, 2.0f}) > 0.0f); // thin at its tip
+}
+
+// A rebate along the whole face edge (gauged on both faces) and a stopped chamfer on the
+// other (gauged on both, knifed across where it stops): each takes what it should.
+TEST(a_rebate_and_a_stopped_chamfer) {
+	Part p;
+	p.size = {100, 40, 20};
+	Feature rebate;
+	rebate.kind = Feature::Kind::Rebate;
+	rebate.name = "rebate";
+	rebate.face = Face::Side;
+	rebate.other = Face::Edge;
+	rebate.width = 10;
+	rebate.depth = 6;
+	p.features.push_back(rebate);
+	Feature chamfer;
+	chamfer.kind = Feature::Kind::Chamfer;
+	chamfer.name = "chamfer";
+	chamfer.face = Face::Side;
+	chamfer.other = Face::OtherEdge;
+	chamfer.width = 4;
+	chamfer.along = {20, 80};
+	p.features.push_back(chamfer);
+	const PartLines l = part_lines(p, p.size);
+	CHECK(count(l, PlanLine::As::Gauge, "rebate") == 2 && count(l, PlanLine::As::Knife, "rebate") == 0);
+	CHECK(count(l, PlanLine::As::Gauge, "chamfer") == 2 && count(l, PlanLine::As::Knife, "chamfer") == 4);
+	CHECK(on_faces(l, p.size));
+	for (const PlanLine &line : l.lines) {
+		if (line.feature == "rebate" && line.face.z < -0.99f) { // on the face side, 10 mm in from the face edge
+			CHECK(std::fabs(line.origin.y - 10.0f) < 1e-4f && line.toward.y < -0.99f);
+		}
+	}
+	Part only_rebate = p, only_chamfer = p;
+	only_rebate.features.pop_back();
+	only_chamfer.features.erase(only_chamfer.features.begin());
+	const double r = removed(only_rebate), c = removed(only_chamfer);
+	std::printf("    rebate %.0f mm^3 (6000), chamfer %.0f mm^3 (480, less its eased arris)\n", r, c);
+	CHECK(std::fabs(r - 6000.0) < 0.01 * 6000.0);
+	CHECK(std::fabs(c - 480.0) < 0.05 * 480.0);
+}

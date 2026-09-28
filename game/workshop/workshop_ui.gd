@@ -5,6 +5,7 @@ extends CanvasLayer
 ## redo / reset, and a status line (edits, how long the last edit took to apply and upload,
 ## GPU frame time).
 
+const PlanViewer := preload("res://workshop/plan_viewer.gd")
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
 		"spokeshave": "5 Planes", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
 		"layout": "9 Layout"}
@@ -44,12 +45,12 @@ const DIAL := 25.0 # its dials' radius
 ## How a chisel's or gouge's bevel meets the work (workshop.attitude()): words and colour.
 const BITES := {"rides": ["rides its bevel", Color(0.55, 0.8, 1.0)], "bites": ["bites", Color(0.5, 1.0, 0.5)],
 		"digs in": ["digs in", Color(1.0, 0.5, 0.3)], "chops": ["chops", Color(1.0, 0.85, 0.35)]}
-const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane follows a curving drag)   C: chop   Tab: variant   Q / E: skew or turn by 15°\n" + \
+const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane follows a curving drag)   C: chop   Tab: variant   Q / E: skew or turn by 15°   P: plans\n" + \
 		"Right-drag, the guiding hand (also mid-stroke): up / down the angle, left / right skew or turn, wheel the lean (Ctrl: finely)\n" + \
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
-		"E: pick up, let go (over the vise: into it), take stock from the rack, work at the bench   F: out of the vise   R: turn what you carry"
+		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench   F: out of the vise   R: turn what you carry   P: plans"
 
 var workshop
 
@@ -68,6 +69,7 @@ var _left: Control   # the tool's settings (at the bench)
 var _right: Control  # the wood, undo, pace... (at the bench)
 var _crosshair: Label
 var _prompt: Label   # under the crosshair: what E would do
+var _viewer: Control # the plan book, while it is open (plan_viewer.gd)
 
 
 func _ready() -> void:
@@ -138,6 +140,14 @@ func _ready() -> void:
 	_variants["layout"] = _choice(layout, "Kind", workshop.variants.layout.map(func(v): return v.label), 0,
 			func(i): workshop.set_setting("layout", "variant", workshop.variants.layout[i].id))
 	_slider(layout, "layout", "distance", "Gauge", "%.1f mm")
+	# A plan's sheet: drawn on in pencil, or scribed on at once.
+	var scribe := CheckBox.new()
+	scribe.text = "Scribe a sheet as you lay it on"
+	scribe.focus_mode = Control.FOCUS_NONE
+	scribe.button_pressed = workshop.settings.layout.scribe
+	scribe.toggled.connect(func(on): workshop.set_setting("layout", "scribe", on))
+	layout.add_child(scribe)
+	_button(layout, "Plan book (P)", func(): open_plans())
 	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "rasp": rasp, "spokeshave": shave,
 			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge, "layout": layout}
 
@@ -233,6 +243,34 @@ func _ready() -> void:
 	_gauge.draw.connect(_draw_gauge)
 	root.add_child(_gauge)
 	refresh()
+
+
+## The plan book (plan_viewer.gd): opened over everything, the mouse freed while walking.
+func open_plans() -> void:
+	if plans_open():
+		return
+	_viewer = PlanViewer.new()
+	_viewer.workshop = workshop
+	add_child(_viewer)
+	if workshop.mode == workshop.Mode.WALK:
+		workshop.player.active = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func close_plans() -> void:
+	if not plans_open():
+		return
+	_viewer.queue_free()
+	_viewer = null
+	if workshop.mode == workshop.Mode.WALK:
+		workshop.player.active = true
+		if DisplayServer.get_name() != "headless":
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	refresh()
+
+
+func plans_open() -> bool:
+	return _viewer != null and is_instance_valid(_viewer)
 
 
 ## One line on the stroke being planned or made: the tool, what the wheel has set, how far

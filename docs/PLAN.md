@@ -20,7 +20,8 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Debris** (2) is done: D1 (shavings and chips), D2 (dust) and D3 (small pieces).
 - **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
   paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
-  sizes) is done; G1a (plans, the mallet's preset, transfer, pencil) is next.
+  sizes) and G1a (plans, the mallet's preset, laying a part on the wood, the pencil) are
+  done; G1b (drawing plans on paper) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -72,6 +73,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G1a | Plans: a part is a blank with features (`plans/part`: its lines on a piece of stock, its intended solid); the mallet's plan (`game/plans/mallet.json`); the plan book on the side table (P), each part's sheet drawn in three views; a sheet laid on the piece in the vise draws the part on in pencil and makes the piece that part; pencil only guides, the knife and gauge take it; a pencil for drawing on the wood; pencil undone straight after; or scribed on at once, one step. `plan_transfer` |
 | G0 | Stock in sizes (`demo::stock`, `SdfBody.load_stock`): the rack's stacks are kinds of stock, boards and the mallet's blanks (ash handles, oak heads, oak strips); the vise's jaws close down to 2 mm; stepping up to the bench, the view takes in a long piece. `stock` |
 | D3 | Small pieces: a part under 30 mm³ that came away (crumbs, down to specks) is taken out of the work, not split off. The look for islands refines first, collects every crumb it holds and cuts them out together (`cut_out` over a set of parts), and the work keeps the rest with one `Op::Keep` step; each crumb comes away as a chunk of debris, its convex hull (`pieces/hull.h`) coloured by the wood, with that hull for its collider (`crumbled`). A saw's sliver under 30 mm³ goes the same way. Undo straight after puts it back. On the way: `cut_out` proves air clear beyond the octree's root cube (a crumb at the work's edge). `crumbs` |
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`), read from the body before it lands; a shaving curls off the edge as it goes, coloured by the wood, breaking by the grain, and comes away as a rigid body; tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. After play: shavings and chips fade away 2 s after they come to rest |
@@ -809,7 +811,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0 done)
+## G. Making an object (current: G0 and G1a done)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -879,7 +881,59 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
 - **Measured** (`game/tests/stock`): every kind its size to 0.5 mm; its volume 96–99% of
   its box (the eased arrises, and the ADF's volume, which counts about 0.1 mm short all
   round the surface: a known bias of its voxel count); each clamped three ways, squared
-  and standing on the bench top between closed jaws.
+  and standing on the bench top between closed jaws. (From G1a the strips are 150 × 12 × 5,
+  a wedge's section, which the ADF measures 4% over its box: its volume is good to about
+  0.1 mm of the surface either way, which on 5 mm stock is several percent.)
+
+### G1a — plans, the mallet, laying a part on the wood (done)
+- **Parts** (core `plans/part.{h,cpp}`). A part is a blank, L × W × T, its reference corner
+  at the origin where the reference end (x = 0), the face edge (y = 0) and the face side
+  (z = 0) meet. Features: a hole (a face, an x range, a range across, a depth or through), a
+  tenon (an end, a length, its section), a kerf (from an end, a depth, square to y or z),
+  a rebate or notch, a chamfer, a taper.
+  - `part_lines(part, stock)`: the lines that lay it out on a piece of stock flush with it
+    at the reference corner. Its size first: knifed to length round the stock where the
+    stock is longer, gauged to width and thickness from the stock's far faces where it is
+    bigger. Then each feature's, as T5-2 reads them (`as`): a hole knifed round (on the far
+    face too if through); a tenon's shoulders gauged across from the end and its cheeks
+    gauged from their faces on the faces beside and the end (T5-2's rebate floor and
+    strip); a kerf knifed across the end; a rebate's and a chamfer's pair of gauge lines,
+    knifed across where they stop; a taper's slope in pencil only (`Guide`). Lines on a
+    face the stock does not have yet wait (`later`).
+  - `part_solid(part, material)`: the blank eased as stock is, less the features (box
+    subtracts, a chamfer's 45° box, a taper's half-space).
+- **The mallet** (`game/plans/mallet.json`): an oak head 110 × 70 × 55 with a 30 × 12 mortise
+  through it; an ash handle 300 × 35 × 28 with a 58 mm tenon (30 × 12: through the head and
+  3 mm proud) and a wedge kerf 38 mm deep down its middle; an oak wedge 45 × 12 × 5 tapering
+  to 1 mm. The stock matches the parts' sections (the strips became 150 × 12 × 5), so only
+  their lengths are cut to lines.
+- **The plan book** (`plan_viewer.gd`; E on it at the side table, or P): the plans, a plan's
+  parts (wood, size, how many laid out) and joints, and a part's sheet (face side, face edge
+  and end, third-angle; each face's lines, the far face's dashed, what the features take out
+  dashed; the sizes; each feature in words). *Take this sheet* puts it in the Layout slot.
+- **Laying it on** (`plans.gd`, `layout.gd`): hovered on the piece in the vise, the part
+  shows in blue: its face side on the face pointed at (along the grain), its reference end
+  the nearer end, its face edge that face's nearer edge (red where the piece is too small).
+  A click draws it on as pencil marks (layout.gd's marks, `kind: "pencil"`, with `as`) and
+  tags the piece (meta `part`: plan, part, placement). *Scribe a sheet as you lay it on*
+  scribes them instead, as one step (`SdfBody.scribe_lines`: every line's V in one
+  stroke).
+- **Pencil only guides.** `hold()` ignores it. The knife or gauge within 1.5 mm of a pencil
+  line on the face takes it (its own extent, knifed or gauged in as its `as` says). The
+  pencil (a new Layout variant) draws a line across the face with a click, or along the
+  nearest edge or across it with a drag, with its distances shown. Pencil is not an edit:
+  undo straight after takes the latest pencil off (a piece's `pencil_log`), before any cut.
+- **Models:** a pencil and a sheet of paper (`tools::Pencil`, `tools::Sheet`) for the
+  Layout slot in hand.
+- **Measured** (`native/tests/test_plans.cpp`, `game/tests/plan_transfer`): the head's
+  mortise takes 19,800 mm³ (19,800) out of the solid, its lines on the solid's surface; the
+  handle's tenon and kerf 36,328 (36,325); the wedge's taper and a stopped chamfer within
+  1–2% once the eased arrises they take are counted; the head laid on its 120 mm blank in 12
+  pencil lines where `part_lines` places them, the length line knifed in by a click beside
+  it, then holding a chisel.
+- **Left for later:** lines only straight and along the blank's axes (a curved part needs
+  curved lines, and tools held to them); a part's far faces laid out only once the piece
+  is its size that way; one part per piece.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:
