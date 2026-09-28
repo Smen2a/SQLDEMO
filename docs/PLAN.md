@@ -75,6 +75,8 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T4-1 | Chisels and gouges held to the real tools' rules: no cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade's body never through it (overhangs, gaps too narrow), force from the chip's own section (a gouge deepens its channel), splinters instead of square pits, 0.2 / 0.3 mm to begin with, tap / firm / heavy blows. In the workshop: a working speed the tool follows at, a pace (¼× to 8×), the blade pushing loose pieces, the reason and place a stroke stops, depths by hundredths. After play: an edge lock (along any edge, flush, level with an earlier cut's floor) and shavings the size of the chip |
 | W5 | A workshop to work in: a room built in code (bench and vise, side table, lumber rack), a first-person player, tools on a hotbar (none on the table), every piece of work a rigid body you pick up and carry, the vise squaring what is let go on it, the rack's stacks giving new boards; the old bench view is the work view you step into at the vise |
 | W5-5 | Pieces and debris land and lie still: Jolt named (DEFAULT had been GodotPhysics3D), debris resting on the board in the vise, CCD and a plane floor, guarded pushes and vise, old debris fading. `physics_calm` |
+| T5-1 | Laying out (the Layout slot, 9): a marking gauge (its fence riding the nearest edge, the wheel for its distance) and a knife with a square, each scribing a real V line 0.3 mm deep and recording a mark on the piece (body space, undone with its cut), drawn while a tool is in hand |
+| T5-2 | The lines stop the tools (`tools/layout.h`: `Stop`, `Limits`, `limit_plan`): flat on a face, a depth line beside is a floor, a line on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square, no lift-out); across the corner, the plane through lines on both faces is a chamfer the tool is laid on and cuts down to, and no further; the saw snaps onto a knife line and stops at a depth line. Rasps, scraper and block keep to the floor and the waste strip. Alt crosses them. `layout_lines` |
 
 **Open measurements (on a real GPU; the reference machine is an RTX 3060 Ti):**
 - the E3 gate bench;
@@ -391,6 +393,41 @@ walnut.
   After: every case goes at most 0.2 mm into what it rests on (2.6 mm at worst, landing)
   and is still within 0.7 s. The carry drive was measured too, held out past the bench top
   the eyes are on; it rests on the bench, and was left as it is.
+
+- **T5, lines the tools obey and a guiding hand.** From play: a chisel pass takes one strip,
+  so a corner or a whole section never comes out crisp; the tools work on one axis at one
+  angle. Real work gets crisp edges from references: a line knifed or gauged, and the tool
+  registered to it. The user chose lines the tools obey, and two-handed control with the
+  mouse and keyboard. In order: T5-1 layout, T5-2 the lines stop the tools, T5-4 the
+  guiding hand (right-drag pivots the tool on its edge, Space plans), T5-3 planes (a block
+  plane with a chamfer fence, a shoulder plane), T5-5 steering mid-stroke and curved
+  strokes.
+  - **T5-1, layout** (done). The Layout slot (9): the marking gauge and the knife and
+    square (Tab). A line is scribed with a narrow V edge (`scribe_edge()`, 40°) drawn
+    along it, 0.3 mm deep, and recorded as a mark on the piece: kind, face, origin,
+    direction, length, the side towards the edge it was gauged from, the distance and the
+    step that made it. Undo drops the mark with its cut, redo brings it back.
+  - **T5-2, the lines stop the tools** (done). When a stroke is locked or pressed,
+    `layout.hold()` reads the marks by how the tool is held and passes `Limits` to the
+    core in the stroke's settings (planes in body space, their normals towards the waste):
+    - floors: `limit_plan` clamps a chisel's, gouge's or spokeshave's floor under its
+      edge's middle and corners; a rubbed face (rasp, scraper, block) holds each pass's
+      floor; the saw's depth stops short of one;
+    - sides: rubbed patches are clipped to the waste strip (the rasp's pass narrowed to
+      it); the chisel, gouge and spokeshave are set flush on one in the workshop;
+    - ends: the plan ends at the first one its edge meets, square (`square_end`: no
+      lift-out beyond);
+    - a new stop, *at the line*.
+
+    A chamfer is found from the marks, not the edge lock: once a pass has begun it, the
+    edges the lock finds are the chamfer's own folds, so a tool laid on a slope between
+    the two faces, within the corner the lines cut off, is held to it too, set on the
+    plane at the corner abreast of where it was pressed, along the corner. Measured
+    (`layout_lines`): a rebate to an 8 mm width line and a 1 mm depth line pared to 1.000
+    mm, the shoulder untouched; a 3 mm chamfer pared from behind in 5 passes to 4.50 mm²
+    (3 × 3 / 2) of section, 1.50 mm down halfway, the last pass taking nothing; a knife line
+    stopping a pass square (0.300 mm deep 1.5 mm before it, nothing 1.5 mm past); Alt
+    crossing it; the saw stopping at a 5 mm depth line (5.00 mm).
 
 **Left for later:** a view model per tool that looks held (it floats at a fixed offset);
 putting tools down; the rack's stacks running out; a vise that holds a piece off the bench

@@ -60,6 +60,27 @@ under the crosshair says to put a piece in it.
 - **Marks.** The line is also a mark on the piece, in its body space so it moves with the
   piece. Marks are drawn while a tool is in hand, and undo and redo take them with their
   cuts.
+- **The lines hold the tools.** A stroke locked or pressed on the piece is held to the
+  lines marked on it (drawn blue while it is; *at the line* where they stop it). What a
+  line means depends on how the tool is held:
+  - **Flat on a face.** A gauge line on the face beside, gauged from this face's edge, is
+    the floor: the face goes down to it and no deeper (a rebate's depth; with a width line
+    on this face too, only between that line and its edge). A gauge line on this face is a
+    shoulder, the waste between it and its edge: a chisel's side is set flush on it, and
+    rasps, the scraper and the block keep to the waste. A knife line across the way is an
+    end: the chisel stops square there (the knife has severed the fibres) and is not lifted
+    out beyond.
+  - **Across the corner** (a chisel's or gouge's edge lock, or any tool laid on a chamfer
+    begun): gauge lines on both faces from the edge between them make a chamfer. Its plane
+    runs through the two lines (one line alone: at 45°, as far in on the other face). The
+    tool is laid on that plane, along the corner, and each pass takes the corner down
+    towards it and no further, until a pass takes nothing: a crisp chamfer with its edges
+    on the lines. Knife lines across the edge stop it (a stopped chamfer).
+  - **The saw.** A knife line along its way within 4 mm snaps it on, the kerf on the waste
+    side. A gauge line on the face it saws into (a tenon's shoulder depth) stops the kerf
+    there, before its back would.
+
+  **Alt**, as for edge lock, places a stroke freely, across the lines.
 
 1. **Take a tool.** Press 1 to 9 (or click it on the hotbar); Tab (or the panel) picks its
    kind. It stays out of sight while you aim, so it never hides the spot you are working

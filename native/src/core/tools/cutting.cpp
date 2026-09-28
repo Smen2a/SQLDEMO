@@ -103,7 +103,7 @@ float resistance(const Wood &wood, vec3 fibre, vec3 travel, vec3 edge) {
 std::vector<std::string> warning_names(unsigned warnings) {
 	static const char *names[] = {"skates", "shallow", "tears out", "corners buried", "breaks out", "not struck",
 			"slit only", "pops off", "digs in", "splits", "blocked", "blade meets the work", "too wide for the gap",
-			"stalls", "mouth"};
+			"stalls", "mouth", "at the line"};
 	std::vector<std::string> out;
 	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
 		if (warnings & (1u << i)) {
@@ -130,7 +130,7 @@ float CutPlan::depth_at(float s) const {
 }
 
 bool CutPlan::lift_out(float upto, Edit &out) const {
-	if (chop || floor.size() < 2) {
+	if (chop || floor.size() < 2 || (square_end && upto >= length - 1e-3f)) {
 		return false;
 	}
 	const float s = std::min(upto, length), floor = depth_at(s);

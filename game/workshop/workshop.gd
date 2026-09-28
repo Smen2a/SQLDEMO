@@ -702,6 +702,7 @@ func _note_edge(free: bool, surface: Vector3) -> void:
 	_lock.snapped = false
 	_lock.corner = false
 	_lock.edge = {}
+	_lock.free = free # (Alt: no edge lock, and not held to the marked lines)
 	if free or edge_aim <= 0.0 or not (current == "chisel" or current == "gouge") or is_chopping():
 		return
 	_lock.edge = board.find_edge(_lock.point, surface, EDGE_REACH, edge_fold)
@@ -827,6 +828,7 @@ func act() -> void:
 		return # the mallet is still coming back up
 	_engage_pose = tools[current].global_transform
 	_engage_time = Time.get_ticks_msec() / 1000.0
+	_lock.limits = layout.hold(_lock, current) # (the lines marked on the work: may set the lock)
 	_plane = _lock.plane
 	_progress = 0.0
 	_target = 0.0
@@ -961,6 +963,8 @@ func _stroke_settings() -> Dictionary:
 	s["length"] = _lock.length
 	s["seed"] = _lock.seed
 	s["pace"] = pace # (for the tools that take off at a rate)
+	if not _lock.get("limits", {}).is_empty():
+		s["limits"] = _lock.limits
 	return s
 
 
@@ -975,6 +979,7 @@ func get_plan() -> Dictionary:
 
 
 func _replan() -> void:
+	_lock.limits = layout.hold(_lock, current) # (the lines marked on the work: may set the lock)
 	_plan = board.plan_stroke(current, _lock.point, _lock.normal, _lock.along, _lock.length, _stroke_settings())
 	board.set_plan_tint(Color(TOOL_COLOURS[current], 0.55))
 	_ui.refresh()
@@ -985,6 +990,8 @@ func _drop_plan() -> void:
 		_state = IDLE
 	_lock = {}
 	_plan = {}
+	if layout != null:
+		layout.held = []
 	if board != null:
 		board.clear_plan()
 	_orbit.wheel_zoom = current != "layout" # (with the layout tool, the wheel sets the gauge)

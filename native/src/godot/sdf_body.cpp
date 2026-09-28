@@ -290,6 +290,27 @@ bool reads_body(const String &tool) {
 }
 
 
+// Marked lines a stroke is held to (tools/layout.h), from its settings: "limits", a
+// Dictionary of "floors", "sides" and "ends", each an Array of Vector4 (the plane's unit normal
+// towards the waste, and its offset), in body space.
+tools::Limits limits_from(const Dictionary &settings) {
+	tools::Limits out;
+	const Dictionary given = settings.get("limits", Dictionary());
+	const std::pair<const char *, std::vector<tools::Stop> *> kinds[3] = {
+			{"floors", &out.floors}, {"sides", &out.sides}, {"ends", &out.ends}};
+	for (const auto &[key, into] : kinds) {
+		const Array planes = given.get(key, Array());
+		for (int i = 0; i < planes.size(); ++i) {
+			const Vector4 v = planes[i];
+			tools::Stop stop;
+			stop.normal = gl::normalize(vec3(float(v.x), float(v.y), float(v.z)));
+			stop.offset = float(v.w);
+			into->push_back(stop);
+		}
+	}
+	return out;
+}
+
 // Worked back and forth along their line: planned as one stroke there and back.
 bool reciprocates(const String &tool) {
 	return tool == "saw" || tool == "rasp" || tool == "scraper";
@@ -371,11 +392,15 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 tools::CutPlan SdfBody::plan_for(const String &tool, const tools::Work &work, vec3 p, vec3 n, vec3 a, float length,
 		const Dictionary &s) {
 	const std::uint32_t seed = std::uint32_t(int64_t(s.get("seed", 1)));
+	tools::CutPlan plan;
 	if (tool == "spokeshave") {
-		return tools::plan_spokeshave(tools::Spokeshave{}, work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
+		plan = tools::plan_spokeshave(tools::Spokeshave{}, work, p, n, a, length, float(double(s.get("depth", 0.1))), seed);
+	} else {
+		plan = tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 0.2))),
+				float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))));
 	}
-	return tools::plan_cut(chisel_from(tool, s), work, p, n, a, length, float(double(s.get("depth", 0.2))),
-			float(double(s.get("skew", 0.0))), seed, float(double(s.get("blow", 1.0))));
+	tools::limit_plan(plan, limits_from(s)); // (the lines marked on the work)
+	return plan;
 }
 
 Array SdfBody::tool_catalog() {
@@ -507,13 +532,14 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 	const tools::Work work{session_.body(), session_.octree(), materials_};
 	const float length = float(double(settings.get("length", 40.0)));
 	const float pace = float(double(settings.get("pace", 1.0))); // the workshop's pace: rates times it
+	const tools::Limits limits = limits_from(settings); // (the lines marked on the work)
 	if (tool == "rasp") {
-		return tools::rasp_stroke(rasp_from(settings), work, p, n, a, length, pace);
+		return tools::rasp_stroke(rasp_from(settings), work, p, n, a, length, pace, limits);
 	}
 	if (tool == "scraper") {
 		tools::CardScraper scraper;
 		scraper.pressure = float(double(settings.get("pressure", 1.0)));
-		return tools::scraper_stroke(scraper, work, p, n, a, length, pace);
+		return tools::scraper_stroke(scraper, work, p, n, a, length, pace, limits);
 	}
 	if (tool == "saw") {
 		// Deep enough to go right through the body, no deeper.
@@ -523,6 +549,8 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 					c & 4 ? bounds_.hi.z : bounds_.lo.z);
 			through = std::max(through, gl::dot(p - corner, n));
 		}
+		// Down to a gauge line on the face it saws into, no further.
+		through = std::min(through, std::max(limits.depth_below(p, n), 0.0f) - 1.0f);
 		if (settings.has("feed")) { // a set feed, either way (tests)
 			return tools::saw_stroke(tools::Saw{}, p, n, a, float(double(settings["feed"])), through + 1.0f);
 		}
@@ -530,7 +558,7 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 				through + 1.0f);
 	}
 	if (tool == "sanding_block") {
-		return tools::sanding_stroke(block_from(settings), work, p, n, a, pace);
+		return tools::sanding_stroke(block_from(settings), work, p, n, a, pace, &limits);
 	}
 	if (tool == "sanding_sponge") {
 		tools::SandingSponge sponge;

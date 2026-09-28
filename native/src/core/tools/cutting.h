@@ -93,6 +93,7 @@ enum CutWarning : unsigned {
 	kTooWide = 1u << 12,      // the gap is narrower than the chisel: its sides meet the walls
 	kStalls = 1u << 13,       // the chip grows thicker than the hand can push
 	kMouth = 1u << 14,        // a spokeshave's mouth passes no thicker shaving
+	kAtLine = 1u << 15,       // held to a marked line (tools/layout.h): no deeper, or no further
 };
 // The warnings' names ("skates", "shallow", ...), in bit order.
 std::vector<std::string> warning_names(unsigned warnings);
@@ -107,6 +108,7 @@ struct CutPlan {
 	bool open = false;        // it starts at its depth (from an open face, or under a sole)
 	float height = 0.0f;      // how far its section reaches above the floor (0: to above the plane)
 	float lift_depth = -1.0f; // the depth it lifts out from (< 0: the floor's there)
+	bool square_end = false;  // it ends at a knife line: square there, not lifted out beyond
 	std::vector<vec2> floor;  // (distance along the path, depth) from 0 to length
 	std::vector<Edit> chips;  // tear-out, breakout, a chop's pop-off
 	std::vector<float> chips_at; // where along the path each chip is reached

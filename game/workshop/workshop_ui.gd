@@ -25,11 +25,13 @@ const WARNINGS := {
 	"too wide for the gap": "too wide for the gap: take a narrower one",
 	"stalls": "stalls: the surface rises into a chip too thick to push: take it in lighter passes",
 	"mouth": "its mouth passes no thicker a shaving",
+	"at the line": "held to the marked lines: no deeper, no further",
 }
 ## What stops a stroke going on (SdfBody.get_stroke_state's "limit"), in words.
 const LIMITS := {
 	"back": "its back meets the work: it goes no deeper",
 	"through": "through",
+	"at the line": "held to the marked lines",
 }
 ## A workshop's pace against real life (workshop.pace).
 const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]

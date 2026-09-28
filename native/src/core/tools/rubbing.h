@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tools/cutting.h"
+#include "tools/layout.h"
 #include "tools/tools.h"
 
 #include <functional>
@@ -85,6 +86,9 @@ struct RubFace {
 	// The area (mm^2) a line face's cut takes across its line `depth` deep, per mm along it
 	// (a half-round face's is not width x depth); unset: the patch's width x depth.
 	std::function<float(float depth)> section;
+	// Marked lines it is held to (tools/layout.h): a patch cuts no deeper than the floors, and
+	// only on the waste side of the sides and ends.
+	Limits limits;
 };
 
 // The plane a flat face set on the work at `plane` is held in: turned to lie along the

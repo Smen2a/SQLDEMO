@@ -750,13 +750,16 @@ std::unique_ptr<Stroke> saw_stroke(const Saw &saw, const Work &work, vec3 contac
 }
 
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,
-		vec3 along, float pace) {
+		vec3 along, float pace, const Limits *limits) {
 	const Frame plane = settle(work, Frame::at(contact, normal, along), {0.5f * block.length, 0.5f * block.breadth});
 	RubFace face;
 	face.length = block.length;
 	face.width = block.breadth;
 	face.rate = block.removal_per_mm(work.wood(contact - plane.z * 0.5f).hardness);
 	face.grain = 0.25f;
+	if (limits != nullptr) {
+		face.limits = *limits;
+	}
 	// Its feather at most half what it takes off most of the ground under it (all of the
 	// ground's, where that is below it: resting on a bump), so that a pass leaves ground
 	// further below its floor alone, as a hard block does.

@@ -173,6 +173,8 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| T5-2 | The lines stop the tools. Flat on a face: a gauge line on the face beside is a floor (a rebate's depth), one on the face a shoulder (the chisel set flush on it), a knife line across the way an end (stopped square). Across the corner: the plane through gauge lines on both faces is a chamfer; the tool is laid on it and each pass takes the corner down to it, then nothing. The saw snaps onto a knife line and stops at a depth line; rasps, scraper and block keep to the floor and the waste. Alt crosses them. In the core: `Limits` (`tools/layout.h`) and a stop *at the line* |
+| T5-1 | Laying out: a marking gauge and a knife with a square (the Layout slot, 9) scribe real V lines 0.3 mm deep and record them as marks on the piece, undone with their cuts |
 | W5 | A workshop to work in: a room built in code, a first-person player, tools on a hotbar, every piece of work a rigid body you pick up and carry (R turns it, the wheel reaches it), a vise that squares what is let go on it (flat, along the bench, on its top) and holds the piece the tools work on, a rack whose stacks give new boards. The old bench view is the work view you step into (E) and out of (Esc) |
 | T4-7 | The sanding sponge's flow at a real rate by grit, pressure and wood (ten passes of 120 grit round an ash arris to a 0.5 mm radius), at its working speed |
 | T4-6 | The spokeshave: held flat, its sole riding the highest across its blade; as deep as two hands push the chip's own section (deeper on a narrow edge), its mouth passes (0.8 mm) and its toe rides (a step blocks it) |
@@ -182,7 +184,7 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 122 native tests (GCC and Clang, including golden images) and 11
+Test counts today: 128 native tests (GCC and Clang, including golden images) and 12
 headless Godot checks.
 
 ## 5. Where things stand
@@ -236,6 +238,18 @@ so correctness can be checked here, but not speed.
 
 In order, per docs/PLAN.md's roadmap. Each capability replaces several overlapping items
 of the first plan.
+
+### T5. Lines the tools obey, and a guiding hand (in progress: T5-1 and T5-2 done)
+
+From play: a chisel pass takes one strip, so corners and whole sections never come out
+crisp, and the tools work on one axis at one angle. Real work gets crisp edges from
+references, a line knifed or gauged that the tool registers to, and control from the
+guiding hand on the blade. The user chose lines the tools obey (they stop the tool; Alt
+crosses them), scribed and drawn, and two-handed control with the mouse and keyboard
+(right-drag pivots the tool on its edge, Space plans). The plan (docs/PLAN.md, T5): T5-1
+layout, T5-2 the lines stop the tools, then T5-4 the guiding hand, T5-3 planes (a block
+plane with a chamfer fence, a shoulder plane), T5-5 steering mid-stroke and curved
+strokes.
 
 ### W5. A workshop to work in (done)
 
@@ -442,6 +456,15 @@ build directory).
 - **Daylight through a window lights the walls from inside.** The sun still reaches every
   wall that faces it and blows them out; keep the walls on their own visual layer, culled
   from the sun, and let the lamps and ambient light them.
+- **Register to what the lines say, not to what the lock found.** A chamfer was first held
+  only on edge lock's outside-corner hold. The first pass works; the second starts on the
+  chamfer begun, where edge lock finds the chamfer's own folds (running off at an angle
+  where the pass ramped in) and snaps flush off one: no chamfer, and a path climbing out of
+  it. Find the chamfer from the marks and where the stroke was pressed, and lay the tool
+  along the lines' corner.
+- **Wait for the board to be idle between strokes in a test.** A ray right after a commit
+  can read the body as it was: lock the next stroke only once `is_busy()` is false and no
+  refine is pending.
 - **Tests wait in game time, and for the tool.** Every tool now follows the pointer at a
   working speed: drag one leg at a time and wait for `lagging()` to clear (the harness's
   `catch_up`). Waits counted in frames break when headless frames take a millisecond.

@@ -1,6 +1,11 @@
 #include "tools/layout.h"
 
 #include "body/materials.h"
+#include "tools/cutting.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace sdf::tools {
 
@@ -51,6 +56,105 @@ Body MarkingKnife::model() const {
 	b.grain_origin = {12.0f, -4.0f, 70.0f};
 	b.grain_axis = {0, 0, 1};
 	return b;
+}
+
+Stop Stop::through(vec3 point, vec3 waste) {
+	Stop s;
+	s.normal = gl::normalize(waste);
+	s.offset = -gl::dot(s.normal, point);
+	return s;
+}
+
+float Limits::depth_below(vec3 p, vec3 normal) const {
+	float allowed = std::numeric_limits<float>::infinity();
+	for (const Stop &f : floors) {
+		// Going down (-normal) takes it towards the floor at this rate; a floor it cannot
+		// reach that way (square to the cut, or behind it) holds nothing.
+		const float rate = gl::dot(f.normal, normal);
+		if (rate > 0.2f) {
+			allowed = std::min(allowed, f.at(p) / rate);
+		}
+	}
+	return allowed;
+}
+
+float Limits::reach(vec3 p, vec3 dir) const {
+	float nearest = std::numeric_limits<float>::infinity();
+	for (const Stop &e : ends) {
+		const float rate = -gl::dot(e.normal, dir); // how fast it goes towards the side to keep
+		if (rate > 1e-4f) {
+			nearest = std::min(nearest, std::max(e.at(p), 0.0f) / rate);
+		}
+	}
+	return nearest;
+}
+
+bool limit_plan(CutPlan &plan, const Limits &limits) {
+	if (plan.chop || limits.empty() || plan.floor.size() < 2) {
+		return false;
+	}
+	bool held = false;
+	// The edge's middle and corners (a skewed edge sweeps less than its width, still square to
+	// the path here: near enough for a line).
+	const vec3 across = gl::normalize(gl::cross(plan.normal, plan.path));
+	const float half = 0.5f * plan.width;
+	const vec3 corners[3] = {across * -half, vec3(0.0f), across * half};
+	// Its end: where its edge first meets an end line, and square there.
+	float end = plan.length;
+	for (const vec3 &c : corners) {
+		end = std::min(end, limits.reach(plan.start + c, plan.path));
+	}
+	if (end < plan.length - 1e-3f) {
+		end = std::max(end, 0.0f);
+		const float at_end = plan.depth_at(end);
+		std::vector<vec2> kept;
+		for (const vec2 &f : plan.floor) {
+			if (f.x < end) {
+				kept.push_back(f);
+			}
+		}
+		kept.push_back({end, at_end});
+		plan.floor = kept;
+		std::vector<Edit> chips;
+		std::vector<float> chips_at;
+		for (std::size_t i = 0; i < plan.chips.size(); ++i) {
+			if (plan.chips_at[i] <= end) {
+				chips.push_back(plan.chips[i]);
+				chips_at.push_back(plan.chips_at[i]);
+			}
+		}
+		plan.chips = chips;
+		plan.chips_at = chips_at;
+		plan.length = end;
+		plan.stop_at = end;
+		plan.square_end = true;
+		held = true;
+	}
+	// Its floor: no deeper than the floors under its edge.
+	for (vec2 &f : plan.floor) {
+		float allowed = std::numeric_limits<float>::infinity();
+		for (const vec3 &c : corners) {
+			allowed = std::min(allowed, limits.depth_below(plan.point(f.x, 0.0f) + c, plan.normal));
+		}
+		if (f.y > allowed + 1e-4f) {
+			f.y = allowed;
+			held = true;
+		}
+	}
+	if (plan.lift_depth >= 0.0f) {
+		plan.lift_depth = std::min(plan.lift_depth, std::max(plan.depth_at(plan.length), 0.0f));
+	}
+	if (held) {
+		plan.depth = 0.0f;
+		for (const vec2 &f : plan.floor) {
+			plan.depth = std::max(plan.depth, f.y);
+		}
+		plan.stop |= kAtLine;
+		if (plan.stop_at < 0.0f) {
+			plan.stop_at = plan.length; // (the line: it goes all the way, no deeper)
+		}
+	}
+	return held;
 }
 
 Chisel scribe_edge() {

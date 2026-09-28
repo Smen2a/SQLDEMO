@@ -75,7 +75,7 @@ ToolProfile Rasp::profile(float height) const {
 }
 
 std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Work &work, vec3 contact, vec3 normal, vec3 path,
-		float length, float pace) {
+		float length, float pace, const Limits &limits) {
 	// Set flat on the work (then tilted as the hand holds it).
 	const Frame f = settle(work, Frame::at(contact, normal, path), {0.5f * rasp.length, 0.5f * rasp.width});
 	// Tilted about its line, its face's normal turns across it.
@@ -102,9 +102,14 @@ std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Work &work, vec3 con
 	face.to = length;
 	face.grain = 0.4f + 0.6f * rasp.coarseness;
 	face.thrown = true;
+	face.limits = limits;
 	face.pass = [rasp](const Frame &frame, vec2 lo, vec2 hi, float floor, float depth, float) {
-		const vec3 a = frame.point({lo.x, 0.0f, floor}), b = frame.point({hi.x, 0.0f, floor});
-		return cut(Primitive::sweep(a, b, frame.z, rasp.profile(depth + 2.0f)));
+		// Its width across the line, less where a marked line holds it (tools/layout.h).
+		Rasp held = rasp;
+		const float middle = 0.5f * (lo.y + hi.y);
+		held.width = std::min(rasp.width, std::max(hi.y - lo.y, 0.01f));
+		const vec3 a = frame.point({lo.x, middle, floor}), b = frame.point({hi.x, middle, floor});
+		return cut(Primitive::sweep(a, b, frame.z, held.profile(depth + 2.0f)));
 	};
 	face.section = [width_at](float depth) {
 		float area = 0.0f;
@@ -131,7 +136,7 @@ float CardScraper::per_pass(const Wood &wood) const {
 }
 
 std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &work, vec3 contact, vec3 normal,
-		vec3 path, float length, float pace) {
+		vec3 path, float length, float pace, const Limits &limits) {
 	// Held to the work (its burr across the stroke); a line 1 mm along it, so a point it
 	// passes over loses per_pass() each push, however long the stroke.
 	const Frame f = settle(work, Frame::at(contact, normal, path), {10.0f, 0.5f * scraper.width});
@@ -145,6 +150,7 @@ std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &w
 	face.to = length;
 	face.grain = 0.3f;
 	face.thrown = true;
+	face.limits = limits;
 	// Flexed, its cut fades out over its feather at each side.
 	SandingBlock pass_shape;
 	pass_shape.feather = scraper.feather;

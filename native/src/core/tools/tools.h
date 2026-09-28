@@ -23,6 +23,7 @@ namespace sdf::tools {
 
 struct Debris; // tools/debris.h
 struct Work;   // tools/cutting.h
+struct Limits; // tools/layout.h
 
 // An orthonormal frame: z = normal, x = `along` made perpendicular to it, y = z x x.
 struct Frame {
@@ -232,7 +233,7 @@ std::unique_ptr<Stroke> saw_stroke(const Saw &saw, vec3 contact, vec3 normal, ve
 // plane there (tools/rubbing.h): it takes removal_per_mm() (of the wood there, times the
 // pace) off per millimetre it travels over a point, where it went.
 std::unique_ptr<Stroke> sanding_stroke(const SandingBlock &block, const Work &work, vec3 contact, vec3 normal,
-		vec3 along, float pace = 1.0f);
+		vec3 along, float pace = 1.0f, const Limits *limits = nullptr);
 // A sanding sponge pressed at `contact` and rubbed about the plane there (deferred): the
 // work smooths whatever lies within its reach of the path, in proportion to the travel.
 std::unique_ptr<Stroke> hand_sanding_stroke(const SandingSponge &sponge, vec3 contact, vec3 normal, vec3 along,

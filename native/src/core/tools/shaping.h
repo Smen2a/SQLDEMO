@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tools/cutting.h"
+#include "tools/layout.h"
 #include "tools/tools.h"
 
 #include <cstdint>
@@ -71,9 +72,9 @@ struct Spokeshave {
 // at its rate times the pace (tools/rubbing.h). Reads the work (its shape under the line,
 // its wood) when it is set.
 std::unique_ptr<Stroke> rasp_stroke(const Rasp &rasp, const Work &work, vec3 contact, vec3 normal, vec3 path,
-		float length, float pace = 1.0f);
+		float length, float pace = 1.0f, const Limits &limits = {});
 std::unique_ptr<Stroke> scraper_stroke(const CardScraper &scraper, const Work &work, vec3 contact, vec3 normal,
-		vec3 path, float length, float pace = 1.0f);
+		vec3 path, float length, float pace = 1.0f, const Limits &limits = {});
 
 // A spokeshave's pass along `path` for `length` mm from `start`, its blade set `depth` mm
 // below its sole (held flat on the work: tools/rubbing.h settle()): the floor its sole's

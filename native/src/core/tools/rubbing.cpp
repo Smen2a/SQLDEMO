@@ -271,6 +271,9 @@ public:
 		StrokeState s;
 		s.depth = patches_.back().depth;
 		s.contact = contact_;
+		if (at_line_) {
+			s.limit = "at the line";
+		}
 		return s;
 	}
 
@@ -285,7 +288,8 @@ public:
 			int versions = 0;
 			for (const Patch &p : patches_) {
 				if (p.cut) {
-					cuts.push_back({p.cut_region, p.cut_floor});
+					const Held h = held(p);
+					cuts.push_back({h.region, h.floor});
 					versions += p.version + 1000 * p.id;
 				}
 			}
@@ -304,7 +308,8 @@ public:
 				continue;
 			}
 			// Probed every 5 mm or so (at least 7 by 7), once for each cut.
-			const Region &r = p.cut_region;
+			const Held h = held(p);
+			const Region &r = h.region;
 			const int nx = std::clamp(int(std::ceil((r.hi.x - r.lo.x) / 5.0f)), 7, 64);
 			const int ny = std::clamp(int(std::ceil((r.hi.y - r.lo.y) / 5.0f)), 7, 32);
 			const float fraction = material_fraction(body, octree, frame(r, p.cut_floor + p.cut_depth), r.lo, r.hi,
@@ -398,7 +403,8 @@ private:
 			patches_.pop_back();
 			return;
 		}
-		map_.lower(p.cut_region, p.cut_floor);
+		const Held h = held(p);
+		map_.lower(h.region, h.floor);
 	}
 
 	// Two patches (not the one in use) as one: the pair whose rectangle round both wastes
@@ -459,8 +465,77 @@ private:
 	}
 
 	Edit edit(const Patch &p) const {
+		const Held h = held(p);
+		const Region &r = h.region;
+		const float depth = std::max(p.rest - h.floor, 0.0f);
+		return face_.pass(frame(r, 0.0f), r.lo, r.hi, h.floor, depth, std::min(p.cut_typical, depth));
+	}
+
+	// A patch's cut as marked lines hold it (tools/layout.h): its floor no lower than the floors
+	// under it, its region cut back to the waste side of the sides and ends.
+	struct Held {
+		Region region;
+		float floor = 0.0f;
+	};
+	Held held(const Patch &p) const {
+		Held h{p.cut_region, p.cut_floor};
+		const Limits &limits = face_.limits;
+		if (limits.empty()) {
+			return h;
+		}
 		const Region &r = p.cut_region;
-		return face_.pass(frame(r, 0.0f), r.lo, r.hi, p.cut_floor, p.cut_depth, p.cut_typical);
+		const vec2 corners[4] = {r.lo, r.hi, vec2(r.lo.x, r.hi.y), vec2(r.hi.x, r.lo.y)};
+		for (const Stop &f : limits.floors) {
+			const float rate = gl::dot(f.normal, plane_.z);
+			if (rate <= 0.2f) {
+				continue;
+			}
+			for (const vec2 &c : corners) {
+				const vec2 at = r.plane(c);
+				h.floor = std::max(h.floor, -f.at(plane_.point({at.x, at.y, 0.0f})) / rate);
+			}
+		}
+		// The sides and ends, where the face cuts: each a half-plane over the patch; the rectangle
+		// cut back along whichever of its axes the line runs more across.
+		auto wall = [&](const Stop &w) {
+			const float nx = gl::dot(w.normal, plane_.x), ny = gl::dot(w.normal, plane_.y);
+			const float a = nx * r.u.x + ny * r.u.y;  // per mm along the patch's axis
+			const float b = -nx * r.u.y + ny * r.u.x; // per mm across it
+			const float c = w.at(plane_.point({r.origin.x, r.origin.y, h.floor}));
+			Region &g = h.region;
+			if (std::fabs(a) < 1e-3f && std::fabs(b) < 1e-3f) {
+				if (c < 0.0f) {
+					g.hi = g.lo; // all on the side to keep
+				}
+				return;
+			}
+			if (std::fabs(a) >= std::fabs(b)) {
+				const float x0 = (-c - b * g.lo.y) / a, x1 = (-c - b * g.hi.y) / a;
+				if (a > 0.0f) {
+					g.lo.x = std::max(g.lo.x, std::max(x0, x1));
+				} else {
+					g.hi.x = std::min(g.hi.x, std::min(x0, x1));
+				}
+			} else {
+				const float y0 = (-c - a * g.lo.x) / b, y1 = (-c - a * g.hi.x) / b;
+				if (b > 0.0f) {
+					g.lo.y = std::max(g.lo.y, std::max(y0, y1));
+				} else {
+					g.hi.y = std::min(g.hi.y, std::min(y0, y1));
+				}
+			}
+			g.hi = gl::max(g.hi, g.lo);
+		};
+		for (const Stop &w : limits.sides) {
+			wall(w);
+		}
+		for (const Stop &w : limits.ends) {
+			wall(w);
+		}
+		h.floor = std::min(h.floor, p.rest); // (above the rest: it takes nothing)
+		at_line_ = at_line_ || h.floor > p.cut_floor + 1e-4f || h.region.lo.x != r.lo.x || h.region.lo.y != r.lo.y ||
+				h.region.hi.x != r.hi.x || h.region.hi.y != r.hi.y;
+		return h;
 	}
 
 	// What changed since the last update, for the edit session: the patches' cuts from the
@@ -489,6 +564,7 @@ private:
 	}
 
 	RubFace face_;
+	mutable bool at_line_ = false; // a marked line has held a cut
 	Frame plane_;
 	float rate_;
 	vec2 half_;
