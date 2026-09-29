@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Godot-side checks, run after building native/ (which also builds the GDExtension).
 #
-#   tools/test_godot.sh         the headless tier: logic, not pixels (about a minute on a CPU)
+#   tools/test_godot.sh         the headless tier: logic, not pixels (a few minutes on a CPU)
 #   tools/test_godot.sh --gpu   the GPU tier: everything that renders and compares images
+#   tools/test_godot.sh --long  the long tier: the whole mallet made from the rack (headless,
+#                               many minutes; run on purpose)
 #
 # The headless tier:
 #   - the shared SDF includes and the Live shader compile in Godot's shader pipeline (one
@@ -32,7 +34,12 @@
 #     taking it; a plan drawn on the pad, saved, and laid out as the preset is; a part checked
 #     against its drawing, before and after it is sawn to length; a tenon's fit in its mortise;
 #     the handle offered up to the head in the vise, pushed and tapped home, one body; glued,
-#     stood on end, wedged and sawn flush
+#     stood on end, wedged and sawn flush; the mortise bored with the brace and chopped; the
+#     finished mallet taken up as yours, its weight in the blows
+#
+# The long tier: the mallet made from the rack with the workshop's tools, part by part,
+# checked, put together, glued, wedged and sawn flush, with a table of each part's play
+# time, strokes, turns, blows and edits (game/tests/mallet_build.gd).
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -49,15 +56,17 @@
 set -uo pipefail
 
 GPU=0
+LONG=0
 for arg in "$@"; do
 	case "$arg" in
 		--gpu) GPU=1 ;;
+		--long) LONG=1 ;;
 		-h | --help)
-			sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
+			sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
 			exit 0
 			;;
 		*)
-			echo "unknown argument: $arg (usage: tools/test_godot.sh [--gpu])" >&2
+			echo "unknown argument: $arg (usage: tools/test_godot.sh [--gpu | --long])" >&2
 			exit 2
 			;;
 	esac
@@ -87,6 +96,12 @@ check() {
 	fi
 }
 
+if [[ "$LONG" == 1 ]]; then
+	check mallet_build "mallet build: the mallet made from the rack" res://tests/mallet_build.tscn
+	grep "mallet build:" "$OUT/mallet_build.log" | sed 's/^mallet build: /    /'
+	exit $status
+fi
+
 if [[ "$GPU" == 0 ]]; then
 	check shader_smoke "Screenshot saved" --render res://tests/shader_smoke.tscn -- --screenshot="$OUT/shader_smoke.png"
 	check extension_smoke "extension smoke: carved panel" res://tests/extension_smoke.tscn
@@ -104,6 +119,7 @@ if [[ "$GPU" == 0 ]]; then
 	check assembly "assembly: the handle goes into the head" res://tests/assembly.tscn
 	check wedge_glue "wedge glue: the mallet glued, wedged and sawn flush" res://tests/wedge_glue.tscn
 	check mortise_chop "mortise chop: the mortise bored and chopped" res://tests/mortise_chop.tscn
+	check your_mallet "your mallet: the mallet made is yours" res://tests/your_mallet.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn

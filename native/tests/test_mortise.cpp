@@ -3,6 +3,8 @@
 #include "body/materials.h"
 #include "compile/octree.h"
 #include "demo/gallery.h"
+#include "adf/adf.h"
+#include "pieces/parts.h"
 #include "tools/boring.h"
 #include "tools/catalog.h"
 #include "tools/cutting.h"
@@ -280,4 +282,42 @@ TEST(the_mallets_mortise_bored_first) {
 			double(turns) / 2.0, 0.35 * double(blows));
 	CHECK(blows > 0 && blows < 150);
 	CHECK(left * 100 < all && beyond == 0);
+}
+
+// The handle's tenon (ash 320 x 35 x 28, centred; the tenon at the -x end, 58 long) sawn as
+// a joiner saws it, as the workshop takes the waste away: its thickness's waste (8 mm each
+// face) sawn free by a shoulder kerf and a cheek kerf in from the end, found and cut out
+// (the body keeping the rest: Edit::keep); then its width's the same way, 2.5 mm each edge.
+// Each strip between (1.65 mm thin: the kerf on the waste side of the line) is free: found
+// and cut out too.
+TEST(a_tenons_waste_is_cut_out_piece_by_piece) {
+	Body body = demo::stock(mat::Ash, {320, 35, 28});
+	const Saw saw;
+	auto free = [&](const Edit &shoulder, const Edit &cheek, const char *what) {
+		CHECK(body.add(shoulder) && body.add(cheek));
+		Octree octree;
+		octree.build(body);
+		Adf adf;
+		adf.build(body, octree);
+		Aabb around = shoulder.bounds();
+		around.include(cheek.bounds());
+		const Aabb within = body.bounds().expanded(1.0f);
+		around = {gl::max(around.lo, within.lo), gl::min(around.hi, within.hi)};
+		const Island found = find_island(body, octree, adf, around.expanded(2.0f), 30.0, 2.0f, 0.05f, 30.0);
+		const CutOut out = found.island >= 0 ? cut_out(body, octree, adf, found.parts, found.island) : CutOut{};
+		std::printf("    %s: found %s in %.0f ms; cut out: %s, %zu leaves, %.0f ms\n", what, found.island >= 0 ? "an island" : "none",
+				found.ms, out.failed ? out.failed : (out.region ? "yes" : "no"), out.leaves, out.ms);
+		CHECK(found.island >= 0 && out.region != nullptr && out.failed == nullptr);
+		if (out.region) {
+			CHECK(body.add(Edit::keep(out.region, Region::Rest)));
+		}
+	};
+	free(saw.kerf_cut({-102.45f, 0.0f, 14.0f}, {0, 1, 0}, {0, 0, 1}, 8.0f),
+			saw.kerf_cut({-160.0f, 0.0f, 6.45f}, {0, 1, 0}, {-1, 0, 0}, 58.0f), "the top's waste");
+	free(saw.kerf_cut({-102.45f, 0.0f, -14.0f}, {0, 1, 0}, {0, 0, -1}, 8.0f),
+			saw.kerf_cut({-160.0f, 0.0f, -6.45f}, {0, 1, 0}, {-1, 0, 0}, 58.0f), "the bottom's");
+	free(saw.kerf_cut({-102.45f, -17.5f, 0.0f}, {0, 0, 1}, {0, -1, 0}, 2.5f),
+			saw.kerf_cut({-160.0f, -15.45f, 0.0f}, {0, 0, 1}, {-1, 0, 0}, 58.0f), "one edge's strip");
+	free(saw.kerf_cut({-102.45f, 17.5f, 0.0f}, {0, 0, 1}, {0, 1, 0}, 2.5f),
+			saw.kerf_cut({-160.0f, 15.45f, 0.0f}, {0, 0, 1}, {-1, 0, 0}, 58.0f), "the other's");
 }

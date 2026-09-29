@@ -174,6 +174,8 @@ shared cores and from the tests; the README has the tables.
 | D1 | Shavings and chips: a stroke reports what it takes off (`tools/debris.h`). A shaving curls off the edge as it goes, coloured by the wood, breaks by the grain and comes away as a rigid body. Tear-out and pop-offs throw chips; undo takes them back. A shaving is within 1% of the volume the board lost. They fade away 2 s after coming to rest |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's flow measures its own). A quick puff: grains fly, land where their arc meets something and go. What reaches the ground piles up as one mound per spot (sawdust beyond the kerf's ends), until Sweep. Every tool's dust is within 1.5% of what the board lost |
 | W5-5 | Pieces and debris land and lie still. The project runs Jolt, named (left at DEFAULT it had been GodotPhysics3D all along, where small light bodies never came to rest). Shavings and chips rest on the board in the vise (a birth rule meant for loose pieces had them falling through it). Continuous collision detection on pieces and debris, a plane for the floor, tool pushes that never move a piece into anything, old debris fading rather than freezing in mid-air, a vise that won't clamp over a loose piece. `physics_calm` measures it all |
+| G4d | Your mallet: a piece with all of a plan's parts, every joint joined and held for good, is finished; E takes it up as yours (off the bench), and its weight is in every chop and tap (0.6 to 1.6 times the workshop mallet's 0.6 kg: the mallet made weighs 468 g, 0.78 times) |
+| G4c | The whole mallet made from the rack with the workshop's tools (`tools/test_godot.sh --long`): each part scribed, sawn, bored, chopped, checked as drawn to 0.5 mm, put together, glued, wedged, sawn flush, about 52 s of play at 8× the pace. On the way: a part goes with its drawing when its piece is sawn in two; a thin island after an earlier one is cut out; `SdfBody.is_idle` |
 | G4b | A brace and bit (B): set square on the face, turned by dragging round the bit (1.6 mm a turn, a ratchet), through and a millimetre beyond, held between the lines marked round it. The mortise bored first takes 105 turns and 44 blows (not 220). Chops rest on the highest wood under the edge and sever only where it is over wood; the check ignores field dips in the air (a hole run out past a face, seams where cuts barely overlap) |
 | G4a | Chopping the mallet's mortise measured: 220 firm blows with a 12 mm bench chisel (77 s at the quickest), over the ~150 that is too slow for play |
 | G3c | Glue (G, sets after a minute: for good), the wedge driven into the tenon's kerf (each blow less far as it tightens; locks the joint), T to tip a carried piece (the mallet stood handle-down in the vise), the proud tenon and wedge sawn flush |
@@ -198,8 +200,8 @@ shared cores and from the tests; the README has the tables.
 | T4-2 | The sanding block held to the real tools' rules (`tools/rubbing`): it rests on the high spots and takes them down first, only where it rubbed (patches lying along its way, adding up over the same ground), at a real rate (0.01 mm a metre at 120 grit in ash), faster where it bears on less. Grits 60–320, a small pad. Every direct tool follows the pointer at a working speed; every tool but the saw pushes loose pieces aside |
 | T4-1 | Chisels and gouges held to the real tools' rules: nothing cut under the work (a step ahead blocks, a steep rise stalls, a gentle one is followed), the blade never through it, force from the chip's own section, splinters instead of square pits, shallow defaults, tap / firm / heavy blows. The workshop: a working speed the tool follows at, a pace, the blade pushing loose pieces aside, where and why a stroke stops, depths by hundredths, an edge lock (along any edge, flush, level with an earlier cut's floor; Alt: free). Shavings are the chip's own width and section |
 
-Test counts today: 155 native tests (GCC and Clang, including golden images) and 24
-headless Godot checks.
+Test counts today: 156 native tests (GCC and Clang, including golden images), 25
+headless Godot checks, and one long one (the mallet made from the rack).
 
 ## 5. Where things stand
 
@@ -297,7 +299,7 @@ Shavings and chips (D1), dust (D2), and small pieces (D3): parts under 30 mm³ t
 free are taken out of the work and come away as chunks of debris, not pieces
 (docs/PLAN.md, D3).
 
-### G. Making an object (under way: G0 to G3, G4a and G4b done, G4c next)
+### G. Making an object (done)
 
 The engine cuts like the real tools, but a player can't make anything yet: no goal, no
 idea what a piece is meant to become, no joining. The user chose (docs/PLAN.md, G):
@@ -314,10 +316,10 @@ idea what a piece is meant to become, no joining. The user chose (docs/PLAN.md, 
 
 Steps: G0 stock in sizes (done), G1a plans and laying a part on the wood (done), G1b the
 sheet editor (done), G2 checking (done), G3 assembly (done: the fit, offering up and one
-body, glue and the wedge), G4 the mallet end to end (under way: G4a chopping the mortise
-measured at 220 blows, too slow; G4b a brace and bit, the mortise then 105 turns and 44
-blows; G4c the whole build and G4d your mallet next). They go ahead of Surface finish and
-Bake.
+body, glue and the wedge), G4 the mallet end to end (done: chopping the mortise measured
+at 220 blows, too slow; a brace and bit, the mortise then 105 turns and 44 blows; the whole
+mallet made from the rack with the workshop's tools, about 52 s of play at 8× the pace;
+the finished mallet taken up as yours, its weight in every blow). Surface finish is next.
 
 ### 3. Surface finish
 
@@ -393,7 +395,7 @@ materials. Every detail knob is already a parameter, so it is a settings change.
 ```sh
 git submodule update --init
 cmake -S native -B native/build -G Ninja && cmake --build native/build   # also builds game/bin/sdf_godot.*
-native/build/sdf_tests                                                   # 155 tests, golden images
+native/build/sdf_tests                                                   # 156 tests, golden images
 GODOT=/path/to/godot tools/test_godot.sh                                 # headless tier (about a minute)
 GODOT=/path/to/godot tools/test_godot.sh --gpu                           # GPU tier: renders, images, parity
 ```

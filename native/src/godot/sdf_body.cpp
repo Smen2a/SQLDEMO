@@ -2505,6 +2505,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("can_undo"), &SdfBody::can_undo);
 	ClassDB::bind_method(D_METHOD("can_redo"), &SdfBody::can_redo);
 	ClassDB::bind_method(D_METHOD("is_busy"), &SdfBody::is_busy);
+	ClassDB::bind_method(D_METHOD("is_idle"), &SdfBody::is_idle);
 	ClassDB::bind_method(D_METHOD("flush"), &SdfBody::flush);
 	ClassDB::bind_method(D_METHOD("set_stroke_preview", "enabled"), &SdfBody::set_stroke_preview);
 	ClassDB::bind_method(D_METHOD("get_stroke_preview"), &SdfBody::get_stroke_preview);

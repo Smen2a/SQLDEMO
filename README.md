@@ -799,7 +799,10 @@ chiselled free. That piece comes away too, and it rests where it lies.
   meets a rest cube across a face that is not clear, down to 0.05 mm. When no island cube
   touches a rest cube, every path from one to the other crosses clear air: the island
   truly came away. If they still touch at the finest (a web too thin for the samples to
-  see), nothing splits.
+  see), nothing splits. Cubes wholly in what an earlier cut-out dropped are free air: no
+  material is there, and the dropped field's floor of 0.05 mm would otherwise read as a
+  surface with no samples (a tenon's thin edge strip, sawn free after its thicker waste
+  came away, failed so).
 - **Keeping one side** (`Op::Keep`). Each side takes the region into its edit list as an
   undo step. Where it drops, the field becomes `max(d, 0.1 - d)`: at least 0.05 mm, so no
   surface is left and the octree takes those cells for empty. Kept and dropped cubes meet
@@ -1081,6 +1084,13 @@ How a part goes into its mate, measured before the workshop lets you put them to
   goes home snug in 20–35 ms; a tenon 0.2 mm fat drives; 1.2 mm fat, it won't pass the
   mouth; 0.4 mm thin, loose; a mortise narrowed below 30 mm stops it there.
 
+### A part sawn off its stock
+
+A saw cut through leaves the smaller side as the offcut, as before. A part laid out on the
+piece goes with the side its drawing lies on (the middle of its blank), its lines with it:
+the mallet's wedge, sawn off the end of its 150 mm strip, is the piece that comes away,
+and the strip left in the vise is no part. Undo straight after puts it back.
+
 ### Boring: the brace and bit
 
 The brace (**B**, after Layout on the hotbar; core `tools/boring.h`) takes an auger bit,
@@ -1137,6 +1147,39 @@ the mallet's handle to its head) and look at it (`game/workshop/assembling.gd`):
   in 26 blows; carried out of the vise, the two together. Glued, set, for good; stood on
   its handle in the vise; the wedge driven home in 24 blows (2.9 mm the first, 0.1 the
   last); sawn flush, the tops within 0.01 mm of the head's.
+
+### Your mallet
+
+Once every part of a plan is in one piece, every joint joined and held for good (glued or
+wedged), it is finished (`assembling.finished`). Lying on the bench, the line under the
+crosshair offers it: **E** takes it up as yours. It leaves the bench, and from then on it
+is the mallet every chop and every tap is struck with: a blow as hard as its weight against
+the workshop's own mallet (0.6 kg), 0.6 to 1.6 times. The chisel's panel names it ("your
+mallet (oak and ash, 468 g), blows × 0.78"). A mallet as drawn weighs 475 g: a firm chop
+with it goes 4.79 mm where the workshop's goes 6.06 (`game/tests/your_mallet`). A
+heavier head, a denser wood, would strike harder.
+
+### The mallet made from the rack
+
+`tools/test_godot.sh --long` (`game/tests/mallet_build`) makes the whole mallet with the
+workshop's tools, at 8× the pace: each part's stock from the rack let go over the vise,
+its sheet scribed on; the head sawn to length, bored with the brace (the workshop's own
+press and drag) and chopped; the handle sawn to length, its tenon's shoulders and cheeks
+sawn (the waste coming away piece by piece) and its kerf sawn; the wedge sawn off its strip
+and its taper sawn. Saws cut at their real rate, straight on the part, held to the scribed
+lines. Each part checks as drawn to 0.5 mm. Then put together as a player does: the handle
+drives home in 23 blows, glued, set; stood on its handle; the wedge driven home in 24; sawn
+flush; finished, and taken up as yours.
+
+| Part | Play at 8× (s) | Saw strokes | Brace turns | Blows | Edits |
+|---|---|---|---|---|---|
+| head | 26.3 | 26 | 13.1 | 44 | 130 |
+| handle | 9.5 | 57 | | | 78 |
+| wedge | 0.8 | 5 | | | 16 |
+| together | 15.1 | 6 | | 47 | 130 |
+
+About 52 s of play at 8× (the blows, 0.35 s each at the quickest, don't speed up with the
+pace); about 35 s to run headless.
 
 ## Layout
 
@@ -1394,13 +1437,14 @@ native/build/sdf_gallery out 2 2  # re-render the gallery images at 2x, 2x2 supe
 
 GODOT=/path/to/godot tools/test_godot.sh        # headless tier: the Godot-side logic
 GODOT=/path/to/godot tools/test_godot.sh --gpu  # GPU tier: renders, images, parity
+GODOT=/path/to/godot tools/test_godot.sh --long # the mallet made from the rack (on purpose)
 GODOT=/path/to/godot tools/run.sh --vulkan res://tests/gpu_bricks.tscn   # GPU vs CPU bricks,
                                            # with build and refinement times
 native/build/sdf_render carved_panel out/panel.png --view normals   # any demo, any view
 ```
 
-The Godot tests come in two tiers:
-- **Headless** (`tools/test_godot.sh`, about a minute on a CPU):
+The Godot tests come in three tiers:
+- **Headless** (`tools/test_godot.sh`, a few minutes on a CPU):
   - the extension loads;
   - the workshop's tools cut and undo;
   - stroke previews commit as previewed;
@@ -1425,7 +1469,9 @@ The Godot tests come in two tiers:
   - glue, the wedge, sawn flush (`wedge_glue`): glued and set, stood on its handle, wedged,
     the proud ends sawn off level with the head;
   - the mortise bored and chopped (`mortise_chop`): the head scribed and sawn to length,
-    three holes bored with the brace (held to the lines), the rest chopped out: as drawn.
+    three holes bored with the brace (held to the lines), the rest chopped out: as drawn;
+  - your mallet (`your_mallet`): the mallet as drawn put together, finished, taken up, a
+    chop with it as hard as its weight says.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.
@@ -1438,6 +1484,8 @@ The Godot tests come in two tiers:
 
   It needs xvfb-run. It runs on Mesa's software drivers too, but at about 2 s a frame on
   llvmpipe that takes around half an hour.
+- **Long** (`tools/test_godot.sh --long`, headless, run on purpose): the mallet made from
+  the rack (`mallet_build`), with its table of times, strokes, turns, blows and edits.
 
 After editing anything in `native/src/core/shared/`, run `tools/sync_shaders.sh`; the
 test suite fails if the Godot copies drift. After an intended visual change, rewrite the

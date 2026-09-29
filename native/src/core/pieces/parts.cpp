@@ -758,6 +758,25 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 		return 0u;
 	};
 
+	// What earlier cut-outs dropped (pieces that came away before: Op::Keep edits). There the
+	// field never falls below Region::kFloor / 2, so a shell of it reads as near a surface,
+	// though no material is there, nor any sample of it: a cube wholly in dropped cubes is air.
+	std::vector<std::pair<const Region *, unsigned>> drops;
+	for (const Edit &e : body.edits()) {
+		if (e.op == Op::Keep && e.region) {
+			const Region::Label gone = e.side == Region::Rest ? Region::Island : Region::Rest;
+			drops.push_back({e.region.get(), 1u << gone});
+		}
+	}
+	auto dropped = [&](vec3 lo, float size) {
+		for (const auto &[region, gone] : drops) {
+			if (region->labels(lo, size) == gone) {
+				return true;
+			}
+		}
+		return false;
+	};
+
 	// The region's tree, classified a level of new cubes at a time, in parallel.
 	const float lipschitz = std::max(body.lipschitz(), 1.0f);
 	const float clear = 0.5f * Region::kFloor;
@@ -770,8 +789,8 @@ CutOut cut_out(const Body &body, const Octree &octree, const Adf &adf, const Par
 		const float reach = lipschitz * n.size * 0.8660254f;
 		const float d = field(centre);
 		++evaluations;
-		if (d - reach >= clear) {
-			n.label = Region::Free; // air, and clear of every surface
+		if (d - reach >= clear || dropped(n.lo, n.size)) {
+			n.label = Region::Free; // air, and clear of every surface (or of any material)
 			return;
 		}
 		const unsigned bits = material(n.lo - vec3(1e-4f), n.lo + vec3(n.size + 1e-4f));

@@ -280,6 +280,10 @@ func join() -> void:
 	anchor.set_meta("members", members)
 	offer = {}
 	workshop.pieces.erase(piece)
+	# (a part that came off its stock as an offcut, a wedge sawn off its strip, is one no more)
+	for i in range(workshop.offcuts.size() - 1, -1, -1):
+		if workshop.offcuts[i].body == piece:
+			workshop.offcuts.remove_at(i)
 	piece.queue_free()
 	workshop._refresh_collider(anchor)
 	workshop._ui.refresh()
@@ -335,6 +339,37 @@ func locked(member: Dictionary) -> bool:
 
 
 ## Why a joined part is there for good ("glued", "wedged"), or "".
+## Whether a piece is a finished object: every part of one plan in it (as many of each as
+## the plan has), every joint of the plan joined, and each held for good (glued or wedged):
+## {"plan", "name" (the plan's)}, or {}.
+func finished(piece: RigidBody3D) -> Dictionary:
+	if piece == null or not is_instance_valid(piece) or piece.get_meta("members", []).is_empty():
+		return {}
+	var plan_id := ""
+	var counts := {}
+	for holder in workshop.holders_of(piece):
+		var tag: Dictionary = holder.get_meta("part", {})
+		if tag.is_empty() or (plan_id != "" and tag.plan != plan_id):
+			return {}
+		plan_id = tag.plan
+		counts[tag.part] = counts.get(tag.part, 0) + 1
+	var plan: Dictionary = workshop.plans.plans.get(plan_id, {})
+	if plan.is_empty():
+		return {}
+	for part in plan.get("parts", []):
+		if counts.get(part.id, 0) != int(part.get("count", 1)):
+			return {}
+	var joined := {}
+	for m in piece.get_meta("members", []):
+		if why_locked(m) == "":
+			return {}
+		joined[m.name] = true
+	for joint in plan.get("joints", []):
+		if not joined.has(joint.get("name", "")):
+			return {}
+	return {"plan": plan_id, "name": plan.get("name", plan_id)}
+
+
 func why_locked(member: Dictionary) -> String:
 	if member.get("glued_at", -1.0) >= 0.0 and clock - member.glued_at >= GLUE_SET:
 		return "glued"

@@ -52,7 +52,7 @@ const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane f
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, B, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
-		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench   F: out of the vise   R: turn what you carry   T: tip it   P: plans\n" + \
+		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench, take up a finished mallet as yours   F: out of the vise   R: turn what you carry   T: tip it   P: plans\n" + \
 		"Carrying a part, its mate in the vise: E offers it up, the wheel pushes it in, a click taps it with the mallet, G glues it, E lets go   F on a joined part: draw it out"
 
 var workshop
@@ -62,6 +62,7 @@ var _settings_boxes := {}
 var _sliders := {}  # "tool/key" -> [slider, its value label, format]: what the wheel also sets
 var _variants := {} # family -> its variant OptionButton
 var _blows := {}    # family -> its blow OptionButton (a chop's strength)
+var _mallet_labels: Array[Label] = [] # the chisel's and gouge's: the mallet they are struck with
 var _undo: Button
 var _redo: Button
 var _status: Label
@@ -101,6 +102,11 @@ func _ready() -> void:
 		_slider(box, family, "angle", "Angle", "%.0f°")
 		_blows[family] = _choice(box, "Blow", ["Tap", "Firm", "Heavy"], 1, func(i):
 			workshop.set_setting(family, "blow", workshop.BLOWS[i]))
+		# What it is struck with: the workshop's mallet, or yours.
+		var struck := Label.new()
+		struck.modulate = Color(1, 1, 1, 0.8)
+		box.add_child(struck)
+		_mallet_labels.append(struck)
 		edge_boxes[family] = box
 	var chisel: VBoxContainer = edge_boxes.chisel
 	var rasp := VBoxContainer.new()
@@ -412,6 +418,9 @@ func refresh() -> void:
 				_variants[family].select(i)
 	for family in _blows:
 		_blows[family].select(maxi(workshop.BLOWS.find(workshop.settings[family].get("blow", 1.0)), 0))
+	for label in _mallet_labels:
+		label.text = "Mallet: the workshop's (%.0f g)" % (workshop.WORKSHOP_MALLET * 1000.0) if workshop.mallet.is_empty() \
+				else "Mallet: %s, blows × %.2f" % [workshop.mallet.name, workshop.blow_weight()]
 	# The wheel sets these too, while a stroke is planned.
 	for id in _sliders:
 		var parts: PackedStringArray = id.split("/")

@@ -207,6 +207,9 @@ public:
 	bool can_redo() const { return stats_.get("can_redo", false); }
 	// Whether edits are still being applied (a batch running or queued).
 	bool is_busy() const { return job_.valid() || !queue_.empty(); }
+	// Whether it has nothing left to do: not busy, and no look for crumbs or an island left by
+	// the cuts still to come (it looks once it falls idle).
+	bool is_idle() const { return !is_busy() && check_region_.empty(); }
 	// Whether strokes are drawn by the shader while the tool moves and applied when it lifts
 	// off (on), or applied as the tool moves (off). Takes effect from the next stroke.
 	void set_stroke_preview(bool enabled) { stroke_preview_ = enabled; }

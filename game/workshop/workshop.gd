@@ -1,12 +1,12 @@
 extends Node3D
 
-## The workshop: a room with a workbench, and eight hand tools, every one an SDF body. You
-## walk about it in first person (WASD, the mouse to look, Shift to hurry; room.gd,
-## player.gd); the hotbar at the bottom holds the tools (1 to 9 and B, the wheel; 0
-## empty-handed),
-## the one in hand held in view. E picks up a piece of work lying about (carried in front
-## of the eyes; R turns it, the wheel reaches it), takes a new board from a stack on the
-## lumber rack, or lets go of what is carried: let go on the vise, an empty vise takes it,
+## The workshop: a room with a workbench, and hand tools, every one an SDF body. You walk
+## about it in first person (WASD, the mouse to look, Shift to hurry; room.gd, player.gd);
+## the hotbar at the bottom holds the tools (1 to 9 and B, the wheel; 0 empty-handed), the
+## one in hand held in view. E picks up a piece of work lying about (carried in front of the
+## eyes; R turns it, the wheel reaches it; a finished mallet it takes up as yours:
+## take_up()), takes a new board from a stack on the lumber rack, or lets go of what is
+## carried: let go on the vise, an empty vise takes it,
 ## squared (flat, along the bench, on its top); F takes the piece in the vise out. At the
 ## bench, E steps up to it: the view comes down over the work in the vise (the mouse freed;
 ## Esc steps back), the piece the tools work on. There, with a tool (Tab for its
@@ -124,6 +124,9 @@ const PUSHED := ["chisel", "gouge", "spokeshave"]
 const BRACE_TURNS := 2.0
 const CRANK := 60.0
 const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
+## kg: the workshop's own mallet, which chops and taps are struck with until one made here is
+## taken up (then a blow is as hard as that one's weight against this, 0.6 to 1.6 times).
+const WORKSHOP_MALLET := 0.6
 const EDGE_REACH := 6.0 # mm round where a stroke is locked that edge lock looks for an edge
 const FLUSH := 0.05 # mm a tool locked to an edge keeps its side off it
 const EDGE_COLOUR := Color(0.35, 0.9, 1.0)
@@ -288,6 +291,9 @@ var _target := 0.0        # mm along it the pointer asks for (the tool follows a
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
 var _goal := Vector3.ZERO # where the pointer asks it to be (it follows at its working speed)
 var _last_blow := -1.0    # s: when the mallet last struck
+## Your mallet, once one made here is taken up (take_up()): {"piece" (off the bench: hidden,
+## still, no longer a piece of work), "mass" (kg), "name"}; {} while the workshop's is used.
+var mallet := {}
 var _crank := 0.0         # radians: the brace's grip about its bit (unwrapped; clockwise from above is negative)
 var _crank_goal := 0.0    # where the pointer asks it to be (it follows at BRACE_TURNS)
 var _crank_seen := false  # the pointer has been read round the bit since the brace was set
@@ -447,6 +453,8 @@ func interact() -> void:
 	var thing: Object = hit.collider
 	if thing.has_meta("bench") or (thing == clamped and clamped != null):
 		enter_work()
+	elif thing.has_meta("workpiece") and not assembling.finished(thing).is_empty():
+		take_up(thing)
 	elif thing.has_meta("workpiece"):
 		pick_up(thing)
 	elif thing.has_meta("stock"):
@@ -455,6 +463,44 @@ func interact() -> void:
 		_ui.open_plans()
 	elif thing.has_meta("pad"):
 		_ui.open_editor("", false, true)
+
+
+## Takes up a finished object (assembling.finished()) as your mallet: it leaves the bench
+## (hidden, held still, no longer a piece of work) and from now on its weight is in every
+## blow of a chop and tap of an assembly (blow_weight()).
+func take_up(piece: RigidBody3D) -> void:
+	var made: Dictionary = assembling.finished(piece)
+	if made.is_empty():
+		return
+	if piece == clamped:
+		_unclamp()
+	if piece == held:
+		held = null
+	var mass := 0.0
+	var woods: Array[String] = []
+	for body in bodies_of(piece):
+		mass += body.get_mass()
+	for holder in holders_of(piece):
+		var tag: Dictionary = holder.get_meta("part", {})
+		var wood_of: String = plans.part(tag.get("plan", ""), tag.get("part", "")).get("wood", "")
+		if wood_of != "" and not woods.has(wood_of):
+			woods.append(wood_of)
+	pieces.erase(piece)
+	piece.freeze = true
+	piece.visible = false
+	piece.collision_layer = 0
+	piece.collision_mask = 0
+	if not mallet.is_empty() and is_instance_valid(mallet.piece):
+		mallet.piece.queue_free() # (the one it takes the place of)
+	mallet = {"piece": piece, "mass": mass,
+			"name": "your %s (%s, %.0f g)" % [String(made.name).to_lower(), " and ".join(woods), mass * 1000.0]}
+	_ui.refresh()
+
+
+## How hard the mallet in use strikes, against the workshop's own: its weight over
+## WORKSHOP_MALLET's, 0.6 to 1.6 times (1 with the workshop's).
+func blow_weight() -> float:
+	return 1.0 if mallet.is_empty() else clampf(mallet.mass / WORKSHOP_MALLET, 0.6, 1.6)
 
 
 ## A new piece of stock from a stack on the rack (room.gd), into the hands: off the top of the
@@ -660,6 +706,9 @@ func prompt() -> String:
 	if thing.has_meta("bench"):
 		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
 	if thing.has_meta("workpiece"):
+		var made: Dictionary = assembling.finished(thing)
+		if not made.is_empty():
+			return "E: take up the %s as yours" % String(made.name).to_lower()
 		return "E: pick up the %s" % _name_of(thing)
 	if thing.has_meta("plans"):
 		return "E: open the plan book"
@@ -1398,6 +1447,8 @@ func _stroke_settings() -> Dictionary:
 	s["length"] = _lock.length
 	s["seed"] = _lock.seed
 	s["pace"] = pace # (for the tools that take off at a rate)
+	if is_chopping():
+		s["blow"] = s.get("blow", 1.0) * blow_weight() # (struck with your mallet, as hard as its weight)
 	if not _lock.get("limits", {}).is_empty():
 		s["limits"] = _lock.limits
 	return s
@@ -1461,6 +1512,8 @@ func undo() -> void:
 		# Straight after a split: the pieces go back together.
 		var offcut: Dictionary = offcuts[last]
 		offcuts.remove_at(last)
+		if offcut.get("part_moved", false):
+			holder().set_meta("part", offcut.body.get_meta("part")) # (back with the piece it came off)
 		pieces.erase(offcut.body)
 		offcut.body.queue_free()
 		board.rejoin()
@@ -1529,14 +1582,32 @@ func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D, sdf = nul
 	# As the last saw stroke would: a nudge off the kerf (about 6 mm of slide).
 	body.linear_velocity = normal * 0.25
 	body.freeze = island and not split.visible
+	var moved := not island and _part_follows(from, sdf, body, point, normal)
 	# The piece's step count once its half-space lands (undo then rejoins the pieces).
 	offcuts.append({"body": body, "piece": split, "from": from, "sdf": sdf, "steps": sdf.get_stats().get("steps", 0) + 1,
-			"spawn": body.global_transform, "island": island})
+			"spawn": body.global_transform, "island": island, "part_moved": moved})
 	if not body.freeze:
 		# Its piece's collider no longer covers it (hollowed where an island came out), before the
 		# piece's edit lands: else the offcut starts inside it and is thrown clear.
 		_refresh_collider(from)
 	_ui.refresh()
+
+
+## A part drawn on a piece goes with the side of a cut its drawing lies on (the middle of its
+## blank), its lines with it: a wedge sawn off the end of its strip is the piece that comes
+## away, and the strip left in the vise is no part. Says whether it went.
+func _part_follows(from: RigidBody3D, sdf, body: RigidBody3D, point: Vector3, normal: Vector3) -> bool:
+	var owner: Object = from if sdf == from.get_meta("sdf") else sdf
+	var tag: Dictionary = owner.get_meta("part", {})
+	if tag.is_empty():
+		return false
+	var middle: Vector3 = sdf.to_global(tag.placement * (Plans.size_of(plans.part(tag.plan, tag.part)) * 0.5))
+	if (middle - point).dot(normal) <= 0.0:
+		return false
+	body.set_meta("part", tag)
+	body.set_meta("marks", layout.marks_of(owner).duplicate())
+	owner.remove_meta("part")
+	return true
 
 
 ## Crumbs came away from a piece (bits too small to be pieces of work) and it took them out,
@@ -1988,7 +2059,7 @@ func _walk_input(event: InputEvent) -> void:
 				MOUSE_BUTTON_WHEEL_DOWN:
 					assembling.push(-step)
 				MOUSE_BUTTON_LEFT:
-					assembling.tap(settings.chisel.get("blow", 1.0))
+					assembling.tap(settings.chisel.get("blow", 1.0) * blow_weight())
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match (event as InputEventKey).keycode:
@@ -2090,6 +2161,8 @@ func _process(delta: float) -> void:
 	# as it now is, and a few physics steps later (once the collider is among the bodies it
 	# can meet) the island is set down on what is under it, and let go.
 	for offcut in offcuts:
+		if not is_instance_valid(offcut.body):
+			continue
 		if offcut.body.freeze and offcut.piece.visible:
 			if not offcut.has("release"):
 				_refresh_collider(offcut.from)

@@ -23,8 +23,8 @@ This revision merges those into shared capabilities and keeps finished work to o
   sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
   (drawing plans on paper), G2 (checking a part against its drawing) and G3 (a joint's
   fit; offering a part up and tapping it home, one body; glue, the wedge, sawn flush) are
-  done; G4 (the mallet end to end) is under way: G4a (chopping measured) and G4b (the
-  brace and bit) done, G4c (the whole build) next.
+  done, and G4 (the mallet end to end: chopping measured, the brace and bit, the whole
+  build from the rack, your mallet): G is done. Surface finish (3) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -819,7 +819,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0 to G3, G4a and G4b done; G4c next)
+## G. Making an object (done)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -882,8 +882,8 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   - **G4a** — chopping the mortise, measured (done, below).
   - **G4b** — the brace and bit, since it was too slow (done, below).
   - **G4c** — the whole build from the rack with the real tools (`mallet_build`, in
-    `tools/test_godot.sh --long`).
-  - **G4d** — the finished mallet taken up as yours, its weight in the blows.
+    `tools/test_godot.sh --long`) (done, below).
+  - **G4d** — the finished mallet taken up as yours, its weight in the blows (done, below).
 
 ### G0 — stock in sizes (done)
 - **`demo::stock(material, size)`:** a blank of a wood, `size` mm (length along x, the
@@ -1189,6 +1189,55 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   (15 s), none past the lines. In the workshop, through its press and drag at 8× pace:
   each hole through (56 mm), where the lines hold it (set down 3 mm past the end and 3 mm
   off the middle); 44 blows; checked: as drawn to 0.5 mm.
+
+### G4c — the whole build from the rack (done)
+- **`game/tests/mallet_build.gd`, the long tier** (`tools/test_godot.sh --long`): each
+  part's stock taken from its stack (`take_stock`), let go over the vise, its sheet scribed
+  on; the head sawn to length, bored with the brace through the workshop's press and drag,
+  chopped to the lines; the handle sawn to length, its tenon's four shoulders sawn across
+  and four cheeks sawn in from the end (each down to its line: a floor at the tenon's face,
+  or at the shoulder), its kerf sawn; the wedge sawn off its strip and its taper sawn from
+  the thin end. Saws at their real rate, straight on the part's body; 8× the pace. Each
+  checked (K) as drawn to 0.5 mm. Then put together as `wedge_glue` does, sawn flush,
+  recognised as finished and taken up (G4d).
+- **Measured:** play at 8× the pace (the saws' travel at their working speed, the brace's
+  turns, the blows at 0.35 s): the head 26.3 s (26 strokes, 13.1 turns, 44 blows), the
+  handle 9.5 s (57 strokes), the wedge 0.8 s (5), putting together 15.1 s (47 blows: the
+  handle *drives* home in 23, the wedge in 24; 6 strokes flush): about 52 s. About 35 s
+  to run headless.
+- **Found on the way:**
+  - **A part goes with its drawing** when a saw cut splits its piece (`_part_follows`):
+    the smaller side is still the offcut, but the wedge, sawn off the end of its strip,
+    took the strip's part tag with the strip. Now the tag and the lines go with the side
+    the part's middle lies on (and back on undo straight after).
+  - **A thin island after an earlier one** (`cut_out`): a tenon's edge strip (1.65 mm
+    thin), sawn free after the thicker waste had come away, was found but not cut out
+    ("material the samples do not show"): where an earlier cut-out dropped material, the
+    field never falls below 0.05 mm, a shell of it read as near a surface with no samples.
+    Cubes wholly in dropped cubes are now free air (`test_mortise`: the tenon's four
+    wastes cut out one after another).
+  - **A joined part that was an offcut** (the wedge) kept its record in the workshop's
+    offcuts, its rigid body freed: now dropped when it joins.
+  - **`SdfBody.is_idle()`:** not busy, and no look for crumbs or an island still to come
+    (it looks once idle): a script waiting on it sees each cut's waste come away before
+    the next cut.
+
+### G4d — your mallet (done)
+- **`assembling.finished(piece)`:** every part of one plan in the piece (as many of each as
+  it has), every joint of the plan joined, each held for good: {plan, name}.
+- **Taken up** (`workshop.take_up`): E on a finished piece lying about (the line: "E: take
+  up the mallet as yours"). It leaves the bench (hidden, frozen, out of the pieces) and is
+  kept as `workshop.mallet` ({piece, mass (all its parts', kg), name: "your mallet (oak and
+  ash, 468 g)"}). Taking up another puts the first away.
+- **Its weight in the blows:** `blow_weight()` = clamp(mass / 0.6 kg, 0.6, 1.6), 0.6 kg being
+  the workshop's own mallet (`WORKSHOP_MALLET`); a chop's blow and an assembly's tap are
+  struck that much harder or softer. The chisel's and gouge's panels name the mallet in
+  use. A new board in the vise leaves it yours.
+- **Measured** (`game/tests/your_mallet`, headless): the mallet as drawn, glued but not
+  wedged, is not finished; wedged, it is; let go on the bench, taken up with E: 475 g, blows
+  0.79 times; a firm chop on the ash board 4.79 mm deep where the workshop's mallet goes
+  6.06 (0.79 times). The mallet made from the rack weighs 468 g (0.78 times): an oak head of
+  110 × 70 × 55 is lighter than a joiner's beech mallet.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:
