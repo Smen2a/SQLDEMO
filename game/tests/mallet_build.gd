@@ -37,7 +37,9 @@ var _rows: Array[String] = []
 
 
 func _ready() -> void:
-	get_tree().create_timer(1800.0).timeout.connect(func():
+	# (Rendered in software, at seconds a frame, it takes the best part of an hour.)
+	var most := 1800.0 if DisplayServer.get_name() == "headless" else 7200.0
+	get_tree().create_timer(most).timeout.connect(func():
 		push_error("mallet build: timed out")
 		get_tree().quit(1))
 	_out = user_arg("--out", "")
