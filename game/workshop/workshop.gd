@@ -545,7 +545,10 @@ func _vise_pose(piece: RigidBody3D) -> Transform3D:
 	var third := 3 - up - along
 	square[third] = square[(third + 1) % 3].cross(square[(third + 2) % 3])
 	var turn := Basis(square[0], square[1], square[2]) * inner.inverse()
+	# Set down by all of it: parts joined into it (a handle standing on the bench, its head up).
 	var extent := _extent(sdf, Transform3D(turn, Vector3.ZERO) * sdf.transform)
+	for body in bodies_of(piece):
+		extent = extent.merge(_extent(body, Transform3D(turn, Vector3.ZERO) * body.transform))
 	var middle := extent.get_center()
 	return Transform3D(turn, Vector3(-middle.x, -extent.position.y, -middle.z))
 
@@ -583,6 +586,13 @@ func _extent(sdf, placed: Transform3D) -> AABB:
 func turn_held() -> void:
 	if held != null:
 		_hold_turn = Basis(Vector3.UP, PI / 2) * _hold_turn
+
+
+## T: the carried piece tipped a quarter about the horizontal (across the view): stood on end,
+## laid down, turned over.
+func tip_held() -> void:
+	if held != null:
+		_hold_turn = Basis(Vector3.RIGHT, PI / 2) * _hold_turn
 
 
 ## The wheel while carrying: nearer (-) or farther.
@@ -623,6 +633,12 @@ func prompt() -> String:
 	if thing == clamped and clamped != null:
 		var member = assembling.member_at(player.eye(), player.forward())
 		if member != null:
+			var why := ""
+			for m in clamped.get_meta("members", []):
+				if m.sdf == member:
+					why = assembling.why_locked(m)
+			if why != "":
+				return "E: work on the %s   (the %s is %s in)" % [_name_of(thing), member.get_meta("kind", "part"), why]
 			return "E: work on the %s   F: draw the %s out" % [_name_of(thing), member.get_meta("kind", "part")]
 		return "E: work on the %s   F: take it out of the vise" % _name_of(thing)
 	if thing.has_meta("bench"):
@@ -1740,7 +1756,11 @@ func _clamp(piece: RigidBody3D) -> void:
 	clamped = piece
 	board = piece.get_meta("sdf")
 	piece.freeze = true
-	room.close_jaws(_extent(board, board.global_transform).size.z)
+	# The jaws close on the narrowest part (parts joined: the handle, not its head).
+	var width := INF
+	for body in bodies_of(piece):
+		width = minf(width, _extent(body, body.global_transform).size.z)
+	room.close_jaws(width)
 
 
 ## Takes the piece out of the vise (it is loose again; its edits go with it).
@@ -1916,6 +1936,8 @@ func _walk_input(event: InputEvent) -> void:
 	if assembling.offering():
 		if event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_E:
 			assembling.let_go()
+		elif event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_G:
+			assembling.glue()
 		elif event is InputEventMouseButton and event.pressed:
 			var button := event as InputEventMouseButton
 			var step: float = assembling.FINE if button.ctrl_pressed else assembling.PUSH
@@ -1934,12 +1956,17 @@ func _walk_input(event: InputEvent) -> void:
 					return
 				interact()
 			KEY_F:
+				# On a joined part: drawn out along its joint (if it is not held for good); never the
+				# whole piece out of the vise.
 				var member = assembling.member_at(player.eye(), player.forward()) if held == null else null
-				if member != null and assembling.pull_out(member):
+				if member != null:
+					assembling.pull_out(member)
 					return
 				take_out()
 			KEY_R:
 				turn_held()
+			KEY_T:
+				tip_held()
 			KEY_ESCAPE:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	elif event is InputEventMouseButton and event.pressed:

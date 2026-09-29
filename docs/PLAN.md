@@ -21,9 +21,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
   paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
   sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
-  (drawing plans on paper), G2 (checking a part against its drawing), G3a (a joint's
-  fit) and G3b (offering a part up, tapping it home, the assembly as one body) are done;
-  G3c (glue and the wedge) is next.
+  (drawing plans on paper), G2 (checking a part against its drawing) and G3 (a joint's
+  fit; offering a part up and tapping it home, one body; glue, the wedge, sawn flush) are
+  done; G4 (the mallet end to end) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -75,6 +75,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G3c | Glue (G while offering; sets after a minute: the joint for good), the wedge (a joint driven tighter, opening its kerf: each blow drives less; locks itself and the tenon), T tips a carried piece (the mallet stood handle-down in the vise, set by all its parts), the proud tenon and wedge sawn flush (a joined part splits). `wedge_glue` |
 | G3b | Offering up (`assembling.gd`): a part carried to its mate in the vise lines up with the joint (a ghost), E puts it on the joint, the wheel pushes it in as far as a hand can, clicks tap a tight fit home with the mallet, E lets go: one rigid body (its SdfBody in the mate's, its part's metas with it), the tools on whichever part is under the pointer; undo straight after, or F and the wheel back, draws it out. `assembly` |
 | G3a | A joint's fit (`plans/joint`: how two parts go together; `pieces/fit`: a part's surface pushed along the joint into its mate, where it binds, loose / snug / drives / won't go; `SdfBody.joint_pose`, `SdfBody.fit`). `test_fit`, `joint_fit` |
 | G2 | Checking a part (`plans/check`, `SdfBody.check_part`, `checking.gd`; K): proud and short places against the part as drawn, joined into spots, named, dotted on the wood. `check_part` |
@@ -817,7 +818,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0, G1a, G1b, G2, G3a and G3b done)
+## G. Making an object (current: G0 to G3 done; G4 next)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -1095,8 +1096,44 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
   out of the vise and carried, the two go together.
 - **Left for later:** a joined part's marks drawn only while the tools are on it; a
   tenon standing proud of the head in the vise goes into the bench top (the vise holds a
-  piece on it); an assembly offered to another (the wedge into the handle joined in the
-  head: G3c).
+  piece on it).
+
+### G3c — glue, the wedge, sawn flush (done)
+- **Glue** (`assembling.gd`): G while a part is offered up spreads glue on the joint (the
+  prompt says so). Joined glued, the glue sets `GLUE_SET` (60 s) of game time later (the
+  assembling clock: the frames' deltas). Wet, the joint still comes apart (undo, F);
+  set, it is there for good (`locked`: F says it is glued in, undo leaves it). The part's
+  panel lists each joined part and how it is held ("glued: sets in 42 s", "held for good
+  (glued)", "comes out again (F)").
+- **The wedge:** a joint that is driven tighter: `SdfBody.fit(..., drive)`, a wedge's
+  2.5 mm (it opens its kerf) against 0.5 for a tenon. The wedge goes in with its middle
+  line along the kerf (tapered on one face, tipped by half its taper, `joint_pose`), so it
+  opens the kerf evenly: 0.1 + 0.044 mm a millimetre in, each side. A blow drives it less
+  far the tighter it is (`DRIVE × blow × max(0.2, 1 − tight/drive)`): 2.9 mm the first,
+  0.1 the last, 24 blows home. Driven 10 mm or more, it holds itself and the joint it is
+  in for good. Offered to the handle already joined in the head: `candidate()` finds the
+  joint among the piece's parts (`holders_of`).
+- **On end:** T tips a carried piece a quarter about the horizontal (across the view). The
+  vise sets a piece of joined parts by all of them (`_vise_pose`: squared by its first
+  part, set down by every part's extent) and closes on the narrowest: the mallet stands on
+  its handle, the head up, the tenon's end 3 mm proud of it, where the wedge goes.
+- **Sawn flush:** a saw through a joined part splits that part (`_on_separated(..., sdf)`,
+  from G3b): the wedge's and the tenon's proud ends come away as offcuts, the parts still
+  one.
+- **F on a joined part** never takes the whole piece out of the vise (it did when the part
+  was held for good: found by the test).
+- **Offered, the part is kept on its joint** every physics step, its velocities stopped
+  (still moving as the hands steered it, it drifted off in the frame after).
+- **Measured** (`native/tests/test_fit.cpp`, `game/tests/wedge_glue`, headless and
+  rendered): the wedge into the kerf drives home, its interference 0.1 + 0.044 mm a mm
+  along the way; in the workshop, the handle glued, undone wet, glued again, set (F and
+  undo leave it, the head still in the vise); out, tipped, back in the vise on its
+  handle (its foot at the bench top, the tenon 3.0 mm proud); the wedge binding at the
+  mouth, driven home in 24 blows, wedged; sawn flush: two offcuts, the wedge's and the
+  tenon's tops within 0.01 mm of the head's.
+- **Left for later:** the kerf does not really open (nor the tenon spread: the wedge's
+  hold is by rule); glue shows only in words; the wedge's tip, eased as stock is, does not
+  seat square on the kerf's bottom.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

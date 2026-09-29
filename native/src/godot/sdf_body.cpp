@@ -480,7 +480,7 @@ Dictionary SdfBody::joint_pose(const Dictionary &a_part, const String &a_feature
 }
 
 Dictionary SdfBody::fit(SdfBody *mate, const Transform3D &start, const Vector3 &axis, double travel, double step,
-		const AABB &region) {
+		const AABB &region, double drive) {
 	Dictionary out;
 	if (mate == nullptr || !session_.has_adf() || !mate->session_.has_adf() || travel < 0.0) {
 		UtilityFunctions::push_error("SdfBody.fit: needs two bodies and a way in");
@@ -505,8 +505,10 @@ Dictionary SdfBody::fit(SdfBody *mate, const Transform3D &start, const Vector3 &
 	pose.origin = to_vec(start.origin);
 	const Body &mate_body = mate->session_.body();
 	const Octree &mate_octree = mate->session_.octree();
+	FitLimits limits;
+	limits.drive = float(std::max(drive, 0.05));
 	const Fit f = fit_along(points, [&](vec3 p) { return mate_octree.distance(mate_body, p); }, pose, to_vec(axis),
-			float(travel), float(step));
+			float(travel), float(step), limits);
 	out["kind"] = fit_name(f.kind);
 	out["stops_at"] = double(f.stops_at);
 	out["home"] = f.home;
@@ -2433,8 +2435,8 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("check_part", "part", "placement", "tolerance"), &SdfBody::check_part, DEFVAL(0.5));
 	ClassDB::bind_static_method("SdfBody", D_METHOD("joint_pose", "a_part", "a_feature", "b_part", "b_feature"),
 			&SdfBody::joint_pose);
-	ClassDB::bind_method(D_METHOD("fit", "mate", "start", "axis", "travel", "step", "region"), &SdfBody::fit, DEFVAL(0.5),
-			DEFVAL(AABB()));
+	ClassDB::bind_method(D_METHOD("fit", "mate", "start", "axis", "travel", "step", "region", "drive"), &SdfBody::fit,
+			DEFVAL(0.5), DEFVAL(AABB()), DEFVAL(0.5));
 	ClassDB::bind_method(D_METHOD("load_tool", "name", "settings"), &SdfBody::load_tool, DEFVAL(Dictionary()));
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);

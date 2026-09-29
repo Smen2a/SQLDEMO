@@ -1086,12 +1086,24 @@ the mallet's handle to its head) and look at it (`game/workshop/assembling.gd`):
   put in the vise and worked as one, the tools working on whichever part is under the
   pointer (its lines, its check, its undo).
 - **Apart again:** undo straight after joining takes the part out into your hands; **F**
-  on a joined part puts it back on its joint, to be drawn out with the wheel. Glue and the
-  wedge, which hold a joint for good, come next.
-- **Measured** (`game/tests/assembly`): the handle offered up with its tenon on the
-  mortise's mouth to 0.01 mm, pushed home, joined; undone and joined again; the tools on
-  the handle, then the head; drawn out; a tenon 0.2 mm fat driven home in 21 blows;
-  carried out of the vise, the two together.
+  on a joined part puts it back on its joint, to be drawn out with the wheel; until it is
+  held for good.
+- **Glue:** **G** while offering a part up. Joined, the glue sets a minute (game time)
+  later; wet, the joint still comes apart; set, it is for good. The panel says how each
+  joined part is held.
+- **The wedge:** the mallet's wedge goes into the tenon's kerf from its end. Stand the
+  mallet on its handle first: **T** tips what you carry a quarter over (twice: handle
+  down), and the vise sets a piece of joined parts by all of them (the handle's foot on
+  the bench, the head up). The wedge binds at once; each blow drives it on, less far as
+  it opens the kerf. Driven in, it holds itself and the handle for good.
+- **Sawn flush:** saw the proud tenon and wedge off level with the head: each comes away
+  as an offcut, the mallet still one piece.
+- **Measured** (`game/tests/assembly`, `game/tests/wedge_glue`): the handle offered up
+  with its tenon on the mortise's mouth to 0.01 mm, pushed home, joined; undone and joined
+  again; the tools on the handle, then the head; drawn out; a tenon 0.2 mm fat driven home
+  in 26 blows; carried out of the vise, the two together. Glued, set, for good; stood on
+  its handle in the vise; the wedge driven home in 24 blows (2.9 mm the first, 0.1 the
+  last); sawn flush, the tops within 0.01 mm of the head's.
 
 ## Layout
 
@@ -1376,7 +1388,9 @@ The Godot tests come in two tiers:
     end and the mortise, then sawn to length: the mortise only;
   - a joint's fit (`joint_fit`): the handle into the head, as drawn, a little fat, too fat;
   - putting parts together (`assembly`): the handle offered up to the head, pushed home,
-    one body; undone, drawn out, a fat tenon tapped home, carried as one.
+    one body; undone, drawn out, a fat tenon tapped home, carried as one;
+  - glue, the wedge, sawn flush (`wedge_glue`): glued and set, stood on its handle, wedged,
+    the proud ends sawn off level with the head.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

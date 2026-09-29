@@ -96,8 +96,9 @@ public:
 	// {"kind" ("loose", "snug", "drives", "won't go"), "stops_at" (mm), "home", "seated",
 	// "most" (mm of interference on the way), "clearance" (mm, where it stops), "steps":
 	// [{t, interference, seated}], "points", "ms"}. Waits for both bodies' queued work.
+	// `drive`: the most interference the mallet drives (a wedge opens its kerf: more).
 	godot::Dictionary fit(SdfBody *mate, const godot::Transform3D &start, const godot::Vector3 &axis, double travel,
-			double step, const godot::AABB &region);
+			double step, const godot::AABB &region, double drive);
 	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
 	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
 	// cast shadows.

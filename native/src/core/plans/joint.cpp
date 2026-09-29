@@ -80,12 +80,16 @@ JointPose wedge_into_kerf(const Part &a, const Feature &kerf, const Part &b, con
 	const vec3 mouth_a(kerf.far ? sa.x : 0.0f, kerf.axis == 2 ? 0.5f * sa.y : kerf.at, kerf.axis == 2 ? kerf.at : 0.5f * sa.z);
 
 	const bool thin_far = taper.to <= taper.from;
-	const vec3 lead = thin_far ? vec3(1, 0, 0) : vec3(-1, 0, 0);
-	const float thin = thin_far ? taper.to : taper.from;
+	const float thin = thin_far ? taper.to : taper.from, fat = thin_far ? taper.from : taper.to;
 	const bool off_back = taper.face == Face::Back; // (the wood is then z 0 to its thickness)
-	const vec3 tip_b(thin_far ? sb.x : 0.0f, 0.5f * sb.y, off_back ? 0.5f * thin : sb.z - 0.5f * thin);
+	auto middle = [&](float x, float t) { return vec3(x, 0.5f * sb.y, off_back ? 0.5f * t : sb.z - 0.5f * t); };
+	const vec3 tip_b = middle(thin_far ? sb.x : 0.0f, thin), heel_b = middle(thin_far ? 0.0f : sb.x, fat);
+	// Its middle line (the heel's middle to the tip's) along the way in, so that it opens the
+	// kerf evenly both sides: tapered on one face, it goes in tipped by half its taper.
+	const vec3 lead = gl::normalize(tip_b - heel_b);
+	const vec3 across = gl::normalize(vec3(0, 0, 1) - lead * gl::dot(lead, vec3(0, 0, 1)));
 
-	j.home = rotation(lead, vec3(0, 0, 1), in, square);
+	j.home = rotation(lead, across, in, square);
 	j.home.origin = mouth_a + in * kerf.depth - j.home.turn(tip_b);
 	j.mirror = reflection(vec3(0.0f, 0.5f * sb.y, 0.0f), vec3(0, 1, 0));
 	j.axis = in;

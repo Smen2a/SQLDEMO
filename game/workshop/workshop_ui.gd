@@ -51,8 +51,8 @@ const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane f
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
 const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
-		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench   F: out of the vise   R: turn what you carry   P: plans\n" + \
-		"Carrying a part, its mate in the vise: E offers it up, the wheel pushes it in, a click taps it with the mallet, E lets go   F on a joined part: draw it out"
+		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench   F: out of the vise   R: turn what you carry   T: tip it   P: plans\n" + \
+		"Carrying a part, its mate in the vise: E offers it up, the wheel pushes it in, a click taps it with the mallet, G glues it, E lets go   F on a joined part: draw it out"
 
 var workshop
 
@@ -420,6 +420,8 @@ func _refresh_part() -> void:
 	var tag: Dictionary = piece.get_meta("part", {}) if piece != null else {}
 	var checking = workshop.checking
 	var said: Array[String] = checking.lines() if checking != null else []
+	if workshop.assembling != null:
+		said = workshop.assembling.joined_lines(workshop.clamped) + said
 	_part_box.visible = not tag.is_empty() or not said.is_empty()
 	if not tag.is_empty():
 		var plan: Dictionary = workshop.plans.plans.get(tag.plan, {})

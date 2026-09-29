@@ -31,7 +31,8 @@
 #   - plans: the rack's stock to size; a plan's sheet laid on the wood in pencil, the knife
 #     taking it; a plan drawn on the pad, saved, and laid out as the preset is; a part checked
 #     against its drawing, before and after it is sawn to length; a tenon's fit in its mortise;
-#     the handle offered up to the head in the vise, pushed and tapped home, one body
+#     the handle offered up to the head in the vise, pushed and tapped home, one body; glued,
+#     stood on end, wedged and sawn flush
 #
 # The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
 # at seconds a frame takes the best part of half an hour):
@@ -101,6 +102,7 @@ if [[ "$GPU" == 0 ]]; then
 	check check_part "check part: the part checked against its drawing" res://tests/check_part.tscn
 	check joint_fit "joint fit: the handle fits the head" res://tests/joint_fit.tscn
 	check assembly "assembly: the handle goes into the head" res://tests/assembly.tscn
+	check wedge_glue "wedge glue: the mallet glued, wedged and sawn flush" res://tests/wedge_glue.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
@@ -126,6 +128,7 @@ check crumbs_render "crumbs: the crumb came away" --render res://tests/crumbs.ts
 check plan_transfer_render "plan transfer: the plan is laid on the wood" --render res://tests/plan_transfer.tscn -- --out="$OUT"
 check check_part_render "check part: the part checked against its drawing" --render res://tests/check_part.tscn -- --out="$OUT"
 check assembly_render "assembly: the handle goes into the head" --render res://tests/assembly.tscn -- --out="$OUT"
+check wedge_glue_render "wedge glue: the mallet glued, wedged and sawn flush" --render res://tests/wedge_glue.tscn -- --out="$OUT"
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

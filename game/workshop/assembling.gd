@@ -9,8 +9,11 @@ extends Node
 ## body, the tools working on whichever part is hit (workshop.bodies_of); else it drops.
 ##
 ## Apart again: F on a joined part draws it back out along its joint (the wheel back, into the
-## hands), and undo straight after joining takes it out into the hands. (Glue and the wedge,
-## which hold a joint for good, come next.)
+## hands), and undo straight after joining takes it out into the hands; until it is held for
+## good. G while offering a part up glues it: joined, the glue sets GLUE_SET seconds later
+## (game time), and then the joint is for good. A wedge (a joint whose part opens its mate's
+## kerf: driven tighter, WEDGE_SPREAD) driven in holds itself, and the joint whose part it is
+## driven into, for good.
 
 const GHOST_COLOUR := Color(0.2, 0.45, 1.0)
 const PUSH := 1.0  # mm a notch of the wheel
@@ -20,6 +23,9 @@ const SNUG := 0.05 # mm: tighter than this, a hand's push binds (as the fit's sn
 const TIGHT := 0.5 # mm: tighter than this, not even the mallet drives it (the fit's drive)
 const HOLDS := 3.0 # mm in: let go further in, not loose, it holds
 const BLOW_INTERVAL := 0.3 # s between blows
+const GLUE_SET := 60.0 # s (game time) glue takes to set
+const WEDGE_SPREAD := 2.5 # mm a wedge is driven into its kerf's sides (it opens the kerf)
+const WEDGE_LOCKS := 10.0 # mm a wedge driven in holds its joint
 
 var workshop
 ## The part being offered up, or {}: its "piece" (the rigid body, frozen on the joint) and the
@@ -31,6 +37,8 @@ var offer := {}
 var _ghost: MeshInstance3D
 var _mesh := ImmediateMesh.new()
 var _last_blow := -10.0
+## Game time (s): the sum of the frames' deltas (glue sets by it).
+var clock := 0.0
 
 
 func _ready() -> void:
@@ -95,11 +103,15 @@ func offer_up() -> bool:
 		return false
 	var piece: RigidBody3D = c.piece
 	workshop.held = null
+	# (Still moving as the hands steered it: stopped, or it drifts off the joint.)
+	piece.linear_velocity = Vector3.ZERO
+	piece.angular_velocity = Vector3.ZERO
 	piece.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	piece.freeze = true
 	piece.gravity_scale = 1.0
 	piece.can_sleep = true
 	offer = c
+	offer.glued = false
 	_start(0.0)
 	return true
 
@@ -110,7 +122,8 @@ func _start(t: float) -> void:
 	var start := _relative(0.0)
 	var axis: Vector3 = (offer.p_still.basis * joint.axis).normalized()
 	var region: AABB = offer.p_moving * joint.region
-	offer.fit = offer.moving.fit(offer.still, start, axis, joint.travel, 0.5, region)
+	offer.drive = WEDGE_SPREAD if joint.kind == "wedge" else TIGHT
+	offer.fit = offer.moving.fit(offer.still, start, axis, joint.travel, 0.5, region, offer.drive)
 	offer.t = t
 	offer.said = _state()
 	_place()
@@ -168,7 +181,8 @@ func push(mm: float) -> void:
 
 
 ## A click: a blow with the mallet (`blow`: the chop's strength, 1 a firm one), driving a
-## tight fit on as far as it will go.
+## tight fit on as far as it will go: the tighter it is, the less far (a wedge goes in
+## quickly, then hardly at all).
 func tap(blow := 1.0) -> bool:
 	if not offering():
 		return false
@@ -177,7 +191,8 @@ func tap(blow := 1.0) -> bool:
 		return false
 	_last_blow = now
 	var was: float = offer.t
-	offer.t = maxf(offer.t, minf(offer.t + DRIVE * blow, _reach(TIGHT)))
+	var tight := clampf(_tightness_after(offer.t) / offer.drive, 0.0, 1.0)
+	offer.t = maxf(offer.t, minf(offer.t + DRIVE * blow * maxf(0.2, 1.0 - tight), _reach(offer.drive)))
 	offer.said = _state()
 	_place()
 	workshop._ui.refresh()
@@ -199,7 +214,7 @@ func _state() -> String:
 	var hand := _reach(SNUG)
 	if t >= fit.stops_at - 0.01 and not fit.home:
 		return "It won't go further: %s mm in of %s." % [_mm(t), _mm(travel)]
-	if t >= hand - 0.01 and hand < _reach(TIGHT):
+	if t >= hand - 0.01 and hand < _reach(offer.drive):
 		return "It binds, %.2f mm tight: tap it on with the mallet (click)." % _tightness_after(t)
 	return "%s mm in of %s: push it on (wheel)." % [_mm(t), _mm(travel)]
 
@@ -209,6 +224,13 @@ func _tightness_after(t: float) -> float:
 		if step.t > t + 0.01:
 			return step.interference
 	return 0.0
+
+
+## G while offering: glue on the joint (it sets once joined, GLUE_SET later).
+func glue() -> void:
+	if offering() and not offer.get("glued", false):
+		offer.glued = true
+		workshop._ui.refresh()
 
 
 ## E while offering: in far enough, and not loose, the two are one body; else it drops.
@@ -251,6 +273,7 @@ func join() -> void:
 	var to = offer.still if offer.held_moves else offer.moving
 	var members: Array = anchor.get_meta("members", []).duplicate()
 	members.append({"sdf": sdf, "to": to, "joint": offer.joint, "name": offer.name, "t": offer.t,
+			"glued_at": clock if offer.get("glued", false) else -1.0, "wedge": offer.joint.kind == "wedge",
 			"held_moves": offer.held_moves, "p_moving": offer.p_moving, "p_still": offer.p_still,
 			"held_name": offer.held_name, "mate_name": offer.mate_name,
 			"steps": [sdf.get_stats().get("steps", 0), to.get_stats().get("steps", 0)]})
@@ -289,6 +312,9 @@ func pull_out(sdf) -> bool:
 	var anchor = sdf.get_parent()
 	for member in anchor.get_meta("members", []):
 		if member.sdf == sdf:
+			if locked(member):
+				return false
+			var glued: bool = member.get("glued_at", -1.0) >= 0.0
 			var piece := _unjoin(member)
 			piece.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 			piece.freeze = true
@@ -296,9 +322,44 @@ func pull_out(sdf) -> bool:
 					"held_moves": member.held_moves, "moving": sdf if member.held_moves else member.to,
 					"still": member.to if member.held_moves else sdf, "p_moving": member.p_moving,
 					"p_still": member.p_still, "held_name": member.held_name, "mate_name": member.mate_name}
+			offer.glued = glued
 			_start(member.t)
 			return true
 	return false
+
+
+## Whether a joined part is there for good: its glue set, a wedge driven in, or a wedge
+## driven into it.
+func locked(member: Dictionary) -> bool:
+	return why_locked(member) != ""
+
+
+## Why a joined part is there for good ("glued", "wedged"), or "".
+func why_locked(member: Dictionary) -> String:
+	if member.get("glued_at", -1.0) >= 0.0 and clock - member.glued_at >= GLUE_SET:
+		return "glued"
+	if member.get("wedge", false) and member.t >= WEDGE_LOCKS:
+		return "wedged"
+	var anchor = member.sdf.get_parent()
+	if anchor != null:
+		for other in anchor.get_meta("members", []):
+			if other.get("wedge", false) and other.to == member.sdf and other.t >= WEDGE_LOCKS:
+				return "wedged"
+	return ""
+
+
+## The joined parts of a piece, in words: how each is held.
+func joined_lines(piece: RigidBody3D) -> Array[String]:
+	var out: Array[String] = []
+	if piece == null:
+		return out
+	for member in piece.get_meta("members", []):
+		var why := why_locked(member)
+		var held := "held for good (%s)" % why if why != "" else "comes out again (F)"
+		if why == "" and member.get("glued_at", -1.0) >= 0.0:
+			held = "glued: sets in %.0f s" % maxf(GLUE_SET - (clock - member.glued_at), 0.0)
+		out.append("The %s in the %s, %s mm in: %s." % [member.held_name, member.mate_name, _mm(member.t), held])
+	return out
 
 
 ## Undo straight after joining (neither part worked since): the joined part out into the
@@ -313,6 +374,8 @@ func undo() -> bool:
 	var last: Dictionary = members.back()
 	if last.sdf.get_stats().get("steps", 0) != last.steps[0] or last.to.get_stats().get("steps", 0) != last.steps[1]:
 		return false
+	if last.get("glued_at", -1.0) >= 0.0 and clock - last.glued_at >= GLUE_SET:
+		return false # (the glue has set)
 	var piece := _unjoin(last)
 	workshop.pick_up(piece)
 	workshop._ui.refresh()
@@ -332,10 +395,18 @@ func member_at(origin: Vector3, direction: Vector3):
 func prompt() -> String:
 	if not offering():
 		return ""
-	return "%s   Wheel: push in, draw out (Ctrl: finely)   Click: tap it with the mallet   E: let go" % offer.said
+	var glue := "glued" if offer.get("glued", false) else "G: glue it"
+	return "%s   Wheel: push in, draw out (Ctrl: finely)   Click: tap it with the mallet   %s   E: let go" % [offer.said, glue]
 
 
-func _process(_delta: float) -> void:
+## The offered part kept on its joint, each physics step.
+func _physics_process(_delta: float) -> void:
+	if offering():
+		_place()
+
+
+func _process(delta: float) -> void:
+	clock += delta
 	_mesh.clear_surfaces()
 	if workshop.mode != workshop.Mode.WALK or offering() or workshop.held == null:
 		return
