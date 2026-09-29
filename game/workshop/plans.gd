@@ -222,7 +222,7 @@ static func _mark_of(line: Dictionary, placement: Transform3D) -> Dictionary:
 ## undone by undo straight after; or, with settings.layout.scribe, scribed at once (one undo
 ## step). The piece becomes that part. False where it does not fit.
 func transfer(placed: Dictionary) -> bool:
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	var sdf = workshop.board
 	if piece == null or sdf == null or placed.is_empty() or not placed.get("fits", false):
 		return false
@@ -253,7 +253,7 @@ func transfer(placed: Dictionary) -> bool:
 ## A line drawn in pencil on the piece in the vise (layout.gd's pencil): kept as a mark,
 ## undone by undo straight after.
 func pencil(mark: Dictionary) -> void:
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	var sdf = workshop.board
 	if piece == null or sdf == null:
 		return
@@ -296,14 +296,26 @@ func undo(piece: Object, steps: int) -> bool:
 	return true
 
 
-## A plan's parts laid out: {part id: how many pieces are that part}.
+## A plan's parts laid out: {part id: how many pieces (or parts joined into one) are that
+## part}.
 func status(plan_id: String) -> Dictionary:
 	var out := {}
 	for p in plans.get(plan_id, {}).get("parts", []):
 		out[p.id] = 0
 	for piece in workshop.pieces:
-		if is_instance_valid(piece) and piece.has_meta("part"):
-			var tag: Dictionary = piece.get_meta("part")
-			if tag.plan == plan_id and out.has(tag.part):
+		if not is_instance_valid(piece):
+			continue
+		for holder in workshop.holders_of(piece):
+			var tag: Dictionary = holder.get_meta("part", {})
+			if tag.get("plan", "") == plan_id and out.has(tag.get("part", "")):
 				out[tag.part] += 1
+	return out
+
+
+## A plan's joints between two of its parts (either way round).
+func joints_between(plan_id: String, a: String, b: String) -> Array:
+	var out := []
+	for j in plans.get(plan_id, {}).get("joints", []):
+		if (j.get("a", "") == a and j.get("b", "") == b) or (j.get("a", "") == b and j.get("b", "") == a):
+			out.append(j)
 	return out

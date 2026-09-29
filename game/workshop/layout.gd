@@ -195,7 +195,7 @@ func _drawn(line: Dictionary, start: Vector3, now: Vector3) -> Dictionary:
 ## The knife or gauge by a pencil line on the face it is on (within SNAP mm of the point,
 ## body space): that line, to be knifed or gauged in as it was meant to be; else `line`.
 func _snap(line: Dictionary, p: Vector3, face: Vector3) -> Dictionary:
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	if piece == null:
 		return line
 	var best := SNAP
@@ -306,7 +306,7 @@ func release() -> void:
 ## step), and a mark on the piece.
 func scribe(line: Dictionary, from: float, to: float) -> void:
 	var sdf = workshop.board
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	if sdf == null or piece == null or line.is_empty() or absf(to - from) < DRAG:
 		return
 	var a: Vector3 = line.origin + line.dir * from
@@ -398,7 +398,7 @@ func forget_redo(piece: Object) -> void:
 ##   to it and no further.
 func hold(lock: Dictionary, tool: String) -> Dictionary:
 	held = []
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	if piece == null or workshop.board == null or lock.get("free", false) or tool == "sanding_sponge":
 		return {}
 	var marks := marks_of(piece).filter(func(m): return m.kind != "pencil") # (pencil only guides)
@@ -659,7 +659,7 @@ func _process(_delta: float) -> void:
 	var mesh: ImmediateMesh = _mesh.mesh
 	mesh.clear_surfaces()
 	var sdf = workshop.board
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	if sdf == null or piece == null or workshop.mode != workshop.Mode.WORK or workshop.current == "":
 		return
 	var lines := []

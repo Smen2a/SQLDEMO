@@ -98,6 +98,7 @@ const Debris := preload("res://workshop/debris.gd")
 const Layout := preload("res://workshop/layout.gd")
 const Plans := preload("res://workshop/plans.gd")
 const Checking := preload("res://workshop/checking.gd")
+const Assembling := preload("res://workshop/assembling.gd")
 const FADE_TIME := 0.1 # s for the tool in hand to fade in when it acts, and out after
 const ARM_DISTANCE := 2.0 # mm a direct stroke's drag goes before it shows its direction
 const SETTLE_REACH := 0.003 # m below an island it looks for what it rests on (see _settle)
@@ -268,6 +269,7 @@ var variants := {}
 var layout # layout.gd: the marking gauge and knife, the pencil and the plan sheet, and the lines they leave
 var plans # plans.gd: the plans (game/plans), the sheet in hand, laying a part out on the wood
 var checking # checking.gd: the piece in the vise checked against its drawing (K)
+var assembling # assembling.gd: a part offered up to its mate, pushed and tapped home, joined
 var _progress := 0.0      # mm a push tool has gone along its path
 var _target := 0.0        # mm along it the pointer asks for (the tool follows at its working speed)
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
@@ -322,6 +324,9 @@ func _ready() -> void:
 	checking = Checking.new()
 	checking.workshop = self
 	add_child(checking)
+	assembling = Assembling.new()
+	assembling.workshop = self
+	add_child(assembling)
 	# An ash board in the vise.
 	_clamp(_new_piece(wood))
 
@@ -597,6 +602,11 @@ func look_at_thing() -> Dictionary:
 func prompt() -> String:
 	if mode != Mode.WALK:
 		return ""
+	if assembling.offering():
+		return assembling.prompt()
+	if held != null and not assembling.candidate().is_empty():
+		var c: Dictionary = assembling.candidate()
+		return "E: offer the %s up to the %s (%s)" % [c.held_name, c.mate_name, c.name]
 	if held != null:
 		var turning := "   R: turn it   wheel: nearer, farther"
 		if at_vise():
@@ -611,6 +621,9 @@ func prompt() -> String:
 		return ""
 	var thing: Object = hit.collider
 	if thing == clamped and clamped != null:
+		var member = assembling.member_at(player.eye(), player.forward())
+		if member != null:
+			return "E: work on the %s   F: draw the %s out" % [_name_of(thing), member.get_meta("kind", "part")]
 		return "E: work on the %s   F: take it out of the vise" % _name_of(thing)
 	if thing.has_meta("bench"):
 		return "E: work at the bench" if board != null else "put a piece in the vise to work on it"
@@ -673,6 +686,12 @@ func next_slot(steps: int) -> void:
 ## Moves the pointer to a screen position and looks at what is under it.
 func hover_screen(position: Vector2) -> void:
 	_pointer = position
+	# Parts joined into one piece: the tools work on whichever is under the pointer.
+	if clamped != null and not clamped.get_meta("members", []).is_empty() and _state == IDLE and not _engaged:
+		var under = body_hit(clamped, camera.project_ray_origin(position), camera.project_ray_normal(position))
+		if under != null and under != board:
+			board = under
+			_ui.refresh()
 	if current == "layout":
 		layout.hover(position)
 		return
@@ -1375,12 +1394,15 @@ func undo() -> void:
 	if board == null:
 		return
 	board.flush()
+	# A part joined straight after (neither worked since): it comes out, into the hands.
+	if assembling.undo():
+		return
 	# Drawn in pencil straight after (a line, a sheet laid on): that goes first, the body as it was.
-	if plans.undo(clamped, board.get_stats().get("steps", 0)):
+	if plans.undo(holder(), board.get_stats().get("steps", 0)):
 		return
 	var last := -1
 	for i in offcuts.size():
-		if offcuts[i].from == clamped:
+		if offcuts[i].from == clamped and offcuts[i].get("sdf", board) == board:
 			last = i
 	if last >= 0 and board.get_stats().get("steps", 0) == offcuts[last].steps and offcuts[last].body != held:
 		# Straight after a split: the pieces go back together.
@@ -1396,7 +1418,7 @@ func undo() -> void:
 	# What the stroke took off goes back (this piece's, from that step on), and the lines it
 	# scribed.
 	debris.undo_step(_step_key(board.get_stats().get("steps", 0)), _step_key(STEPS_PER_PIECE))
-	layout.undo_step(clamped, board.get_stats().get("steps", 0))
+	layout.undo_step(holder(), board.get_stats().get("steps", 0))
 	board.undo()
 
 
@@ -1405,7 +1427,7 @@ func redo() -> void:
 	if board != null:
 		board.redo()
 		board.flush()
-		layout.redo_step(clamped, board.get_stats().get("steps", 0))
+		layout.redo_step(holder(), board.get_stats().get("steps", 0))
 
 
 ## A fresh piece of the stock kind `choice` (Room.STOCK: board, board_oak...) in the vise,
@@ -1433,8 +1455,9 @@ func set_wood(choice: String) -> void:
 ## with a convex hull), nudged away from the kerf. The piece measured both sides on its
 ## worker, so this reads nothing from it that waits: the half-spaces land on the pieces'
 ## workers over the next frames.
-func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D) -> void:
-	var sdf = from.get_meta("sdf")
+func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D, sdf = null) -> void:
+	if sdf == null:
+		sdf = from.get_meta("sdf")
 	var split = sdf.split(point, normal)
 	if split == null:
 		return
@@ -1444,7 +1467,7 @@ func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D) -> void:
 	# The rigid body sits at the piece's centre of mass (Godot's own follows shape origins).
 	var centre: Vector3 = sdf.global_transform * split.get_centre_of_mass()
 	var body := _as_piece(split, Transform3D(Basis.IDENTITY, centre), sdf.global_transform,
-			from.get_meta("wood_name", "wood"), "offcut")
+			sdf.get_meta("wood_name", from.get_meta("wood_name", "wood")), "offcut")
 	if island:
 		# An island rests in its piece's hollows, on convex pieces: both sharp (Godot's default
 		# margin, 4 cm, rounds millimetre shapes away).
@@ -1454,7 +1477,7 @@ func _on_separated(point: Vector3, normal: Vector3, from: RigidBody3D) -> void:
 	body.linear_velocity = normal * 0.25
 	body.freeze = island and not split.visible
 	# The piece's step count once its half-space lands (undo then rejoins the pieces).
-	offcuts.append({"body": body, "piece": split, "from": from, "steps": sdf.get_stats().get("steps", 0) + 1,
+	offcuts.append({"body": body, "piece": split, "from": from, "sdf": sdf, "steps": sdf.get_stats().get("steps", 0) + 1,
 			"spawn": body.global_transform, "island": island})
 	if not body.freeze:
 		# Its piece's collider no longer covers it (hollowed where an island came out), before the
@@ -1532,6 +1555,17 @@ func _refresh_collider(piece: RigidBody3D) -> void:
 	if piece == null:
 		return
 	var sdf = piece.get_meta("sdf")
+	if not piece.get_meta("members", []).is_empty():
+		# Parts joined: each one's collider (a box or its hull), and their masses together.
+		_clear_shapes(piece)
+		var mass := 0.0
+		for body in bodies_of(piece):
+			var collider := _collider_for(body)
+			collider.shape.margin = SHAPE_MARGIN
+			piece.add_child(collider)
+			mass += body.get_mass()
+		piece.mass = maxf(mass, 0.005)
+		return
 	var holes := []
 	for offcut in offcuts:
 		if offcut.from == piece and offcut.island:
@@ -1622,13 +1656,82 @@ func _as_piece(sdf, at: Transform3D, placed: Transform3D, wood_name: String, kin
 	surface.friction = 0.5
 	body.physics_material_override = surface
 	_refresh_collider(body)
-	sdf.edited.connect(func(_stats):
-		_refresh_collider(body)
-		_ui.refresh())
-	sdf.separated.connect(_on_separated.bind(body), CONNECT_DEFERRED)
-	sdf.crumbled.connect(_on_crumbled.bind(sdf), CONNECT_DEFERRED)
+	_wire(sdf)
 	pieces.append(body)
 	return body
+
+
+## An SdfBody's edits keep the collider of the piece holding it (its own, or the one it was
+## joined into) and the panel up to date; a saw through it splits it; crumbs go to debris.
+## Once for each body, whichever piece holds it later.
+func _wire(sdf) -> void:
+	if sdf.has_meta("wired"):
+		return
+	sdf.set_meta("wired", true)
+	sdf.edited.connect(func(_stats):
+		var holding = sdf.get_parent()
+		if holding is RigidBody3D:
+			_refresh_collider(holding)
+		_ui.refresh())
+	sdf.separated.connect(func(point: Vector3, normal: Vector3): _on_separated(point, normal, sdf.get_parent(), sdf),
+			CONNECT_DEFERRED)
+	sdf.crumbled.connect(_on_crumbled.bind(sdf), CONNECT_DEFERRED)
+
+
+## A piece's SdfBodies: its own, and those of the parts joined into it (assembling.gd).
+func bodies_of(piece: RigidBody3D) -> Array:
+	var out := [piece.get_meta("sdf")]
+	for member in piece.get_meta("members", []):
+		out.append(member.sdf)
+	return out
+
+
+## What holds each of a piece's parts' metas ("part", "marks"...): the piece itself for its
+## own body, the SdfBody of a part joined into it.
+func holders_of(piece: RigidBody3D) -> Array:
+	var out: Array = [piece]
+	for member in piece.get_meta("members", []):
+		out.append(member.sdf)
+	return out
+
+
+## What holds the metas of the part the tools are on (see holders_of).
+func holder() -> Object:
+	if clamped == null or board == null or board == clamped.get_meta("sdf"):
+		return clamped
+	return board
+
+
+## Which of a piece's SdfBodies a ray (world) meets first, or null.
+func body_hit(piece: RigidBody3D, origin: Vector3, direction: Vector3):
+	var best = null
+	var nearest := INF
+	for body in bodies_of(piece):
+		var hit: Dictionary = body.raycast(origin, direction, 10.0)
+		if not hit.is_empty() and hit.distance < nearest:
+			nearest = hit.distance
+			best = body
+	return best
+
+
+## A plan's part as drawn (SdfBody.load_part: its features cut exactly), laid out as it is:
+## a loose piece lying on the bench top at its middle, its face side up (tests, and trying a
+## joint without making its parts). `part` for a part of your own ({} for the plan's).
+func part_as_drawn(plan_id: String, part_id: String, part := {}) -> RigidBody3D:
+	var p: Dictionary = part if not part.is_empty() else plans.part(plan_id, part_id)
+	var sdf = ClassDB.instantiate("SdfBody")
+	if p.is_empty() or not sdf.load_part(p, p.get("wood", "oak")):
+		sdf.free()
+		return null
+	var s: Vector3 = plans.size_of(p)
+	# Part millimetres (the reference corner at the origin, the face side z = 0) -> world metres,
+	# the face side up; the part's middle over the bench's.
+	var turn := Basis(Vector3.RIGHT, PI / 2) * Basis.from_scale(Vector3.ONE * MM)
+	var at := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.5 * MM * s.z, 0.0))
+	var placed := at * Transform3D(turn, -(turn * (s * 0.5)))
+	var piece := _as_piece(sdf, at, placed, p.get("wood", "oak"), p.get("name", part_id).to_lower())
+	piece.set_meta("part", {"plan": plan_id, "part": p.get("id", part_id), "placement": Transform3D.IDENTITY})
+	return piece
 
 
 ## Puts a piece in the vise: held still where it is, the one the tools work on; the jaws
@@ -1808,11 +1911,32 @@ func _unhandled_input(event: InputEvent) -> void:
 ## Walking: E reaches for what is in front, the wheel steps along the hotbar, Esc frees the
 ## mouse (a click takes it back). The player takes the walking keys and the mouse's look.
 func _walk_input(event: InputEvent) -> void:
+	# A part offered up: the wheel pushes it in and draws it out, a click taps it with the
+	# mallet, E lets go.
+	if assembling.offering():
+		if event is InputEventKey and event.pressed and not event.echo and (event as InputEventKey).keycode == KEY_E:
+			assembling.let_go()
+		elif event is InputEventMouseButton and event.pressed:
+			var button := event as InputEventMouseButton
+			var step: float = assembling.FINE if button.ctrl_pressed else assembling.PUSH
+			match button.button_index:
+				MOUSE_BUTTON_WHEEL_UP:
+					assembling.push(step)
+				MOUSE_BUTTON_WHEEL_DOWN:
+					assembling.push(-step)
+				MOUSE_BUTTON_LEFT:
+					assembling.tap(settings.chisel.get("blow", 1.0))
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match (event as InputEventKey).keycode:
 			KEY_E:
+				if held != null and assembling.offer_up():
+					return
 				interact()
 			KEY_F:
+				var member = assembling.member_at(player.eye(), player.forward()) if held == null else null
+				if member != null and assembling.pull_out(member):
+					return
 				take_out()
 			KEY_R:
 				turn_held()

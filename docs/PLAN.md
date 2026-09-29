@@ -21,9 +21,9 @@ This revision merges those into shared capabilities and keeps finished work to o
 - **Making an object** (G) comes next, ahead of Surface finish (3) and Bake (4): plans on
   paper, parts and assembly, built round a first object, a wooden mallet. G0 (stock in
   sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
-  (drawing plans on paper), G2 (checking a part against its drawing) and G3a (a joint's
-  fit) are done; G3b (offering a part up, tapping it home, the assembly as one body) is
-  next.
+  (drawing plans on paper), G2 (checking a part against its drawing), G3a (a joint's
+  fit) and G3b (offering a part up, tapping it home, the assembly as one body) are done;
+  G3c (glue and the wedge) is next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -75,6 +75,7 @@ This revision merges those into shared capabilities and keeps finished work to o
 | T2 | Chisels and gouges cut as the wood lets them (`tools/cutting`): force by hardness and grain against a hand's 200 N, clearance past the bevel (mid-face they skate until tipped, then dive), free entry from an open face, tear-out uphill and breakout at an exit (seeded: the plan and the stroke agree), chopping with mallet blows that pop chips off near an open face. Variants: bench, paring, mortise and skew chisels; #3 and #7 gouges, a veiner, a V-tool. The line by the pointer gives depth, force, grain and warnings |
 | P2 | Islands: cuts meeting free a piece no plane separates (a rebate, a corner, a chip). The worker looks round each cut once idle (`find_parts`: ADF samples joined within bricks and across leaf faces, exact tapes where bricks stray), cuts the island out with a region proved apart (`cut_out`: island, rest and free cubes, island and rest never touching across unclear air) and measures both sides; each side keeps its own with `Op::Keep`. The board's collider becomes convex pieces round the hollows; islands are set down on what is under them and let go asleep |
 | D2 | Dust: the saw, rasps, scraper, sanding block and sponge report the wood they take (the sponge's own flow measures it); grains fly and land where their arc meets something; undo takes them back. Every tool's dust within 1.5% of what the board lost. After play: a puff whose grains go as they land, what reaches the ground heaped in one mound per spot (sawdust beyond the kerf's ends) |
+| G3b | Offering up (`assembling.gd`): a part carried to its mate in the vise lines up with the joint (a ghost), E puts it on the joint, the wheel pushes it in as far as a hand can, clicks tap a tight fit home with the mallet, E lets go: one rigid body (its SdfBody in the mate's, its part's metas with it), the tools on whichever part is under the pointer; undo straight after, or F and the wheel back, draws it out. `assembly` |
 | G3a | A joint's fit (`plans/joint`: how two parts go together; `pieces/fit`: a part's surface pushed along the joint into its mate, where it binds, loose / snug / drives / won't go; `SdfBody.joint_pose`, `SdfBody.fit`). `test_fit`, `joint_fit` |
 | G2 | Checking a part (`plans/check`, `SdfBody.check_part`, `checking.gd`; K): proud and short places against the part as drawn, joined into spots, named, dotted on the wood. `check_part` |
 | G1b | Drawing a plan on the pad (`plan_editor.gd`, the sheet's drawing shared with the book in `sheet_view.gd`): parts, blanks, features dragged on the views, picked and sized exactly, joints; saved to `user://plans` and laid out as presets are. `plan_editor` |
@@ -816,7 +817,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0, G1a, G1b, G2 and G3a done)
+## G. Making an object (current: G0, G1a, G1b, G2, G3a and G3b done)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -1055,6 +1056,47 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
 - **Left for later:** the surface a millimetre apart (a bump narrower than that can slip
   between the points); the wood's spring and the wedge's spreading (G3c: a drive limit per
   joint).
+
+### G3b — offering up, tapping home, one body (done)
+- **Offering up** (`game/workshop/assembling.gd`): carrying a part laid out from a plan,
+  with the piece in the vise a part of the same plan and a joint between them
+  (`plans.joints_between`), and looking at it: the carried part's outline shows in blue
+  where the joint would put it, at its mouth (`candidate()`); E puts it there (frozen,
+  kinematic, out of the hands). Its pose is the joint's (`SdfBody.joint_pose`) between the
+  two parts' placements; where one was laid out mirrored, the joint's own mirror (a
+  reflection of the moving part that maps what goes in onto itself: `JointPose::mirror`)
+  makes it a proper turn. Either part may be the one carried (the other then is what goes
+  in, carried onto it).
+- **The fit going in** is measured once (`SdfBody.fit`, the whole way, 35–50 ms). The wheel
+  pushes it in (1 mm a notch, Ctrl 0.2) as far as a hand can: to where it is more than
+  0.05 mm tight ("It binds: tap it on"), or it stops; a click is a blow with the mallet
+  (the chop's strength: 3 mm a firm blow) as far as up to 0.5 mm tight goes; home, seated.
+  The wheel back draws it out; past the mouth, it is in the hands again.
+- **One body:** E lets go. At least 3 mm in and not loose, the part's SdfBody moves into the
+  piece in the vise (its rigid body goes), with its part's metas (`part`, `marks`,
+  `pencil_log`, its wood and name): meta `members` on the piece ({sdf, to, joint, t,
+  placements, the two bodies' step counts}). Colliders from each body (`_refresh_collider`),
+  masses summed; each body's signals wired once to whichever piece holds it (`_wire`),
+  a saw through a joined part splitting that part (`_on_separated(..., sdf)`).
+- **The tools on the part hit:** with parts joined, hovering finds the body under the
+  pointer (`body_hit`: each body's raycast) and the tools work on it (`board`); its
+  metas through `holder()` (the piece for its own body, the joined part's SdfBody), which
+  layout, plans, checking and the panel now use.
+- **Apart again:** undo straight after joining (neither part edited since) takes it out into
+  the hands; F on a joined part puts it back on its joint where it was, and the wheel draws
+  it out. (Glue and the wedge, G3c, will hold a joint for good.)
+- **`workshop.part_as_drawn(plan, part)`**: a plan's part made as drawn (`load_part`), face
+  side up, tagged: for tests, and trying a joint without making its parts.
+- **Measured** (`game/tests/assembly`, headless and rendered): the handle offered up, its
+  tenon's corner on the mortise's to 0.01 mm; pushed home by the wheel (58 mm, snug); one
+  body (colliders from both); undo: in the hands; home again; at the bench the pointer on
+  the handle works on the handle (K: as drawn), on the head the head; F and the wheel back:
+  out into the hands; a tenon 0.2 mm fat binds at the mouth and 21 blows drive it home;
+  out of the vise and carried, the two go together.
+- **Left for later:** a joined part's marks drawn only while the tools are on it; a
+  tenon standing proud of the head in the vise goes into the bench top (the vise holds a
+  piece on it); an assembly offered to another (the wedge into the handle joined in the
+  head: G3c).
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

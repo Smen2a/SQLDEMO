@@ -29,7 +29,7 @@ var _dots: MultiMeshInstance3D
 
 
 func _process(_delta: float) -> void:
-	if result.has("piece") and (workshop.clamped != result.piece or not is_instance_valid(result.sdf)):
+	if result.has("piece") and (workshop.holder() != result.piece or not is_instance_valid(result.sdf)):
 		clear()
 
 
@@ -37,7 +37,7 @@ func _process(_delta: float) -> void:
 ## says why).
 func check() -> bool:
 	clear()
-	var piece: RigidBody3D = workshop.clamped
+	var piece = workshop.holder()
 	var sdf = workshop.board
 	var tag: Dictionary = piece.get_meta("part", {}) if piece != null else {}
 	var part: Dictionary = workshop.plans.part(tag.get("plan", ""), tag.get("part", "")) if not tag.is_empty() else {}

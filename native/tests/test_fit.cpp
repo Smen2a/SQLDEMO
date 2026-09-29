@@ -110,3 +110,28 @@ TEST(a_tenon_stops_where_its_mortise_narrows) {
 	const Fit f = fit_of(handle(), b);
 	CHECK(f.kind == Fit::Kind::WontGo && !f.home && std::fabs(f.stops_at - 30.0f) < 1.0f);
 }
+
+// Parts laid out mirrored need the tenon reflected onto itself: the joint's mirror is a
+// reflection (determinant -1) that leaves the tenon's section where it was.
+TEST(a_joints_mirror_maps_the_tenon_onto_itself) {
+	const Part h = head(), hd = handle();
+	const JointPose j = joint_pose(h, h.features[0], hd, hd.features[0]);
+	const Pose &m = j.mirror;
+	const float det = gl::dot(m.x, gl::cross(m.y, m.z));
+	CHECK(std::fabs(det + 1.0f) < 1e-5f);
+	// The tenon's box (x 0-58, y 2.5-32.5, z 8-20) maps onto itself: its corners onto corners.
+	for (int c = 0; c < 8; ++c) {
+		const vec3 p(c & 1 ? 58.0f : 0.0f, c & 2 ? 32.5f : 2.5f, c & 4 ? 20.0f : 8.0f);
+		const vec3 q = m.apply(p);
+		bool corner = false;
+		for (int k = 0; k < 8; ++k) {
+			const vec3 r(k & 1 ? 58.0f : 0.0f, k & 2 ? 32.5f : 2.5f, k & 4 ? 20.0f : 8.0f);
+			corner = corner || gl::length(q - r) < 1e-4f;
+		}
+		CHECK(corner);
+	}
+	const Part w = wedge();
+	const JointPose wj = joint_pose(hd, hd.features[1], w, w.features[0]);
+	CHECK(std::fabs(gl::dot(wj.mirror.x, gl::cross(wj.mirror.y, wj.mirror.z)) + 1.0f) < 1e-5f);
+	CHECK(gl::length(wj.mirror.apply({45.0f, 0.0f, 1.0f}) - vec3(45.0f, 12.0f, 1.0f)) < 1e-4f);
+}

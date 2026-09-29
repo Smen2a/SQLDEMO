@@ -17,6 +17,16 @@ vec2 range(vec2 r, float size) {
 	return r.y > r.x ? r : vec2(0.0f, size);
 }
 
+// The reflection through the plane through `c` square to the unit `n`.
+Pose reflection(vec3 c, vec3 n) {
+	Pose r;
+	r.x = vec3(1, 0, 0) - n * (2.0f * n.x);
+	r.y = vec3(0, 1, 0) - n * (2.0f * n.y);
+	r.z = vec3(0, 0, 1) - n * (2.0f * n.z);
+	r.origin = n * (2.0f * gl::dot(n, c));
+	return r;
+}
+
 // The proper rotation taking b's directions u1, u2 (orthonormal) to a's v1, v2.
 Pose rotation(vec3 u1, vec3 u2, vec3 v1, vec3 v2) {
 	const vec3 u3 = gl::cross(u1, u2), v3 = gl::cross(v1, v2);
@@ -50,6 +60,7 @@ JointPose tenon_into_hole(const Part &a, const Feature &hole, const Part &b, con
 
 	j.home = rotation(out, long_b, in, long_a);
 	j.home.origin = middle_a - j.home.turn(middle_b);
+	j.mirror = reflection(middle_b, long_b.y > 0.5f ? vec3(0, 0, 1) : vec3(0, 1, 0));
 	j.axis = in;
 	j.travel = length;
 	// The tenon, and a little round it: its shoulders, and the part just behind them.
@@ -76,6 +87,7 @@ JointPose wedge_into_kerf(const Part &a, const Feature &kerf, const Part &b, con
 
 	j.home = rotation(lead, vec3(0, 0, 1), in, square);
 	j.home.origin = mouth_a + in * kerf.depth - j.home.turn(tip_b);
+	j.mirror = reflection(vec3(0.0f, 0.5f * sb.y, 0.0f), vec3(0, 1, 0));
 	j.axis = in;
 	j.travel = kerf.depth;
 	j.region = {vec3(-kAround), sb + vec3(kAround)};

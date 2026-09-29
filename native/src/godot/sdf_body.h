@@ -86,7 +86,8 @@ public:
 	// ("mortise and tenon" or "wedge"), "moving" ("a" or "b": the part that goes in),
 	// "home" (its part space into its mate's, home), "axis" (the way it goes in, the mate's
 	// part space), "travel" (mm from the mouth to home), "region" (what of it goes in, its
-	// part space)}; {} for features that make no joint.
+	// part space), "mirror" (a reflection of its part space that maps what goes in onto
+	// itself: for parts laid out mirrored)}; {} for features that make no joint.
 	static godot::Dictionary joint_pose(const godot::Dictionary &a_part, const godot::String &a_feature,
 			const godot::Dictionary &b_part, const godot::String &b_feature);
 	// How this body goes into `mate` (sdf::fit_along): from `start` (this body's space into

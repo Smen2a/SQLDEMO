@@ -23,6 +23,11 @@ struct JointPose {
 	float travel = 0.0f;
 	// What of the moving part goes in, in its own space: its surface there is what fits.
 	Aabb region;
+	// A reflection of the moving part's space that maps what goes in onto itself (through
+	// the middle of a tenon's section, square to its short side; of a wedge's width). Where
+	// the parts were laid out mirrored, the pose that puts them together is a reflection;
+	// with this after it, a turn that seats the same.
+	Pose mirror;
 
 	// The moving part at the mouth: `travel` short of home.
 	Pose mouth() const { return home.shifted(axis * -travel); }

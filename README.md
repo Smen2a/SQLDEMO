@@ -1070,8 +1070,28 @@ How a part goes into its mate, measured before the workshop lets you put them to
   to 0.5 mm tight); **loose** rattles; **won't go** stops short of home.
 - **Measured** (`native/tests/test_fit.cpp`, `game/tests/joint_fit`): the handle as drawn
   goes home snug in 20–35 ms; a tenon 0.2 mm fat drives; 1.2 mm fat, it won't pass the
-  mouth; 0.4 mm thin, loose; a mortise narrowed below 30 mm stops it there. Putting parts
-  together in the workshop comes next (G3b).
+  mouth; 0.4 mm thin, loose; a mortise narrowed below 30 mm stops it there.
+
+### Putting parts together
+
+Carry a part to its mate in the vise (both laid out from one plan, a joint between them:
+the mallet's handle to its head) and look at it (`game/workshop/assembling.gd`):
+- **Offer it up:** its outline shows in blue where the joint puts it, at the mouth; **E**
+  puts it there, held on the joint.
+- **Push it in:** the **wheel**, a millimetre a notch (Ctrl finely), as far as a hand can:
+  a snug fit goes home, a tight one binds ("tap it on"). **A click** is a blow with the
+  mallet, driving a tight fit on (up to half a millimetre tight: tighter, it won't go).
+  The wheel back draws it out; past the mouth, it is in your hands again.
+- **Let go (E):** in 3 mm or more and not loose, the two are **one rigid body**: carried,
+  put in the vise and worked as one, the tools working on whichever part is under the
+  pointer (its lines, its check, its undo).
+- **Apart again:** undo straight after joining takes the part out into your hands; **F**
+  on a joined part puts it back on its joint, to be drawn out with the wheel. Glue and the
+  wedge, which hold a joint for good, come next.
+- **Measured** (`game/tests/assembly`): the handle offered up with its tenon on the
+  mortise's mouth to 0.01 mm, pushed home, joined; undone and joined again; the tools on
+  the handle, then the head; drawn out; a tenon 0.2 mm fat driven home in 21 blows;
+  carried out of the vise, the two together.
 
 ## Layout
 
@@ -1354,7 +1374,9 @@ The Godot tests come in two tiers:
     drags would, joined, saved, laid on the wood; put down, thrown away, a preset copied;
   - a part checked against its drawing (`check_part`): the head's blank proud at the far
     end and the mortise, then sawn to length: the mortise only;
-  - a joint's fit (`joint_fit`): the handle into the head, as drawn, a little fat, too fat.
+  - a joint's fit (`joint_fit`): the handle into the head, as drawn, a little fat, too fat;
+  - putting parts together (`assembly`): the handle offered up to the head, pushed home,
+    one body; undone, drawn out, a fat tenon tapped home, carried as one.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

@@ -474,6 +474,8 @@ Dictionary SdfBody::joint_pose(const Dictionary &a_part, const String &a_feature
 	out["axis"] = to_godot(j.axis);
 	out["travel"] = double(j.travel);
 	out["region"] = AABB(to_godot(j.region.lo), to_godot(j.region.size()));
+	out["mirror"] =
+			Transform3D(Basis(to_godot(j.mirror.x), to_godot(j.mirror.y), to_godot(j.mirror.z)), to_godot(j.mirror.origin));
 	return out;
 }
 
