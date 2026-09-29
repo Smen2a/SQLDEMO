@@ -26,8 +26,8 @@ metres, the bench top at y = 0 with the vise at its middle.
 - **The hotbar** along the bottom holds the tools: a chisel and a carving gouge (each in
   several kinds), a back saw, a rasp, the planes (a spokeshave, a block plane with or
   without a chamfer fence, a shoulder plane), a card scraper, a sanding block, a
-  sanding sponge, and the layout tools (a marking gauge, a knife and square, a pencil, and the
-  sheet of a plan). Keys **1 to 9**
+  sanding sponge, the layout tools (a marking gauge, a knife and square, a pencil, and the
+  sheet of a plan), and a brace and bit. Keys **1 to 9** and **B** for the brace
   (or a click, or the wheel) put one in hand, held in view;
   **0** empties the hands. Every tool is an SDF body, built by the engine in steel, brass,
   ash, walnut, cork and abrasive.
@@ -123,6 +123,9 @@ under the crosshair says to put a piece in it.
    - **Rasp, card scraper:** back and forth along their line at their working speed,
      cutting on the push (the way you first drag), resting on the high spots and taking the
      surface down only where their face goes; see *Shaping and finishing* below.
+   - **Brace:** set on the face where you press, square to it, and bored straight in:
+     drag round the bit, clockwise, to turn its grip; worked back and forth, its ratchet
+     takes it on in. See *Boring: the brace and bit* below.
    - **Planes** (5; Tab for the kind): pushed along the drag at their working speed,
      taking a shaving: as deep as the hands push the chip (deeper on a narrow edge) and the
      mouth passes, stopped where the toe meets a step it cannot ride. The spokeshave's
@@ -417,6 +420,8 @@ pointer says what it comes to.
   - The blow drives a thin slit, 2.5 mm across the grain in oak for a 12 mm bench chisel.
     Along the grain it goes further and splits the wood. Each blow goes less far than the
     last.
+  - The edge rests on the highest wood anywhere under it, and only the part of it over
+    wood severs anything: over a bored hole, or off the work's edge, a blow goes deeper.
   - It hollows nothing out. Within reach of an open face on its bevel side, the chip
     between pops off along the grain: chop near an edge, or chop a line and pare towards it.
   - A paring chisel is never struck: pushed by hand, it barely goes in.
@@ -592,6 +597,7 @@ the board seventy strokes. (docs/PLAN.md, T4.)
 | chisel, gouge | as deep as a hand can push it (200 N) | 40, 30 mm/s; a fifth at the hand's limit | a step ahead, the blade meeting the work, a gap too narrow, a chip too thick |
 | sanding block | 1e-5 mm per mm rubbed at 120 grit (0.01 mm a metre) | 300 mm/s | resting on high spots (the line shows its contact) |
 | saw (a tenon saw, 8 teeth to the inch) | 0.0038 mm per mm pushed through a 25 mm chord of oak, × 25 / chord; nothing on the pull | 300 mm/s | its back, 59.5 mm below the highest wood under it (*its back meets the work*); through |
+| brace and bit | 1.6 mm a turn clockwise (its lead screw, in any wood); nothing turned back | 2 turns a second | through (and a millimetre beyond); a gauge line's depth |
 | rasp | 3.35e-4 mm per mm pushed for a cabinet rasp in oak (0.05 mm a 150 mm push), × coarseness / 0.5; nothing on the pull | 250 mm/s | resting on high spots (the line shows its contact) |
 | card scraper | 0.01 mm of oak from each point its burr is pushed over; nothing on the pull | 200 mm/s | resting on high spots |
 | spokeshave, planes | as deep as two hands (250 N; a plane, one: 200 N) push the chip's section, up to its mouth (0.8 mm; a plane's 0.5 mm) | 150 mm/s; a fifth at the hands' limit | a step ahead of its toe (*blocked*), a chip too much to push (*stalls*), its mouth |
@@ -1039,7 +1045,10 @@ a score:
   wood's surface beyond the drawing is **proud** (wood still to take off), the drawing's
   surface beyond the wood is **short** (wood gone past the drawing). More than 0.5 mm off
   counts (along the blank's arrises, which the drawing eases by a millimetre as stock is, a
-  square one is allowed 0.75 mm more). Places off are joined with their neighbours into
+  square one is allowed 0.75 mm more). A point is taken as on the wood's surface only if
+  the wood's field is near zero there with wood just behind it: past a hole bored out
+  through a face, or along the seam where two cuts barely overlap, the field dips towards
+  zero in the air, and that is no surface. Places off are joined with their neighbours into
   spots, each with how far off at worst, its area and about how much wood.
 - **Named:** each spot by the feature whose face it is on ("the mortise, 29 mm from the
   face edge") or the blank's face ("the far end"), the worst first.
@@ -1071,6 +1080,30 @@ How a part goes into its mate, measured before the workshop lets you put them to
 - **Measured** (`native/tests/test_fit.cpp`, `game/tests/joint_fit`): the handle as drawn
   goes home snug in 20–35 ms; a tenon 0.2 mm fat drives; 1.2 mm fat, it won't pass the
   mouth; 0.4 mm thin, loose; a mortise narrowed below 30 mm stops it there.
+
+### Boring: the brace and bit
+
+The brace (**B**, after Layout on the hotbar; core `tools/boring.h`) takes an auger bit,
+8, 10 or 12 mm (Tab, or the panel). It bores square into the face where you press:
+- **Turning it:** drag round the bit, clockwise as you look at the face; the grip follows
+  the pointer round at up to 2 turns a second (times the pace). Each turn the bit's lead
+  screw draws it in 1.6 mm, in any wood (a medium screw, 16 turns to the inch). Turned
+  back it stays where it is (a ratchet brace), so working it back and forth goes on in.
+- **The hole** is a round cylinder from the surface to where the cutters are, the screw's
+  point 4 mm ahead of them. It stops through the work and a millimetre beyond (the line by
+  the pointer says *through*), or at a gauge line's depth.
+- **Held to the lines:** set down by knife or gauge lines marked round it, the bit's
+  centre is moved in until its rim is inside them all, halfway between two closer than
+  the bit is wide: a 12 mm bit goes down the middle of the mallet's 12 mm mortise, its rim
+  on the end line.
+- **The waste** comes up the twist as coarse dust at the hole's mouth.
+- **Measured** (`native/tests/test_mortise.cpp`, `game/tests/mortise_chop`): a 12 mm hole
+  through the mallet's 55 mm oak head in 35 turns, its wall within 0.2 mm of the bit's
+  rim top to bottom. The mortise (30 × 12, through) chopped out with the 12 mm bench
+  chisel takes 220 firm blows (110 from each face: 77 s at the quickest a mallet
+  strikes). Bored first (three 12 mm holes 9 mm apart: 105 turns, 52 s at 1×, 7 s at 8×)
+  it takes 44 blows (15 s) to chop what the holes leave, cusps and corners, to the lines;
+  checked, it is as drawn to 0.5 mm.
 
 ### Putting parts together
 
@@ -1390,7 +1423,9 @@ The Godot tests come in two tiers:
   - putting parts together (`assembly`): the handle offered up to the head, pushed home,
     one body; undone, drawn out, a fat tenon tapped home, carried as one;
   - glue, the wedge, sawn flush (`wedge_glue`): glued and set, stood on its handle, wedged,
-    the proud ends sawn off level with the head.
+    the proud ends sawn off level with the head;
+  - the mortise bored and chopped (`mortise_chop`): the head scribed and sawn to length,
+    three holes bored with the brace (held to the lines), the rest chopped out: as drawn.
 
   One frame is rendered in software to check that the Live shader and the shared includes
   compile in Godot's pipeline. Nothing judges pixels. Without a GPU, this is the tier to run.

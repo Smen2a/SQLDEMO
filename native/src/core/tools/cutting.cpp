@@ -268,15 +268,28 @@ CutPlan plan_chop(CutPlan p, const Work &work, const Wood &wood, vec3 b, vec3 ed
 	if (std::fabs(gl::dot(edge, f)) > 0.7f) {
 		p.warnings |= kSplits;
 	}
-	// The slit so far: air straight down its middle.
-	float d0 = 0.0f;
-	for (float z = 0.05f; z < 80.0f; z += 0.05f) {
-		if (work.field(p.start + t * (0.5f * kSlit) - n * z) <= 0.02f) {
-			break;
+	// The slit so far: air straight down it, as far as the edge goes before any of it (its
+	// middle or out to its corners) meets wood: where it rests.
+	float d0 = 80.0f;
+	for (int j = -4; j <= 4 && d0 > 0.0f; ++j) {
+		const vec3 column = p.start + t * (0.5f * kSlit) + edge * (0.45f * c.width * float(j) / 4.0f);
+		float air = 0.0f;
+		for (float z = 0.05f; z < d0; z += 0.05f) {
+			if (work.field(column - n * z) <= 0.02f) {
+				break;
+			}
+			air = z;
 		}
-		d0 = z;
+		d0 = std::min(d0, air);
 	}
-	const float hard = wood.hardness / 5740.0f, wide = p.width / 12.0f;
+	// Only the edge over wood severs anything: a blow goes deeper where some of it is in the
+	// air (over a hole beside a thin wall, off the work's edge).
+	int in_wood = 0;
+	for (int j = -4; j <= 4; ++j) {
+		const vec3 column = p.start + t * (0.5f * kSlit) + edge * (0.45f * c.width * float(j) / 4.0f);
+		in_wood += work.field(column - n * (d0 + 1.0f)) < 0.0f;
+	}
+	const float hard = wood.hardness / 5740.0f, wide = p.width / 12.0f * float(std::max(in_wood, 1)) / 9.0f;
 	const float driven = c.mallet > 0.0f ? kBlow * c.mallet * blow : kPush * c.hand_force / 200.0f;
 	if (c.mallet <= 0.0f) {
 		p.warnings |= kNotStruck;

@@ -103,6 +103,7 @@ if [[ "$GPU" == 0 ]]; then
 	check joint_fit "joint fit: the handle fits the head" res://tests/joint_fit.tscn
 	check assembly "assembly: the handle goes into the head" res://tests/assembly.tscn
 	check wedge_glue "wedge glue: the mallet glued, wedged and sawn flush" res://tests/wedge_glue.tscn
+	check mortise_chop "mortise chop: the mortise bored and chopped" res://tests/mortise_chop.tscn
 	check debris "debris: shavings and chips come away" res://tests/debris.tscn
 	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
 	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
@@ -129,6 +130,7 @@ check plan_transfer_render "plan transfer: the plan is laid on the wood" --rende
 check check_part_render "check part: the part checked against its drawing" --render res://tests/check_part.tscn -- --out="$OUT"
 check assembly_render "assembly: the handle goes into the head" --render res://tests/assembly.tscn -- --out="$OUT"
 check wedge_glue_render "wedge glue: the mallet glued, wedged and sawn flush" --render res://tests/wedge_glue.tscn -- --out="$OUT"
+check mortise_chop_render "mortise chop: the mortise bored and chopped" --render res://tests/mortise_chop.tscn -- --out="$OUT"
 if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
 	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
 	mkdir -p "$OUT/vulkan"

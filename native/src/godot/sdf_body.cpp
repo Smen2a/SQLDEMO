@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace sdf::godot_bind {
@@ -597,7 +598,7 @@ bool planned_tool(const String &tool) {
 // Tools whose stroke reads the body (its wood, its shape): only while no edit is applied.
 bool reads_body(const String &tool) {
 	return planned_tool(tool) || tool == "rasp" || tool == "scraper" || tool == "sanding_block" || tool == "saw" ||
-			tool == "sanding_sponge";
+			tool == "sanding_sponge" || tool == "brace";
 }
 
 
@@ -644,6 +645,16 @@ tools::SandingBlock block_from(const Dictionary &settings) {
 	return b;
 }
 
+// A brace with the bit its settings name (core tools/catalog.h: an auger bit, 12 mm by default).
+tools::Brace brace_from(const Dictionary &settings) {
+	const tools::BitVariant *v = tools::find_bit(String(settings.get("variant", "bit_12")).utf8().get_data());
+	tools::Brace b;
+	if (v != nullptr) {
+		b.bit = v->bit;
+	}
+	return b;
+}
+
 // The spokeshave or plane its settings name (core tools/catalog.h).
 tools::Spokeshave plane_from(const Dictionary &settings) {
 	const tools::PlaneVariant *v = tools::find_plane(String(settings.get("variant", "spokeshave")).utf8().get_data());
@@ -676,6 +687,8 @@ bool SdfBody::load_tool(const String &name, const Dictionary &settings) {
 		model = plane_from(settings).model();
 	} else if (name == "saw") {
 		model = tools::Saw{}.model();
+	} else if (name == "brace") {
+		model = brace_from(settings).model();
 	} else if (name == "sanding_block") {
 		model = block_from(settings).model();
 	} else if (name == "sanding_sponge") {
@@ -835,6 +848,15 @@ Array SdfBody::tool_catalog() {
 		d["width"] = double(v.block.breadth);
 		out.push_back(d);
 	}
+	for (const tools::BitVariant &v : tools::bit_catalog()) {
+		Dictionary d;
+		d["id"] = String(v.id.c_str());
+		d["family"] = "brace"; // (its bits)
+		d["label"] = String::utf8(v.label.c_str());
+		d["width"] = double(v.bit.diameter);
+		d["pitch"] = double(v.bit.pitch);
+		out.push_back(d);
+	}
 	for (const tools::PlaneVariant &v : tools::plane_catalog()) {
 		Dictionary d;
 		d["id"] = String(v.id.c_str());
@@ -937,6 +959,16 @@ Dictionary SdfBody::raycast(const Vector3 &from, const Vector3 &direction, doubl
 	return last_hit_;
 }
 
+double SdfBody::distance_at(const Vector3 &point) {
+	if (job_.valid() && !job_refines_) {
+		return std::numeric_limits<double>::quiet_NaN(); // (being edited on the worker)
+	}
+	if (session_.octree().nodes().empty()) {
+		return std::numeric_limits<double>::infinity();
+	}
+	return double(session_.octree().distance(session_.body(), to_body(point)));
+}
+
 std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, vec3 n, vec3 a,
 		const Dictionary &settings) const {
 	// (Chisels, gouges and the spokeshave are planned: compute_plan().) The rasp and the
@@ -971,6 +1003,11 @@ std::unique_ptr<tools::Stroke> SdfBody::make_stroke(const String &tool, vec3 p, 
 	}
 	if (tool == "sanding_block") {
 		return tools::sanding_stroke(block_from(settings), work, p, n, a, pace, &limits);
+	}
+	if (tool == "brace") {
+		// Bored along the normal, through (and a millimetre beyond) or down to a gauge line,
+		// the bit held between the lines marked round it.
+		return tools::boring_stroke(brace_from(settings), work, p, n, a, pace, limits);
 	}
 	if (tool == "sanding_sponge") {
 		tools::SandingSponge sponge;
@@ -2441,6 +2478,7 @@ void SdfBody::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_demo_camera"), &SdfBody::get_demo_camera);
 	ClassDB::bind_method(D_METHOD("add_random_strokes", "count", "seed"), &SdfBody::add_random_strokes);
 	ClassDB::bind_method(D_METHOD("raycast", "from", "direction", "max_distance"), &SdfBody::raycast);
+	ClassDB::bind_method(D_METHOD("distance_at", "point"), &SdfBody::distance_at);
 	ClassDB::bind_method(D_METHOD("find_edge", "point", "normal", "reach_mm", "fold_deg"), &SdfBody::find_edge);
 	ClassDB::bind_method(D_METHOD("begin_stroke", "tool", "contact", "normal", "along", "settings"), &SdfBody::begin_stroke,
 			DEFVAL(Dictionary()));

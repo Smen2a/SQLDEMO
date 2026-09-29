@@ -1,6 +1,6 @@
 extends CanvasLayer
 
-## The workshop's controls: the hotbar (the tools, 1 to 9; 0 empty hands), a crosshair and
+## The workshop's controls: the hotbar (the tools, 1 to 9 and B; 0 empty hands), a crosshair and
 ## what E would do while walking; at the bench, the tool in hand's settings, the wood, undo /
 ## redo / reset, and a status line (edits, how long the last edit took to apply and upload,
 ## GPU frame time).
@@ -9,7 +9,7 @@ const PlanViewer := preload("res://workshop/plan_viewer.gd")
 const PlanEditor := preload("res://workshop/plan_editor.gd")
 const TOOL_LABELS := {"chisel": "1 Chisel", "gouge": "2 Gouge", "saw": "3 Saw", "rasp": "4 Rasp",
 		"spokeshave": "5 Planes", "scraper": "6 Scraper", "sanding_block": "7 Block", "sanding_sponge": "8 Sponge",
-		"layout": "9 Layout"}
+		"layout": "9 Layout", "brace": "B Brace"}
 ## What stands in a planned cut's way (SdfBody.plan_stroke's warnings), in words.
 const WARNINGS := {
 	"skates": "skates on its bevel: tip it past %d°",
@@ -35,6 +35,7 @@ const LIMITS := {
 	"back": "its back meets the work: it goes no deeper",
 	"through": "through",
 	"at the line": "held to the marked lines",
+	"line": "down to the gauge line",
 }
 ## A workshop's pace against real life (workshop.pace).
 const PACES := [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
@@ -50,7 +51,7 @@ const HINTS := "Left-drag on the board: use the tool (a chisel, gouge or plane f
 		"Right-drag, the guiding hand (also mid-stroke): up / down the angle, left / right skew or turn, wheel the lean (Ctrl: finely)\n" + \
 		"Hold Space first: plan it and see it (wheel: how hard, Ctrl+wheel: finely), then left-drag: make it   Alt: no edge lock, not held to the lines\n" + \
 		"Esc: drop it, or step back from the bench   Ctrl+Z / Ctrl+Shift+Z: undo, redo   Middle-drag: orbit   Shift+middle-drag: pan   Wheel: zoom"
-const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
+const WALK_HINTS := "WASD: walk   Shift: hurry   Mouse: look   1-9, B, wheel: tools   0: empty hands   Esc: free the mouse\n" + \
 		"E: pick up, let go (over the vise: into it), take stock from the rack, open the plan book, work at the bench   F: out of the vise   R: turn what you carry   T: tip it   P: plans\n" + \
 		"Carrying a part, its mate in the vise: E offers it up, the wheel pushes it in, a click taps it with the mallet, G glues it, E lets go   F on a joined part: draw it out"
 
@@ -154,8 +155,14 @@ func _ready() -> void:
 	scribe.toggled.connect(func(on): workshop.set_setting("layout", "scribe", on))
 	layout.add_child(scribe)
 	_button(layout, "Plan book (P)", func(): open_plans())
+	# The brace: its bit.
+	var brace := VBoxContainer.new()
+	left.add_child(brace)
+	_variants["brace"] = _choice(brace, "Bit", workshop.variants.get("brace", []).map(func(v): return v.label),
+			workshop.variants.get("brace", []).map(func(v): return v.id).find(workshop.settings.brace.variant),
+			func(i): workshop.set_setting("brace", "variant", workshop.variants.brace[i].id))
 	_settings_boxes = {"chisel": chisel, "gouge": edge_boxes.gouge, "saw": saw, "rasp": rasp, "spokeshave": shave,
-			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge, "layout": layout}
+			"scraper": scraper, "sanding_block": block, "sanding_sponge": sponge, "layout": layout, "brace": brace}
 
 	# The work in the vise, top right (new boards come from the rack).
 	var right := _panel(root, Vector2.ZERO)
@@ -369,6 +376,9 @@ func stroke_text() -> String:
 		"saw":
 			parts.append("%.2f mm deep" % state.depth)
 			lines.append("cuts on the push")
+		"brace":
+			parts.append("%.1f mm deep" % state.depth)
+			lines.append("drag round the bit, clockwise: %.1f mm a turn" % (named.get("pitch", 1.6) * workshop.pace))
 	lines.push_front("   ".join(parts))
 	var limit: String = state.get("limit", "")
 	if limit != "":
@@ -456,6 +466,8 @@ func update_status() -> void:
 		line += "\nclick: strike it" if workshop.is_chopping() else "\nleft-drag: make it"
 	elif line != "" or workshop.is_engaged():
 		pass
+	elif workshop.current == "brace":
+		line = "left-drag round the bit, clockwise: bore"
 	elif workshop.current != "":
 		line = "left-drag: use it   right-drag: pivot it   hold Space: plan it first"
 	_plan.text = line

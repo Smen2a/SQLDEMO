@@ -99,9 +99,9 @@ public:
 	// `drive`: the most interference the mallet drives (a wedge opens its kerf: more).
 	godot::Dictionary fit(SdfBody *mate, const godot::Transform3D &start, const godot::Vector3 &axis, double travel,
 			double step, const godot::AABB &region, double drive);
-	// Builds a tool's model: "chisel" (settings: width), "saw", "sanding_block" (grit) or
-	// "sanding_sponge" (grit). Tools are drawn from their exact tapes (live_source EXACT) and
-	// cast shadows.
+	// Builds a tool's model: "chisel" (settings: width), "saw", "brace" (variant: its bit),
+	// "sanding_block" (grit) or "sanding_sponge" (grit). Tools are drawn from their exact tapes
+	// (live_source EXACT) and cast shadows.
 	bool load_tool(const godot::String &name, const godot::Dictionary &settings);
 	// The camera that frames the last demo, in body space: {eye, target, up, fov}.
 	godot::Dictionary get_demo_camera() const;
@@ -112,6 +112,9 @@ public:
 	// space, or an empty dictionary. While an edit is being applied it answers from the last
 	// query instead ({..., "stale": true}).
 	godot::Dictionary raycast(const godot::Vector3 &from, const godot::Vector3 &direction, double max_distance);
+	// The body's field at a world point: mm to its surface, negative in the material. While
+	// an edit is being applied it cannot say: NaN.
+	double distance_at(const godot::Vector3 &point);
 	// The edge nearest `point` (world, on the surface; `normal` out of it) within `reach_mm`,
 	// where the surface steps by 0.1 mm or more or folds by `fold_deg` or more (core
 	// tools/edges.h): {point (world, on the edge line), direction, across (world, unit: along
@@ -135,6 +138,11 @@ public:
 	//                      length: worked back and forth along its line
 	//   "scraper"          pressure, length: the same
 	//   "saw"              feed: mm deeper per mm of stroke
+	//   "brace"            variant (its bit: "bit_8", "bit_10", "bit_12"), pace, limits: bores
+	//                      in along -normal, a turn of its grip about the bit (move_stroke()
+	//                      points round the contact, clockwise seen from outside the work) the
+	//                      bit's pitch deeper, through the body and a millimetre beyond (core
+	//                      tools/boring.h); held between the lines marked round it
 	//   "sanding_block", "sanding_sponge"  grit, pressure
 	// The sponge's work (a smoothing layer, see core tools/smoothing.h) is done on the worker
 	// thread too, and applied as it goes: it has no preview. Takes the place of any plan;

@@ -147,4 +147,29 @@ const PlaneVariant *find_plane(const std::string &id) {
 	return nullptr;
 }
 
+const std::vector<BitVariant> &bit_catalog() {
+	static const std::vector<BitVariant> catalog = [] {
+		auto bit = [](float diameter) {
+			Bit b;
+			b.diameter = diameter;
+			return b;
+		};
+		return std::vector<BitVariant>{
+				{"bit_8", "Auger bit 8 mm", bit(8.0f)},
+				{"bit_10", "Auger bit 10 mm", bit(10.0f)},
+				{"bit_12", "Auger bit 12 mm", bit(12.0f)},
+		};
+	}();
+	return catalog;
+}
+
+const BitVariant *find_bit(const std::string &id) {
+	for (const BitVariant &v : bit_catalog()) {
+		if (v.id == id) {
+			return &v;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace sdf::tools

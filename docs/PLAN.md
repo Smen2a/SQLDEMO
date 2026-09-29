@@ -23,7 +23,8 @@ This revision merges those into shared capabilities and keeps finished work to o
   sizes), G1a (plans, the mallet's preset, laying a part on the wood, the pencil), G1b
   (drawing plans on paper), G2 (checking a part against its drawing) and G3 (a joint's
   fit; offering a part up and tapping it home, one body; glue, the wedge, sawn flush) are
-  done; G4 (the mallet end to end) is next.
+  done; G4 (the mallet end to end) is under way: G4a (chopping measured) and G4b (the
+  brace and bit) done, G4c (the whole build) next.
 
 ## Goals (unchanged)
 - An object builder. Players shape parts with processes that fit the material, then join
@@ -818,7 +819,7 @@ of 1 mm³ or more) or stay in the body as floating specks (under 1 mm³).
   - redo does not bring a chunk back (nor any debris).
 - Stone's percussion chips (8) will be debris too.
 
-## G. Making an object (current: G0 to G3 done; G4 next)
+## G. Making an object (current: G0 to G3, G4a and G4b done; G4c next)
 The engine cuts wood as the real tools do, but a player can't yet make anything: no goal,
 no idea what a piece is meant to become, no way to join parts. G adds the loop, built round
 a first object, a **wooden mallet**: an oak head with a through mortise, an ash handle with
@@ -875,8 +876,14 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
     or wedged. Test `assembly`.
   - **G3c** — glue (G, a step the player chooses; sets after a minute) and the wedge
     (driven into the kerf, spreading it; locks the joint), sawn flush. Test `wedge_glue`.
-- **G4** — the mallet end to end (`mallet_build`), the chopping time measured (a brace
-  and bit if it is too slow), the finished mallet as a tool.
+- **G4** — the mallet end to end (decided with the user: the finished mallet becomes your
+  mallet; a brace and bit if chopping is too slow; proven by a scripted build with the
+  real tools, in a tier of its own):
+  - **G4a** — chopping the mortise, measured (done, below).
+  - **G4b** — the brace and bit, since it was too slow (done, below).
+  - **G4c** — the whole build from the rack with the real tools (`mallet_build`, in
+    `tools/test_godot.sh --long`).
+  - **G4d** — the finished mallet taken up as yours, its weight in the blows.
 
 ### G0 — stock in sizes (done)
 - **`demo::stock(material, size)`:** a blank of a wood, `size` mm (length along x, the
@@ -1134,6 +1141,54 @@ On a piece: meta `part = {plan, part, placement}` (part space to body space).
 - **Left for later:** the kerf does not really open (nor the tenon spread: the wedge's
   hold is by rule); glue shows only in words; the wedge's tip, eased as stock is, does not
   seat square on the kerf's bottom.
+
+### G4a — chopping the mortise, measured (done)
+- **Measured** (`native/tests/test_mortise.cpp`): the mallet's mortise (30 × 12, 55 deep,
+  through) in an oak head blank, chopped as a joiner does with the 12 mm bench chisel held
+  upright and firm blows: along it from end to end in 3 mm steps, the bevel towards the
+  cuts made (each chip pops off into them), pass after pass, half from each face. 110
+  blows from each: **220**, at least 77 s at a blow each 0.35 s. Over the ~150 set as too
+  slow for play: the brace and bit (G4b).
+
+### G4b — the brace and bit (done)
+- **Core `tools/boring.h`:** an auger `Bit` (8, 10, 12 mm; a lead screw drawing it in
+  1.6 mm a turn, whatever the wood, its point 4 mm ahead of the cutters) and a `Brace`
+  (a steel crank of 200 mm sweep, a chuck, a walnut grip and head: `Brace::model()`).
+  `boring_stroke()`: move_to() points go round the bit's axis, the grip's angle; each turn
+  clockwise (from outside the work) draws it in by the pitch times the pace; turned back
+  it stays (a ratchet). The hole is a cylinder from 5 mm above the surface to the cutters,
+  the screw's hole ahead; updates re-cut the newest slice until it is 5 mm deep (as the
+  saw's kerf). It stops through (the deepest wood under its disc, `depth_through`) and a
+  millimetre beyond, or at a gauge line's floor. `hold_bit()` keeps its rim inside marked
+  lines (halfway between two closer than it is wide). Coarse dust at the mouth.
+- **SdfBody:** `load_tool("brace", {variant})`, `begin_stroke("brace", ...)` (it reads the
+  body: its through depth), the bits in `tool_catalog()` (family "brace"), and
+  `distance_at(point)` (the field at a world point, for tests).
+- **Workshop:** the brace is a tenth slot, **B**, after Layout. Pressed on the face, it
+  is set square to it (the piece's nearest face, from the hit's own normal: the surface
+  fitted over a few millimetres leans by a hole beside it, and a brace tilted 22 degrees
+  went out of the side) and held to the lines (`layout.hold`: sides and ends both walls).
+  Dragging round the bit asks the grip round to the pointer's angle; it follows at 2
+  turns a second times the pace, an eighth of a turn at a time. Not planned (Space). Its
+  outline is the bit's rim. The line by the pointer: how deep, a turn's feed, *through*.
+- **Chops rest on the highest wood under the edge** (`plan_chop`), not under its middle:
+  a chisel whose middle stood over a bored hole took the slit's depth as the hole's and
+  chopped the whole wall in one blow. **And only the edge over wood severs** (the blow's
+  width is the part of the edge over wood): paring the cusps a hole leaves goes deeper
+  than chopping solid wood.
+- **The check** (`plans::check_part`) takes a point near the wood's surface as on it only
+  where the wood's field there is near zero with wood behind it: a hole run out a
+  millimetre past a face, and the seams where cuts from two faces barely overlap, dip the
+  field towards zero in the air, and it read them as wood 6 mm and 1.2 mm proud.
+- **Measured** (`native/tests/test_mortise.cpp`, `game/tests/mortise_chop`): a 12 mm hole
+  through 55 mm of oak in 35 turns, its wall where the bit's rim went (air 0.2 mm inside,
+  wood 0.2 mm outside, top to bottom), its updates cutting what its merged edit does. The
+  mortise bored first, three holes 9 mm apart (**105 turns**: 52 s at 1×, 7 s of turning
+  at 8×), then what they leave (cusps along the sides, the corners) chopped to the lines,
+  the edge along each side and across each end, half from each face: **44 blows**
+  (15 s), none past the lines. In the workshop, through its press and drag at 8× pace:
+  each hole through (56 mm), where the lines hold it (set down 3 mm past the end and 3 mm
+  off the middle); 44 blows; checked: as drawn to 0.5 mm.
 
 ## 3. Surface finish
 - **A coarse finish grid** (RGBA8, 1.5–2 mm voxels over the body) holds:

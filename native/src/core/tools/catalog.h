@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tools/boring.h"
 #include "tools/shaping.h"
 #include "tools/tools.h"
 
@@ -19,7 +20,8 @@
 // Sweep radii follow the Sheffield list at 12 mm: #3 about 1.8 widths, #7 about 0.6, #11
 // half the width (a U).
 // And rasps, coarse to fine: a wood rasp, a cabinet rasp (flat or half-round face) and a
-// patternmaker's rasp; a sanding block and a small sanding pad; the spokeshave and planes.
+// patternmaker's rasp; a sanding block and a small sanding pad; the spokeshave and planes;
+// the brace's auger bits.
 namespace sdf::tools {
 
 struct ChiselVariant {
@@ -63,5 +65,16 @@ struct PlaneVariant {
 
 const std::vector<PlaneVariant> &plane_catalog();
 const PlaneVariant *find_plane(const std::string &id);
+
+// The brace's auger bits (boring.h): 8, 10 and 12 mm, each drawn in 1.6 mm a turn by its
+// screw.
+struct BitVariant {
+	std::string id;    // e.g. "bit_12"
+	std::string label; // e.g. "Auger bit 12 mm"
+	Bit bit;
+};
+
+const std::vector<BitVariant> &bit_catalog();
+const BitVariant *find_bit(const std::string &id);
 
 } // namespace sdf::tools

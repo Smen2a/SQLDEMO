@@ -166,11 +166,15 @@ Check check_part(const Part &part, const std::function<float(vec3)> &wood, const
 					share[c] = gone;
 					out.short_ += gone * cell;
 				}
-				// Near the wood's surface: that surface, how far beyond the drawing.
+				// Near the wood's surface: that surface, how far beyond the drawing. (Where the
+				// wood's field only dips towards zero in the air, as it does past a cut run out
+				// beyond a face or along the seam where two cuts barely overlap, the point it
+				// comes to is no surface, with no wood behind it: left out.)
 				if (std::fabs(a) < h) {
-					const vec3 q = p - gradient(wood, p) * a;
+					const vec3 grad = gradient(wood, p);
+					const vec3 q = p - grad * a;
 					const float off = drawn.distance(q);
-					if (off > tolerance) {
+					if (off > tolerance && std::fabs(wood(q)) < 0.25f * h && wood(q - unit(grad) * (0.5f * h)) < 0.0f) {
 						const vec3 on = q - unit(drawn.normal(q, kStep)) * off;
 						if (off > allowed(on, s, tolerance)) {
 							flag[c] |= kProudSample;

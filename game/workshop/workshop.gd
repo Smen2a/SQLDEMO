@@ -2,7 +2,8 @@ extends Node3D
 
 ## The workshop: a room with a workbench, and eight hand tools, every one an SDF body. You
 ## walk about it in first person (WASD, the mouse to look, Shift to hurry; room.gd,
-## player.gd); the hotbar at the bottom holds the tools (1 to 9, the wheel; 0 empty-handed),
+## player.gd); the hotbar at the bottom holds the tools (1 to 9 and B, the wheel; 0
+## empty-handed),
 ## the one in hand held in view. E picks up a piece of work lying about (carried in front
 ## of the eyes; R turns it, the wheel reaches it), takes a new board from a stack on the
 ## lumber rack, or lets go of what is carried: let go on the vise, an empty vise takes it,
@@ -55,6 +56,12 @@ extends Node3D
 ##                   where it rubs (a hundredth of a millimetre a metre at 120 grit in ash);
 ##                   faster on a narrow edge. Variants: a cork block, a small pad
 ##   sanding sponge  rounds over the arrises and ridges it rubs (a smoothing layer)
+##   brace           (B) a brace and auger bit (8, 10 or 12 mm), set on the face and bored
+##                   in square to it: drag round the bit, clockwise, to turn its grip; the
+##                   lead screw draws it in 1.6 mm a turn (times the pace), through the work
+##                   and a millimetre beyond, or down to a gauge line; worked back and forth,
+##                   its ratchet takes it on in. Set down by marked lines, it is held between
+##                   them (a 12 mm bit fits the mallet's mortise)
 ## The tool in hand stays out of sight until it works, so it never hides where it goes.
 ## Every tool goes no faster than a hand works it (WORKING_SPEED; a chisel, gouge or
 ## spokeshave slower as the wood resists; times the workshop's pace), and takes wood off at
@@ -112,6 +119,10 @@ const WORKING_SPEED := {"chisel": 40.0, "gouge": 30.0, "spokeshave": 150.0, "saw
 ## The tools pushed along a planned path (the others follow the pointer over their line or
 ## plane).
 const PUSHED := ["chisel", "gouge", "spokeshave"]
+## Turns a second the brace goes round at most, as a brisk hand turns it (times the pace);
+## the grip follows the pointer round the bit this far out (mm).
+const BRACE_TURNS := 2.0
+const CRANK := 60.0
 const BLOW_INTERVAL := 0.35 # s between mallet blows, at the quickest
 const EDGE_REACH := 6.0 # mm round where a stroke is locked that edge lock looks for an edge
 const FLUSH := 0.05 # mm a tool locked to an edge keeps its side off it
@@ -178,12 +189,12 @@ const STEER_TURN := 3.0
 const STEER_MOST := 30.0
 ## A plan's path (mm) until the pointer is dragged further than this from where it locked.
 const DEFAULT_LENGTH := {"chisel": 20.0, "gouge": 20.0, "saw": 60.0, "rasp": 60.0, "spokeshave": 40.0,
-		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0}
+		"scraper": 60.0, "sanding_block": 40.0, "sanding_sponge": 40.0, "brace": 0.0}
 ## A direct stroke's path (mm): as far as the drag goes, up to this.
 const DIRECT_LENGTH := {"chisel": 300.0, "gouge": 300.0, "spokeshave": 300.0, "rasp": 150.0, "scraper": 150.0}
 
 const TOOL_NAMES: Array[String] = ["chisel", "gouge", "saw", "rasp", "spokeshave", "scraper", "sanding_block",
-		"sanding_sponge", "layout"]
+		"sanding_sponge", "layout", "brace"]
 const TOOL_COLOURS := {
 	"chisel": Color(1.0, 0.82, 0.25),
 	"gouge": Color(1.0, 0.58, 0.2),
@@ -194,6 +205,7 @@ const TOOL_COLOURS := {
 	"sanding_block": Color(0.6, 1.0, 0.45),
 	"sanding_sponge": Color(1.0, 0.55, 0.8),
 	"layout": Color(1.0, 0.45, 0.3),
+	"brace": Color(0.75, 0.6, 1.0),
 }
 const SPONGE_REACH := 10.0 # mm round its centre that the sponge bears on (core SandingSponge)
 
@@ -211,6 +223,7 @@ var settings := {
 	# A marking gauge (mm in from the edge), a knife, a pencil, or a plan's sheet (plans.gd); with
 	# `scribe`, a sheet is scribed on at once rather than drawn in pencil.
 	"layout": {"variant": "gauge", "distance": 6.0, "scribe": false},
+	"brace": {"variant": "bit_12"}, # (its bit)
 }
 var wood := "board" ## the piece in the vise at the start (and set_wood's): a stock kind (Room.STOCK)
 ## How fast work goes against real life (1: as a real hand would), for every tool's speed and
@@ -275,6 +288,9 @@ var _target := 0.0        # mm along it the pointer asks for (the tool follows a
 var _at := Vector3.ZERO   # where another tool is on its line or plane (world)
 var _goal := Vector3.ZERO # where the pointer asks it to be (it follows at its working speed)
 var _last_blow := -1.0    # s: when the mallet last struck
+var _crank := 0.0         # radians: the brace's grip about its bit (unwrapped; clockwise from above is negative)
+var _crank_goal := 0.0    # where the pointer asks it to be (it follows at BRACE_TURNS)
+var _crank_seen := false  # the pointer has been read round the bit since the brace was set
 var _blade := BoxShape3D.new() # round the tool in hand's blade, while it works (_place_blade)
 var _blade_at := Transform3D()
 var _blade_on := false
@@ -749,7 +765,7 @@ func _surface_at(position: Vector2) -> Dictionary:
 ## `free` (Alt): no edge lock.
 func lock(position: Vector2, free := false) -> void:
 	_plan_held = true
-	if _state != IDLE or current == "" or current == "layout":
+	if _state != IDLE or current == "" or current == "layout" or current == "brace": # (the brace goes straight in)
 		return
 	hover_screen(position)
 	if _hit.is_empty() or _hit.get("stale", false):
@@ -1179,6 +1195,20 @@ func adjust(steps: int, tilt: bool, fine := false) -> void:
 	_replan()
 
 
+## A brace is held square to the face it bores into: `normal` (world) turned onto the
+## piece's nearest face (its body axes), if it is within 20 degrees of one.
+func _square_to_face(normal: Vector3) -> Vector3:
+	var best := normal
+	var nearest := cos(deg_to_rad(20.0))
+	for i in 3:
+		var axis: Vector3 = board.global_basis[i].normalized()
+		var d := axis.dot(normal)
+		if absf(d) > nearest:
+			nearest = absf(d)
+			best = axis * signf(d)
+	return best
+
+
 ## Left button down: with a stroke planned, the tool sets to work along it. Otherwise the
 ## tool in hand sets to work where the pointer is on the board, without a plan: the sanding
 ## tools (and a chop) at once, the others once the drag shows which way they go.
@@ -1195,6 +1225,8 @@ func press(position: Vector2, free := false) -> void:
 	if current == "" or _hit.is_empty() or _hit.get("stale", false):
 		return
 	var normal: Vector3 = _hit.normal
+	if current == "brace":
+		normal = _square_to_face(_hit.get("own_normal", normal)) # (not fitted over a hole beside it)
 	var facing := _along(normal)
 	_lock = {"point": _hit.position, "normal": normal, "plane": Plane(normal, _hit.position), "along": facing,
 			"path": facing, "length": DIRECT_LENGTH.get(current, DEFAULT_LENGTH[current]),
@@ -1244,6 +1276,9 @@ func act() -> void:
 		_last_blow = now
 		board.move_stroke(_lock.point)
 		release()
+	_crank = 0.0
+	_crank_goal = 0.0
+	_crank_seen = false
 
 
 ## Pointer motion while acting: a push tool (the chisel) goes on along its path as far as
@@ -1287,6 +1322,8 @@ func drag_screen(position: Vector2) -> void:
 			_target = clampf((point - start).dot(path) / MM, _target, _lock.length)
 		"saw", "rasp", "scraper":
 			_goal = start + path * (point - start).dot(path)
+		"brace":
+			_crank_to(point)
 		_:
 			_goal = point
 
@@ -1794,9 +1831,9 @@ func _load_tool(body, tool: String) -> void:
 func set_setting(tool: String, key: String, value) -> void:
 	settings[tool][key] = value
 	# A chisel's or gouge's model is its variant, held at its angle; a sanding block's, its
-	# block or pad; the others' look does not change.
+	# block or pad; a brace's, its bit; the others' look does not change.
 	if ((tool == "chisel" or tool == "gouge") and (key == "variant" or key == "angle")) or \
-			((tool == "sanding_block" or tool == "spokeshave") and key == "variant") or tool == "layout":
+			((tool == "sanding_block" or tool == "spokeshave" or tool == "brace") and key == "variant") or tool == "layout":
 		_load_tool(tools[tool], tool)
 		if tool == current:
 			_show_tool(tool, _opacity)
@@ -1810,7 +1847,8 @@ func is_engaged() -> bool:
 
 ## Whether the tool in hand is still catching up with where it was dragged.
 func lagging() -> bool:
-	return _engaged and (_progress < _target - 1e-3 or _at.distance_to(_goal) > 1e-7)
+	return _engaged and (_progress < _target - 1e-3 or _at.distance_to(_goal) > 1e-7 or
+			absf(_crank_goal - _crank) > 1e-4)
 
 
 ## mm/s the tool in hand goes at most: freely, its WORKING_SPEED; a push tool slower as the
@@ -1837,7 +1875,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				((event as InputEventKey).keycode == KEY_P or (event as InputEventKey).keycode == KEY_ESCAPE):
 			_ui.close_plans()
 		return
-	# The hotbar, walking or working: 1 to 9 the tools, 0 empty hands; P the plan book.
+	# The hotbar, walking or working: 1 to 9 and B the tools, 0 empty hands; P the plan book.
 	if event is InputEventKey and event.pressed and not event.echo:
 		var code := (event as InputEventKey).keycode
 		if code == KEY_P:
@@ -1845,6 +1883,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if code >= KEY_1 and code <= KEY_9:
 			select_tool(TOOL_NAMES[code - KEY_1])
+			return
+		if code == KEY_B:
+			select_tool("brace")
 			return
 		if code == KEY_0:
 			select_tool("")
@@ -2022,6 +2063,8 @@ func _process(delta: float) -> void:
 			went += _lock.path * (step * MM)
 			board.move_stroke(_lock.point + _lock.path * (_progress * MM))
 			_steer()
+	elif _engaged and current == "brace":
+		_turn_brace(delta)
 	elif _engaged and _at != _goal and not is_chopping():
 		var reach := working_speed() * delta * MM
 		var to_go := _goal - _at
@@ -2065,6 +2108,45 @@ func _process(delta: float) -> void:
 	_ui.update_status()
 
 
+## The pointer at `point` (world, on the face the brace was set on): the grip asked round
+## the bit to the pointer's angle about it (the nearer way round), once it is a few
+## millimetres off the bit's axis.
+func _crank_to(point: Vector3) -> void:
+	var n: Vector3 = _lock.normal
+	var x: Vector3 = _lock.along
+	var off: Vector3 = point - _lock.point
+	off -= n * off.dot(n)
+	if off.length() < 3.0 * MM:
+		return
+	var angle := atan2(off.dot(n.cross(x)), off.dot(x))
+	if not _crank_seen:
+		# The hand takes the grip where the pointer is.
+		_crank_seen = true
+		_crank = angle
+		_crank_goal = angle
+		board.move_stroke(_grip(angle))
+		return
+	_crank_goal += wrapf(angle - wrapf(_crank_goal, -PI, PI), -PI, PI)
+
+
+## Turns the brace's grip towards where the pointer asks, at BRACE_TURNS times the pace, an
+## eighth of a turn at a time at most.
+func _turn_brace(delta: float) -> void:
+	var budget := BRACE_TURNS * TAU * pace * delta
+	while budget > 1e-6 and absf(_crank_goal - _crank) > 1e-6:
+		var step := clampf(_crank_goal - _crank, -minf(budget, PI / 4.0), minf(budget, PI / 4.0))
+		_crank += step
+		budget -= absf(step)
+		board.move_stroke(_grip(_crank))
+
+
+## Where the brace's grip is at `angle` round the bit (world, on the face).
+func _grip(angle: float) -> Vector3:
+	var n: Vector3 = _lock.normal
+	var x: Vector3 = _lock.along
+	return _lock.point + (x * cos(angle) + n.cross(x) * sin(angle)) * (CRANK * MM)
+
+
 ## Where the part of the tool in hand that meets the work is while it works, and how fast it
 ## goes (m/s): a chisel's or gouge's blade (a box round its 30 mm behind the edge, rising at
 ## its angle to the work); a rasp's face, a scraper's card, a block's or sponge's body, a
@@ -2074,7 +2156,7 @@ const _BODY_BOXES := {"rasp": Vector3(200, 25, 6), "scraper": Vector3(1, 60, 100
 
 
 func _place_blade(velocity: Vector3) -> void:
-	_blade_on = _engaged and current != "saw" and not is_chopping()
+	_blade_on = _engaged and current != "saw" and current != "brace" and not is_chopping()
 	_edge_velocity = velocity if _blade_on else Vector3.ZERO
 	if not _blade_on:
 		return
@@ -2250,6 +2332,13 @@ func _draw_outline() -> void:
 			for i in 4:
 				segments.append(c[i])
 				segments.append(c[(i + 1) % 4])
+		"brace":
+			# The bit's rim, and where its screw goes in.
+			var r: float = variant().get("width", 12.0) * 0.5 * MM
+			segments.append_array([p - a * 0.002, p + a * 0.002, p - s * 0.002, p + s * 0.002])
+			for i in 24:
+				segments.append(p + (a * cos(TAU * i / 24.0) + s * sin(TAU * i / 24.0)) * r)
+				segments.append(p + (a * cos(TAU * (i + 1) / 24.0) + s * sin(TAU * (i + 1) / 24.0)) * r)
 		"sanding_sponge":
 			var r := SPONGE_REACH * MM
 			for i in 24:

@@ -42,6 +42,7 @@ add_library(sdf_core STATIC
 	src/core/plans/check.cpp
 	src/core/plans/joint.cpp
 	src/core/plans/part.cpp
+	src/core/tools/boring.cpp
 	src/core/tools/catalog.cpp
 	src/core/tools/cutting.cpp
 	src/core/tools/debris.cpp

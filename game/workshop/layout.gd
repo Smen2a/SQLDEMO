@@ -391,7 +391,7 @@ func forget_redo(piece: Object) -> void:
 ##     - a knife line on this face: a wall, the waste on the side the stroke is on.
 ##     Walls along the way the tool goes are its sides: a chisel's or spokeshave's side is set
 ##     flush on one; those across its way are its ends. The saw's line snaps onto a knife
-##     line along it, the kerf on the waste side.
+##     line along it, the kerf on the waste side. A brace's bit is kept inside them all.
 ##   Across the corner (a chisel's or gouge's edge lock, or any tool but the saw laid on a
 ##   chamfer begun): a chamfer. Its plane runs through the gauge lines on the two faces (one
 ##   line: at 45 degrees, as far in on the other face); the tool is laid on it, and cuts down
@@ -406,7 +406,7 @@ func hold(lock: Dictionary, tool: String) -> Dictionary:
 		return {}
 	var floors := []
 	var walls := []
-	var across := tool != "saw" and _chamfer(lock, marks, floors, walls)
+	var across := tool != "saw" and tool != "brace" and _chamfer(lock, marks, floors, walls)
 	var p := to_body(lock.point)
 	var f := _axis(dir_to_body(lock.normal))
 	if not across:
