@@ -236,7 +236,8 @@ TEST(chopping_the_mallets_mortise) {
 // The same mortise bored first: three 12 mm holes through from the face side, 9 mm apart
 // along its middle (the end ones touching its ends), then what the holes leave (the cusps
 // along its sides, its corners) chopped down to the lines, half from each face: the bench
-// chisel's edge along each side (its bevel to the holes), and across each end.
+// chisel's edge along each side (its bevel to the holes), and across each end. (Measured:
+// 105 turns of the brace, then 44 blows: a fifth of the 220 it takes unbored.)
 TEST(the_mallets_mortise_bored_first) {
 	Head head;
 	const Brace brace{find_bit("bit_12")->bit};
