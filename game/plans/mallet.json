@@ -1,0 +1,45 @@
+{
+	"name": "Mallet",
+	"about": "A joiner's mallet: an oak head with a mortise through it, an ash handle whose tenon goes through the head and stands 3 mm proud, and an oak wedge driven into a kerf in the tenon to spread it tight.",
+	"parts": [
+		{
+			"id": "head",
+			"name": "Head",
+			"count": 1,
+			"wood": "oak",
+			"stock": "head_oak",
+			"size": [110, 70, 55],
+			"features": [
+				{"kind": "hole", "name": "mortise", "face": "side", "along": [40, 70], "across": [29, 41], "through": true}
+			]
+		},
+		{
+			"id": "handle",
+			"name": "Handle",
+			"count": 1,
+			"wood": "ash",
+			"stock": "handle_ash",
+			"size": [300, 35, 28],
+			"features": [
+				{"kind": "tenon", "name": "tenon", "end": "end", "length": 58, "y": [2.5, 32.5], "z": [8, 20]},
+				{"kind": "kerf", "name": "wedge kerf", "end": "end", "depth": 38, "axis": "y", "at": 17.5, "width": 0.8}
+			]
+		},
+		{
+			"id": "wedge",
+			"name": "Wedge",
+			"count": 1,
+			"wood": "oak",
+			"stock": "strip_oak",
+			"size": [45, 12, 5],
+			"features": [
+				{"kind": "taper", "name": "taper", "face": "back", "from": 5, "to": 1}
+			]
+		}
+	],
+	"joints": [
+		{"name": "the handle through the head", "kind": "through mortise and tenon", "a": "head", "a_feature": "mortise",
+			"b": "handle", "b_feature": "tenon", "proud": 3},
+		{"name": "the wedge", "kind": "wedge", "a": "handle", "a_feature": "wedge kerf", "b": "wedge", "b_feature": "taper"}
+	]
+}

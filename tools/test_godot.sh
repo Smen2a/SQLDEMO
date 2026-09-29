@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Godot-side checks, run after building native/ (which also builds the GDExtension).
+#
+#   tools/test_godot.sh         the headless tier: logic, not pixels (a few minutes on a CPU)
+#   tools/test_godot.sh --gpu   the GPU tier: everything that renders and compares images
+#   tools/test_godot.sh --long  the long tier: the whole mallet made from the rack (headless,
+#                               many minutes; run on purpose)
+#
+# The headless tier:
+#   - the shared SDF includes and the Live shader compile in Godot's shader pipeline (one
+#     frame, software OpenGL: the only check here that renders)
+#   - the extension loads and builds a body
+#   - the workshop: each tool, driven through the scene's own pointer methods, cuts, and
+#     undo takes a stroke back
+#   - a stroke previewed draws an overlay and applies nothing; committed, it lands as the
+#     expected edits and the overlay empties, for each tool
+#   - a stroke planned with the right button held is the cut the left-drag then makes; a
+#     left-drag without a plan cuts as the wood lets it; the camera's buttons
+#   - a strip sawn off the board comes away as a rigid body resting on the bench
+#   - a rebate sawn off the end (two cuts meeting, no plane) comes away as an island, shown
+#     once cut out, resting in the rebate on the board's own surface
+#   - a chisel's shaving grows as it goes and comes away as much wood as the board lost,
+#     then lies still; across the grain it breaks; tear-out and a chop throw chips; undo
+#     takes them back
+#   - sawdust is the kerf taken and heaps up beyond the kerf's ends; sanding dust lies on
+#     the face; the sponge's arrives; undo takes each stroke's back
+#   - the workshop as a place: walking, the hotbar, stepping up to the bench and back;
+#     carrying, the vise, the rack
+#   - shavings, chips and pieces land and lie still: on the board, the bench and the floor,
+#     pushed by a tool, dropped from carry height; never sunk into what they rest on
+#   - laying out: the marking gauge's and knife's lines, scribed where they should be, and
+#     undone and redone
+#   - plans: the rack's stock to size; a plan's sheet laid on the wood in pencil, the knife
+#     taking it; a plan drawn on the pad, saved, and laid out as the preset is; a part checked
+#     against its drawing, before and after it is sawn to length; a tenon's fit in its mortise;
+#     the handle offered up to the head in the vise, pushed and tapped home, one body; glued,
+#     stood on end, wedged and sawn flush; the mortise bored with the brace and chopped; the
+#     finished mallet taken up as yours, its weight in the blows
+#
+# The long tier: the mallet made from the rack with the workshop's tools, part by part,
+# checked, put together, glued, wedged and sawn flush, with a table of each part's play
+# time, strokes, turns, blows and edits (game/tests/mallet_build.gd).
+#
+# The GPU tier (meant for a machine with a GPU; it runs on Mesa's software drivers too, but
+# at seconds a frame takes the best part of half an hour):
+#   - the Live path renders a shaded scene with shadows and mesh intersections
+#   - the workshop drive, the tool planning, the debris and the dust again, rendered,
+#     with screenshots in out/
+#   - a stroke previewed by the shader looks the same once committed (image comparison)
+#   - GPU/CPU parity over every demo (tools/parity.sh)
+#   - with a Vulkan driver (a GPU, or Mesa's lavapipe: mesa-vulkan-drivers), Forward+: ADF
+#     bricks sampled by the GPU sampler agree with CPU-sampled ones, and the workshop drive
+#     runs with it
+# Fails on any shader or script error. Needs xvfb-run and an OpenGL driver; set GODOT as
+# for tools/run.sh.
+set -uo pipefail
+
+GPU=0
+LONG=0
+for arg in "$@"; do
+	case "$arg" in
+		--gpu) GPU=1 ;;
+		--long) LONG=1 ;;
+		-h | --help)
+			sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+			exit 0
+			;;
+		*)
+			echo "unknown argument: $arg (usage: tools/test_godot.sh [--gpu | --long])" >&2
+			exit 2
+			;;
+	esac
+done
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT="$ROOT/out"
+mkdir -p "$OUT"
+ERRORS="SHADER ERROR|SCRIPT ERROR|Parse Error|^ERROR:"
+
+status=0
+# check NAME EXPECTED_LINE tools/run.sh args...
+check() {
+	local name="$1" expect="$2"
+	shift 2
+	local log="$OUT/$name.log"
+	"$ROOT/tools/run.sh" "$@" >"$log" 2>&1
+	if grep -E -q "$ERRORS" "$log"; then
+		echo "FAIL  $name (see ${log#$ROOT/})"
+		grep -E -A6 "$ERRORS" "$log" | head -40
+		status=1
+	elif ! grep -q "$expect" "$log"; then
+		echo "FAIL  $name: no '$expect' (see ${log#$ROOT/})"
+		status=1
+	else
+		echo "ok    $name"
+	fi
+}
+
+if [[ "$LONG" == 1 ]]; then
+	check mallet_build "mallet build: the mallet made from the rack" res://tests/mallet_build.tscn
+	grep "mallet build:" "$OUT/mallet_build.log" | sed 's/^mallet build: /    /'
+	exit $status
+fi
+
+if [[ "$GPU" == 0 ]]; then
+	check shader_smoke "Screenshot saved" --render res://tests/shader_smoke.tscn -- --screenshot="$OUT/shader_smoke.png"
+	check extension_smoke "extension smoke: carved panel" res://tests/extension_smoke.tscn
+	check workshop_drive "workshop drive: chisel" res://tests/workshop_drive.tscn
+	check stroke_preview "stroke preview: every tool" res://tests/stroke_preview.tscn
+	check tool_planning "tool planning: every step as planned" res://tests/tool_planning.tscn
+	check offcut_physics "offcut physics:" res://tests/offcut_physics.tscn
+	check island_split "island split: the rebate came away" res://tests/island_split.tscn
+	check crumbs "crumbs: the crumb came away" res://tests/crumbs.tscn
+	check stock "stock: the stock is as the rack says" res://tests/stock.tscn
+	check plan_transfer "plan transfer: the plan is laid on the wood" res://tests/plan_transfer.tscn
+	check plan_editor "plan editor: the mallet drawn on the pad, saved, laid out" res://tests/plan_editor.tscn
+	check check_part "check part: the part checked against its drawing" res://tests/check_part.tscn
+	check joint_fit "joint fit: the handle fits the head" res://tests/joint_fit.tscn
+	check assembly "assembly: the handle goes into the head" res://tests/assembly.tscn
+	check wedge_glue "wedge glue: the mallet glued, wedged and sawn flush" res://tests/wedge_glue.tscn
+	check mortise_chop "mortise chop: the mortise bored and chopped" res://tests/mortise_chop.tscn
+	check your_mallet "your mallet: the mallet made is yours" res://tests/your_mallet.tscn
+	check debris "debris: shavings and chips come away" res://tests/debris.tscn
+	check dust "dust: the dust comes away and settles" res://tests/dust.tscn
+	check walk_and_carry "walk and carry: the workshop is walked and worked in" res://tests/walk_and_carry.tscn
+	check physics_calm "physics calm: pieces and debris land and lie still" res://tests/physics_calm.tscn
+	check layout_lines "layout lines: the lines are laid out" res://tests/layout_lines.tscn
+	check guiding_hand "guiding hand: the hand pivots the tools" res://tests/guiding_hand.tscn
+	check planes "planes: the planes take whole sections to the lines" res://tests/planes.tscn
+	check steering "steering: the hand steers the edge" res://tests/steering.tscn
+	exit $status
+fi
+
+check live_sphere "Screenshot saved" --render res://tests/live_view.tscn -- --demo=sphere --floor \
+	--screenshot="$OUT/live_sphere.png"
+check live_panel "Screenshot saved" --render res://tests/live_view.tscn -- --screenshot="$OUT/live_panel.png"
+check workshop_drive_render "workshop drive: chisel" --render res://tests/workshop_drive.tscn -- --out="$OUT"
+check stroke_preview_render "stroke preview: every tool" --render res://tests/stroke_preview.tscn -- \
+	--out="$OUT/preview"
+check tool_planning_render "tool planning: every step as planned" --render res://tests/tool_planning.tscn -- \
+	--out="$OUT"
+check debris_render "debris: shavings and chips come away" --render res://tests/debris.tscn -- --out="$OUT"
+check dust_render "dust: the dust comes away and settles" --render res://tests/dust.tscn -- --out="$OUT"
+check crumbs_render "crumbs: the crumb came away" --render res://tests/crumbs.tscn -- --out="$OUT"
+check plan_transfer_render "plan transfer: the plan is laid on the wood" --render res://tests/plan_transfer.tscn -- --out="$OUT"
+check check_part_render "check part: the part checked against its drawing" --render res://tests/check_part.tscn -- --out="$OUT"
+check assembly_render "assembly: the handle goes into the head" --render res://tests/assembly.tscn -- --out="$OUT"
+check wedge_glue_render "wedge glue: the mallet glued, wedged and sawn flush" --render res://tests/wedge_glue.tscn -- --out="$OUT"
+check mortise_chop_render "mortise chop: the mortise bored and chopped" --render res://tests/mortise_chop.tscn -- --out="$OUT"
+if compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null || compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
+	check gpu_bricks "gpu bricks: every demo agrees" --vulkan res://tests/gpu_bricks.tscn
+	mkdir -p "$OUT/vulkan"
+	check workshop_drive_vulkan "workshop drive: chisel" --vulkan res://tests/workshop_drive.tscn -- --out="$OUT/vulkan"
+else
+	echo "skip  gpu_bricks, workshop_drive_vulkan: no Vulkan driver"
+fi
+"$ROOT/tools/parity.sh" || status=1
+exit $status

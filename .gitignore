@@ -1,0 +1,15 @@
+# Godot 4 generated files
+.godot/
+*.translation
+
+# Native build trees
+/build/
+/native/build*/
+
+# Local captures and render output
+/out/
+/game/bin/
+
+# The Box3D comparison (tools/compare_physics.sh) installs these for its run only
+/game/addons/godot-box3d/
+/game/override.cfg

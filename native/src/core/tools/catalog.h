@@ -1,0 +1,80 @@
+#pragma once
+
+#include "tools/boring.h"
+#include "tools/shaping.h"
+#include "tools/tools.h"
+
+#include <string>
+#include <vector>
+
+// The workshop's edge tools, by variant: what a woodworker's rack would hold. Each is a
+// Chisel (tools.h) whose dimensions, bevel and handling follow the real tool:
+//   bench chisels (bevel edge)  25-27 degree bevel, hand or light mallet: general paring and
+//                               light chopping
+//   paring chisel               long, thin and flexible, 20 degrees: fine paring by hand,
+//                               never struck
+//   mortise chisel              thick and rigid, 32 degrees: chopped with a heavy mallet
+//   skew chisel                 its edge angled 30 degrees across the blade: slicing cuts
+//   carving gouges              Sheffield sweeps: #3 shallow (smoothing), #7 scooping, #11
+//                               a U-shaped veiner; a V-tool (60 degrees) for lines
+// Sweep radii follow the Sheffield list at 12 mm: #3 about 1.8 widths, #7 about 0.6, #11
+// half the width (a U).
+// And rasps, coarse to fine: a wood rasp, a cabinet rasp (flat or half-round face) and a
+// patternmaker's rasp; a sanding block and a small sanding pad; the spokeshave and planes;
+// the brace's auger bits.
+namespace sdf::tools {
+
+struct ChiselVariant {
+	std::string id;     // e.g. "bench_12"
+	std::string family; // "chisel" or "gouge"
+	std::string label;  // e.g. "Bench chisel 12 mm"
+	Chisel chisel;
+};
+
+const std::vector<ChiselVariant> &chisel_catalog();
+// The variant with `id`, or null.
+const ChiselVariant *find_chisel(const std::string &id);
+
+struct RaspVariant {
+	std::string id;    // e.g. "rasp_cabinet"
+	std::string label; // e.g. "Cabinet rasp"
+	Rasp rasp;
+};
+
+const std::vector<RaspVariant> &rasp_catalog();
+const RaspVariant *find_rasp(const std::string &id);
+
+// Sanding blocks: a cork block, and a small pad for precise work.
+struct SandingVariant {
+	std::string id;    // e.g. "block"
+	std::string label; // e.g. "Cork block 70 x 40"
+	SandingBlock block;
+};
+
+const std::vector<SandingVariant> &sanding_catalog();
+const SandingVariant *find_sanding(const std::string &id);
+
+// The spokeshave and the planes (shaping.h): a spokeshave; a block plane (a 150 mm sole
+// 42 mm wide, a 35 mm iron bedded at 37 degrees, bevel up); the block plane with a chamfer
+// fence; a shoulder plane (19 mm, its iron flush with its sides).
+struct PlaneVariant {
+	std::string id;    // e.g. "block_plane"
+	std::string label; // e.g. "Block plane"
+	Spokeshave plane;
+};
+
+const std::vector<PlaneVariant> &plane_catalog();
+const PlaneVariant *find_plane(const std::string &id);
+
+// The brace's auger bits (boring.h): 8, 10 and 12 mm, each drawn in 1.6 mm a turn by its
+// screw.
+struct BitVariant {
+	std::string id;    // e.g. "bit_12"
+	std::string label; // e.g. "Auger bit 12 mm"
+	Bit bit;
+};
+
+const std::vector<BitVariant> &bit_catalog();
+const BitVariant *find_bit(const std::string &id);
+
+} // namespace sdf::tools
