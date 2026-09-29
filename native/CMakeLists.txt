@@ -93,6 +93,7 @@ if(ZLIB_FOUND)
 		tests/test_pieces.cpp
 		tests/test_crumbs.cpp
 		tests/test_fit.cpp
+		tests/test_mortise.cpp
 		tests/test_plans.cpp
 		tests/test_smoothing.cpp
 		tests/test_cutting.cpp
